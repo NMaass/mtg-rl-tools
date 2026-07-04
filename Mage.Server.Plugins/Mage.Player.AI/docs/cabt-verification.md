@@ -28,10 +28,20 @@ CABT adapter tests. Two layers live there:
   selectAttackers, chooseMulligan, ...) driven end to end through
   controller → validation → applier → trace, asserting on real engine state
   afterwards.
+- **Full-engine smoke games** (`CabtRealGameSmokeTest`): a real `GameImpl`
+  runs its own loop — turns, priority, the stack, mana payment, combat
+  steps, state-based actions — with both players driven through the bridge
+  by an in-process policy controller. No stubs: real cards
+  (`mage.cards.basiclands.Forest`, `mage.cards.g.GrizzlyBears`), a real
+  mulligan phase, a real starting-player choice. Asserts that priority
+  prompts carry engine-enumerated playable options, that selecting
+  PLAY_LAND/CAST_SPELL changes actual hand/battlefield/stack state through
+  the real mana-payment loop, and that own-hand cards resolve to real names
+  in serialized observations.
 
-Full-engine smoke games (boot a game, play scripted turns over the
-subprocess protocol) are Task 20 and do not exist yet; when delivered they
-join the module suite and this script.
+Smoke games over the **subprocess protocol** (Python client driving the
+same games) still need the protocol server (Task 18); the in-process smoke
+games above cover the engine side of that path today.
 
 ### Python unit tests
 
@@ -59,6 +69,11 @@ classes, and runs `python/tests/test_protocol*.py` against it.
 | Failure | Likely task area |
 | --- | --- |
 | `SelectionValidatorTest`, `InvalidSelectionException` in many tests | Selection plumbing (Tasks 1–2) |
+| `CabtPriorityPromptBuilderTest`, `CabtPrioritySelectionApplierTest`, `CabtBridgePlayerPriorityTest` | Priority playable options (getPlayable enumeration / activateAbility dispatch) |
+| `CabtRealGameSmokeTest` | Full-engine integration: any bridge surface misbehaving against the real game loop |
+| `CabtDecisionTraceRecorderTest` | Decision trace lifecycle/sequence/error recording |
+| `CabtBridgePlayerOverrideAuditTest` | A SURFACED/FAIL_CLOSED Player callback is no longer overridden by the bridge, or the audit drifted from the real Player interface |
+| `CabtBridgePlayerCopyAndSimulationTest` | copy()/rollback sharing or the simulation fail-closed guard |
 | `MagicObservation*Test`, `MagicObjectViewFactoryTest` | Public state serialization / hidden-info boundary (Task 6) |
 | `CabtTargetPromptBuilderTest`, `CabtBridgePlayerTargetPromptTest` | Target prompts (Task 7) |
 | `CabtYesNoPromptTest`, `CabtChoicePromptTest`, `CabtPilePromptTest` | Generic choice prompts (Task 8) |

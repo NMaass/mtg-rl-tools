@@ -15,14 +15,12 @@ step() {
     printf '\n=== %s ===\n' "$1"
 }
 
-step "Java: mage.player.cabt unit + callback-boundary integration tests"
-# the module's test tree contains only the CABT adapter tests; the
-# CabtBridgePlayer*Test classes are the callback-boundary integration layer
+step "Java: mage.player.cabt unit, callback-boundary and full-engine smoke tests"
+# the module's test tree contains only the CABT adapter tests: the
+# CabtBridgePlayer*Test classes are the callback-boundary integration layer,
+# and CabtRealGameSmokeTest runs real GameImpl games through the bridge
 mvn -q -pl "$MODULE" test -f "$ROOT/pom.xml"
 echo "Java tests passed."
-
-# full-engine CABT smoke games are Task 20, which has not been delivered yet;
-# when they exist they run here as part of the module suite
 
 step "Python: refresh cross-language fixtures from the Java test output"
 FIXTURES_SRC="$MODULE_DIR/target/cabt-fixtures"
