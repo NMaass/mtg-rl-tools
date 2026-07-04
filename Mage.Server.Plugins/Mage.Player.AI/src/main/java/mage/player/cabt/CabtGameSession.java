@@ -240,14 +240,27 @@ public final class CabtGameSession {
      * Validates and applies one selection for the pending decision, then
      * blocks until the engine surfaces the next event. Invalid selections
      * throw {@link InvalidSelectionException} and leave the game untouched.
+     * <p>
+     * The pending decision is single-use: it is cleared <em>before</em> the
+     * answer is handed to the game thread, so if {@link #awaitEvent()} times
+     * out the old decision can never be re-validated or re-answered. On
+     * timeout the session is closed (fail-closed) so no stale state survives.
      */
     public Event select(List<Integer> indices) {
-        if (currentEvent == null || currentEvent.kind() != Event.Kind.DECISION) {
+        Event answered = currentEvent;
+        if (answered == null || answered.kind() != Event.Kind.DECISION) {
             throw new IllegalStateException("NO_PENDING_DECISION");
         }
-        SelectionValidator.validate(currentEvent.decision(), new Selection(indices));
-        controller.answer(new Selection(indices));
-        return awaitEvent();
+        Selection selection = new Selection(indices);
+        SelectionValidator.validate(answered.decision(), selection);
+        currentEvent = null; // no longer answerable
+        controller.answer(selection);
+        try {
+            return awaitEvent();
+        } catch (RuntimeException e) {
+            finish(); // fail-closed: never leave an answered decision dangling
+            throw e;
+        }
     }
 
     /**

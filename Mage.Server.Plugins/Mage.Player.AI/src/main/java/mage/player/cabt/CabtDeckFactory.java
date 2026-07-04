@@ -20,6 +20,16 @@ import java.util.UUID;
  * the runtime classpath and fails closed with {@link UnknownCardException}
  * for names that resolve to no class — a deck must never be silently
  * shortened.
+ * <p>
+ * <b>MVP limitation:</b> the class-name heuristic
+ * ({@link #classSimpleName(String)}) works for simple card names (Forest,
+ * Grizzly Bears, Llanowar Elves) but will miss a non-trivial portion of
+ * real Magic card names: split cards, alternate class names, special
+ * punctuation, variant suffixes, and renamed/rebalanced variants whose
+ * XMage class name differs from the naive transform. This is acceptable for
+ * the current smoke milestone because resolution fails closed rather than
+ * silently. A future {@code DeckResolutionStrategy} using XMage's card
+ * repository / card-info lookup should replace this.
  */
 public final class CabtDeckFactory {
 

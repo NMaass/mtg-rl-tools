@@ -57,6 +57,8 @@ class CabtProtocolServerTest {
                 .isEqualTo(CabtProtocolServer.PROTOCOL_VERSION);
         assertThat(capabilities.get("commands").getAsJsonArray().toString())
                 .contains("game_start", "game_select", "game_finish", "all_card_data");
+        assertThat(capabilities.get("cardDataScope").getAsString())
+                .isEqualTo("ACTIVE_GAME_DECK_POOL");
     }
 
     @Test
@@ -73,6 +75,76 @@ class CabtProtocolServerTest {
                 .get("error").getAsString()).isEqualTo("NO_ACTIVE_GAME");
         assertThat(handle("{\"command\": \"all_card_data\"}").get("error").getAsString())
                 .isEqualTo("NO_ACTIVE_GAME");
+    }
+
+    @Test
+    void malformedDeckEntryTypesReturnMalformedRequestNotInternal() {
+        String validDeck = deckJson();
+        String[] malformedGameStarts = {
+            // count is a string instead of an integer
+            "{\"command\": \"game_start\", \"decks\": ["
+                + "[{\"name\": \"Forest\", \"count\": \"abc\"}], " + validDeck + "]}",
+            // name is null
+            "{\"command\": \"game_start\", \"decks\": ["
+                + "[{\"name\": null, \"count\": 1}], " + validDeck + "]}",
+            // count is 0
+            "{\"command\": \"game_start\", \"decks\": ["
+                + "[{\"name\": \"Forest\", \"count\": 0}], " + validDeck + "]}",
+            // count is negative
+            "{\"command\": \"game_start\", \"decks\": ["
+                + "[{\"name\": \"Forest\", \"count\": -1}], " + validDeck + "]}",
+            // deck entry is not an object
+            "{\"command\": \"game_start\", \"decks\": ["
+                + "[\"Forest\"], " + validDeck + "]}",
+            // name is missing
+            "{\"command\": \"game_start\", \"decks\": ["
+                + "[{\"count\": 5}], " + validDeck + "]}",
+        };
+        for (String request : malformedGameStarts) {
+            JsonObject response = handle(request);
+            assertThat(response.get("ok").getAsBoolean()).isFalse();
+            assertThat(response.get("error").getAsString())
+                    .as("expected MALFORMED_REQUEST for: " + request)
+                    .isEqualTo("MALFORMED_REQUEST");
+        }
+    }
+
+    @Test
+    void malformedConfigOptionsReturnMalformedRequestNotInternal() {
+        String validDecks = "[" + deckJson() + ", " + deckJson() + "]";
+        String[] malformedOptions = {
+            // maxTurns is a string
+            "{\"command\": \"game_start\", \"decks\": " + validDecks
+                + ", \"options\": {\"maxTurns\": \"abc\"}}",
+            // seed is a string
+            "{\"command\": \"game_start\", \"decks\": " + validDecks
+                + ", \"options\": {\"seed\": \"abc\"}}",
+            // maxTurns is 0
+            "{\"command\": \"game_start\", \"decks\": " + validDecks
+                + ", \"options\": {\"maxTurns\": 0}}",
+            // maxTurns is negative
+            "{\"command\": \"game_start\", \"decks\": " + validDecks
+                + ", \"options\": {\"maxTurns\": -1}}",
+            // decisionTimeoutSeconds is 0
+            "{\"command\": \"game_start\", \"decks\": " + validDecks
+                + ", \"options\": {\"decisionTimeoutSeconds\": 0}}",
+            // decisionTimeoutSeconds is negative
+            "{\"command\": \"game_start\", \"decks\": " + validDecks
+                + ", \"options\": {\"decisionTimeoutSeconds\": -5}}",
+            // decisionTimeoutSeconds is a string
+            "{\"command\": \"game_start\", \"decks\": " + validDecks
+                + ", \"options\": {\"decisionTimeoutSeconds\": \"abc\"}}",
+        };
+        for (String request : malformedOptions) {
+            JsonObject response = handle(request);
+            assertThat(response.get("ok").getAsBoolean()).isFalse();
+            assertThat(response.get("error").getAsString())
+                    .as("expected MALFORMED_REQUEST for: " + request)
+                    .isEqualTo("MALFORMED_REQUEST");
+            // session must not have been created
+            assertThat(server.handleLine("{\"command\": \"game_finish\"}")
+                    .contains("\"ok\":true")).isTrue();
+        }
     }
 
     @Test
@@ -166,6 +238,169 @@ class CabtProtocolServerTest {
         JsonObject retried = handle("{\"command\": \"game_select\", \"select\": "
                 + chooseFromJson(select) + "}");
         assertThat(retried.get("ok").getAsBoolean()).isTrue();
+    }
+
+    @Test
+    void protocolProvesZoneTransitionsForPlayLandAndCastSpell() {
+        JsonObject response = handle(GAME_START);
+        assertThat(response.get("ok").getAsBoolean()).isTrue();
+
+        boolean verifiedPlayLand = false;
+        boolean verifiedCastSpell = false;
+        int guard = 0;
+        // Track a cast-spell sourceId across observations until it reaches the
+        // battlefield (it may sit on the stack first, then resolve).
+        String pendingCastSpellSourceId = null;
+
+        while (!response.get("finished").getAsBoolean()) {
+            assertThat(guard++).as("decision count stays bounded").isLessThan(2000);
+            JsonObject observation = response.get("observation").getAsJsonObject();
+            JsonObject select = observation.get("select").getAsJsonObject();
+            String selectingPlayerId = select.get("playerId").getAsString();
+
+            // Resolve a tracked cast-spell sourceId against the current state.
+            // Check the battlefield for a permanent whose ref.objectId matches;
+            // the spell may transit through the stack first.
+            if (pendingCastSpellSourceId != null) {
+                JsonArray battlefield = observation.get("current").getAsJsonObject()
+                        .get("battlefield").getAsJsonArray();
+                for (JsonElement bfElement : battlefield) {
+                    JsonObject ref = bfElement.getAsJsonObject().get("ref").getAsJsonObject();
+                    if (pendingCastSpellSourceId.equals(ref.get("objectId").getAsString())) {
+                        verifiedCastSpell = true;
+                        pendingCastSpellSourceId = null;
+                        break;
+                    }
+                }
+            }
+
+            // Determine the greedy choice and capture transition data
+            String selectType = select.get("type").getAsString();
+            JsonArray options = select.get("option").getAsJsonArray();
+            int chosenIndex = -1;
+            String chosenType = null;
+            String chosenSourceId = null;
+
+            if (selectType.equals("PRIORITY")) {
+                for (String want : new String[]{"PLAY_LAND", "CAST_SPELL", "PASS_PRIORITY"}) {
+                    for (int i = 0; i < options.size(); i++) {
+                        JsonObject option = options.get(i).getAsJsonObject();
+                        if (want.equals(option.get("type").getAsString())) {
+                            chosenIndex = i;
+                            chosenType = want;
+                            JsonObject payload = option.has("payload")
+                                    && option.get("payload").isJsonObject()
+                                    ? option.get("payload").getAsJsonObject() : null;
+                            if (payload != null && payload.has("sourceId")
+                                    && !payload.get("sourceId").isJsonNull()) {
+                                chosenSourceId = payload.get("sourceId").getAsString();
+                            }
+                            break;
+                        }
+                    }
+                    if (chosenIndex >= 0) {
+                        break;
+                    }
+                }
+            } else if (selectType.equals("MULLIGAN")) {
+                for (int i = 0; i < options.size(); i++) {
+                    if ("PROMPT_KEEP".equals(
+                            options.get(i).getAsJsonObject().get("type").getAsString())) {
+                        chosenIndex = i;
+                        break;
+                    }
+                }
+            } else if (selectType.equals("PAY_MANA")) {
+                for (String want : new String[]{"PROMPT_MANA_SOURCE",
+                        "PROMPT_MANA_POOL", "PROMPT_CANCEL_PAYMENT"}) {
+                    for (int i = 0; i < options.size(); i++) {
+                        if (want.equals(
+                                options.get(i).getAsJsonObject().get("type").getAsString())) {
+                            chosenIndex = i;
+                            break;
+                        }
+                    }
+                    if (chosenIndex >= 0) {
+                        break;
+                    }
+                }
+            } else if (selectType.equals("DECLARE_ATTACKERS")
+                    || selectType.equals("DECLARE_BLOCKERS")) {
+                chosenIndex = -1; // pass
+            } else {
+                int minCount = select.get("minCount").getAsInt();
+                chosenIndex = minCount > 0 ? 0 : -1;
+            }
+
+            // Send the selection
+            String selectJson = chosenIndex >= 0 ? "[" + chosenIndex + "]" : "[]";
+            response = handle("{\"command\": \"game_select\", \"select\": " + selectJson + "}");
+            assertThat(response.get("ok").getAsBoolean())
+                    .as("select response: " + response)
+                    .isTrue();
+
+            // --- PLAY_LAND transition invariant ---
+            // After selecting PLAY_LAND, the sourceId must have left the hand
+            // and appeared on the battlefield under the same controller.
+            if ("PLAY_LAND".equals(chosenType) && chosenSourceId != null
+                    && response.has("observation")) {
+                JsonObject nextObs = response.get("observation").getAsJsonObject();
+                JsonArray nextPlayers = nextObs.get("current").getAsJsonObject()
+                        .get("players").getAsJsonArray();
+
+                // The original selecting player's hand: only visible if they
+                // are also the next selecting player; otherwise it's empty
+                // (hidden) and we check the battlefield only.
+                for (int pi = 0; pi < nextPlayers.size(); pi++) {
+                    JsonObject p = nextPlayers.get(pi).getAsJsonObject();
+                    if (selectingPlayerId.equals(p.get("playerId").getAsString())) {
+                        JsonArray hand = p.get("hand").getAsJsonArray();
+                        for (JsonElement e : hand) {
+                            assertThat(e.getAsJsonObject().get("ref").getAsJsonObject()
+                                    .get("objectId").getAsString())
+                                    .as("played land card must leave hand")
+                                    .isNotEqualTo(chosenSourceId);
+                        }
+                        break;
+                    }
+                }
+
+                // Battlefield: the sourceId must have arrived as a permanent
+                JsonArray battlefield = nextObs.get("current").getAsJsonObject()
+                        .get("battlefield").getAsJsonArray();
+                boolean foundOnBattlefield = false;
+                for (JsonElement e : battlefield) {
+                    JsonObject ref = e.getAsJsonObject().get("ref").getAsJsonObject();
+                    if (chosenSourceId.equals(ref.get("objectId").getAsString())) {
+                        foundOnBattlefield = true;
+                        assertThat(e.getAsJsonObject().get("controllerId").getAsString())
+                                .as("land on battlefield under same controller")
+                                .isEqualTo(selectingPlayerId);
+                        break;
+                    }
+                }
+                assertThat(foundOnBattlefield)
+                        .as("PLAY_LAND sourceId must appear on battlefield after selection")
+                        .isTrue();
+                verifiedPlayLand = true;
+            }
+
+            // --- CAST_SPELL transition: start tracking ---
+            if ("CAST_SPELL".equals(chosenType) && chosenSourceId != null) {
+                pendingCastSpellSourceId = chosenSourceId;
+            }
+        }
+
+        assertThat(verifiedPlayLand)
+                .as("at least one PLAY_LAND zone transition was verified across serialization")
+                .isTrue();
+        // If a cast was tracked and the game ended without it reaching the
+        // battlefield, fail; if no cast happened (all-pass), skip.
+        if (pendingCastSpellSourceId != null) {
+            assertThat(verifiedCastSpell)
+                    .as("CAST_SPELL sourceId must reach battlefield before game end")
+                    .isTrue();
+        }
     }
 
     @Test

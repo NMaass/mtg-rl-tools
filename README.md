@@ -67,6 +67,16 @@ Not implemented yet — do not rely on these:
 
 - **Search/lookahead API** (the CABT `search_begin`/`search_step`
   equivalent): no cloned-game forward model is exposed to Python yet.
+- **Global `all_card_data`** — the protocol's `all_card_data` is
+  game-scoped (exports the active game's deduped deck pool only);
+  `capabilities()` reports this as `"cardDataScope":
+  "ACTIVE_GAME_DECK_POOL"`. A global static card-data export is future
+  work.
+- **Full card-name resolution** — `CabtDeckFactory` uses a class-name
+  heuristic that works for simple names (Forest, Grizzly Bears) but
+  fails closed for split cards, variant suffixes, and any card whose
+  XMage class name differs from the naive transform. Full repository
+  lookup is future work.
 - **Amount-distribution targeting** (`chooseTargetAmount`) fails closed by
   design until a distribution payload is built.
 - **Player callbacks outside the audited surface** still fall back to

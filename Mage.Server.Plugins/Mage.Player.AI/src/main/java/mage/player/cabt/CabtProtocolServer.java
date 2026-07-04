@@ -122,6 +122,10 @@ public final class CabtProtocolServer {
             selectTypes.add(type.name());
         }
         response.add("selectTypes", selectTypes);
+        // all_card_data is game-scoped (the active game's deduped deck pool),
+        // not a global static-card-data export; clients should read this
+        // field to decide whether the command fits their use case.
+        response.addProperty("cardDataScope", "ACTIVE_GAME_DECK_POOL");
         return GSON.toJson(response);
     }
 
@@ -136,16 +140,14 @@ public final class CabtProtocolServer {
             return error(id, "MALFORMED_REQUEST",
                     "game_start needs \"decks\": [deck0, deck1]");
         }
-        List<CabtDeckFactory.Entry> deck0;
-        List<CabtDeckFactory.Entry> deck1;
         try {
-            deck0 = parseDeck(decksElement.getAsJsonArray().get(0));
-            deck1 = parseDeck(decksElement.getAsJsonArray().get(1));
+            List<CabtDeckFactory.Entry> deck0 = parseDeck(decksElement.getAsJsonArray().get(0));
+            List<CabtDeckFactory.Entry> deck1 = parseDeck(decksElement.getAsJsonArray().get(1));
+            CabtGameSession.Config config = parseConfig(request.get("options"));
+            session = new CabtGameSession(deck0, deck1, config);
         } catch (IllegalArgumentException e) {
             return error(id, "MALFORMED_REQUEST", e.getMessage());
         }
-        CabtGameSession.Config config = parseConfig(request.get("options"));
-        session = new CabtGameSession(deck0, deck1, config);
         return eventResponse(id, session.start());
     }
 
@@ -235,7 +237,9 @@ public final class CabtProtocolServer {
 
     /**
      * Deck input: a JSON array of {@code {"name": ..., "count": ...}}
-     * entries ({@code count} defaults to 1).
+     * entries ({@code count} defaults to 1). All client-facing type errors
+     * throw {@link IllegalArgumentException} so the caller can map them to
+     * {@code MALFORMED_REQUEST} rather than leaking as {@code INTERNAL}.
      */
     private static List<CabtDeckFactory.Entry> parseDeck(JsonElement deckElement) {
         if (!deckElement.isJsonArray()) {
@@ -244,13 +248,14 @@ public final class CabtProtocolServer {
         }
         List<CabtDeckFactory.Entry> entries = new ArrayList<CabtDeckFactory.Entry>();
         for (JsonElement element : deckElement.getAsJsonArray()) {
-            if (!element.isJsonObject() || !element.getAsJsonObject().has("name")) {
+            if (!element.isJsonObject()) {
                 throw new IllegalArgumentException(
                         "each deck entry must be an object with a \"name\"");
             }
             JsonObject entry = element.getAsJsonObject();
-            int count = entry.has("count") ? entry.get("count").getAsInt() : 1;
-            entries.add(new CabtDeckFactory.Entry(entry.get("name").getAsString(), count));
+            String name = requiredString(entry, "name");
+            int count = optionalPositiveInt(entry, "count", 1);
+            entries.add(new CabtDeckFactory.Entry(name, count));
         }
         if (entries.isEmpty()) {
             throw new IllegalArgumentException("a deck must not be empty");
@@ -264,22 +269,109 @@ public final class CabtProtocolServer {
             return config;
         }
         JsonObject options = optionsElement.getAsJsonObject();
-        if (options.has("playerNames") && options.get("playerNames").isJsonArray()) {
+        if (options.has("playerNames") && !options.get("playerNames").isJsonNull()) {
+            if (!options.get("playerNames").isJsonArray()) {
+                throw new IllegalArgumentException("playerNames must be an array");
+            }
             JsonArray names = options.get("playerNames").getAsJsonArray();
             config.playerNames(
-                    names.size() > 0 ? names.get(0).getAsString() : null,
-                    names.size() > 1 ? names.get(1).getAsString() : null);
+                    names.size() > 0 ? optionalStringAt(names, 0) : null,
+                    names.size() > 1 ? optionalStringAt(names, 1) : null);
         }
-        if (options.has("seed")) {
-            config.seed(options.get("seed").getAsLong());
+        if (options.has("seed") && !options.get("seed").isJsonNull()) {
+            config.seed(requiredNumber(options, "seed").getAsLong());
         }
-        if (options.has("maxTurns")) {
-            config.maxTurns(options.get("maxTurns").getAsInt());
+        if (options.has("maxTurns") && !options.get("maxTurns").isJsonNull()) {
+            int maxTurns = optionalPositiveInt(options, "maxTurns", 0);
+            config.maxTurns(maxTurns);
         }
-        if (options.has("decisionTimeoutSeconds")) {
-            config.decisionTimeoutSeconds(options.get("decisionTimeoutSeconds").getAsLong());
+        if (options.has("decisionTimeoutSeconds")
+                && !options.get("decisionTimeoutSeconds").isJsonNull()) {
+            long timeout = optionalPositiveLong(options, "decisionTimeoutSeconds", 0);
+            config.decisionTimeoutSeconds(timeout);
         }
         return config;
+    }
+
+    // --- JSON type-validation helpers ---
+    // All throw IllegalArgumentException on type mismatches so callers can
+    // convert them to MALFORMED_REQUEST instead of INTERNAL.
+
+    private static String requiredString(JsonObject object, String field) {
+        if (!object.has(field) || object.get(field).isJsonNull()) {
+            throw new IllegalArgumentException(
+                    "field \"" + field + "\" is required and must be a string");
+        }
+        JsonElement element = object.get(field);
+        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) {
+            throw new IllegalArgumentException(
+                    "field \"" + field + "\" must be a string");
+        }
+        return element.getAsString();
+    }
+
+    private static int optionalPositiveInt(JsonObject object, String field,
+                                           int defaultValue) {
+        if (!object.has(field) || object.get(field).isJsonNull()) {
+            return defaultValue;
+        }
+        JsonElement element = object.get(field);
+        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
+            throw new IllegalArgumentException(
+                    "field \"" + field + "\" must be an integer");
+        }
+        int value = element.getAsInt();
+        if (value < 1) {
+            throw new IllegalArgumentException(
+                    "field \"" + field + "\" must be >= 1");
+        }
+        return value;
+    }
+
+    private static long optionalPositiveLong(JsonObject object, String field,
+                                             long defaultValue) {
+        if (!object.has(field) || object.get(field).isJsonNull()) {
+            return defaultValue;
+        }
+        JsonElement element = object.get(field);
+        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
+            throw new IllegalArgumentException(
+                    "field \"" + field + "\" must be a number");
+        }
+        long value = element.getAsLong();
+        if (value < 1) {
+            throw new IllegalArgumentException(
+                    "field \"" + field + "\" must be >= 1");
+        }
+        return value;
+    }
+
+    private static JsonElement requiredNumber(JsonObject object, String field) {
+        if (!object.has(field) || object.get(field).isJsonNull()) {
+            throw new IllegalArgumentException(
+                    "field \"" + field + "\" is required and must be a number");
+        }
+        JsonElement element = object.get(field);
+        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
+            throw new IllegalArgumentException(
+                    "field \"" + field + "\" must be a number");
+        }
+        return element;
+    }
+
+    private static String optionalStringAt(JsonArray array, int index) {
+        if (index >= array.size()) {
+            return null;
+        }
+        JsonElement element = array.get(index);
+        if (element.isJsonNull()) {
+            return null;
+        }
+        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) {
+            throw new IllegalArgumentException(
+                    "playerNames[" + index + "] must be a string");
+        }
+        return element.getAsString();
     }
 
     /** Plain-text board render, the visualize_data() debugging surface. */

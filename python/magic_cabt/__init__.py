@@ -3,11 +3,17 @@
 Two layers live here:
 
 - parsers for the Java bridge's stable output formats: static card data
-  and the JSONL transition dataset;
+  (offline from exported documents) and the JSONL transition dataset;
 - the live-game protocol client (``CabtBridge``): a subprocess loop over
   the Java ``CabtProtocolServer`` with the CABT-parity commands
   ``game_start`` / ``game_select`` / ``game_finish`` / ``all_card_data`` /
   ``visualize_data``.
+
+Note: ``all_card_data`` is exported in two senses —
+  ``from magic_cabt import all_card_data``  parses an offline card-data
+  document (the static export from earlier tasks), while
+  ``bridge.all_card_data()``  requests live, game-scoped deck-pool metadata
+  through the subprocess protocol.  The latter requires an active game.
 """
 
 from .card_data import all_card_data, cards_by_id, cards_by_name

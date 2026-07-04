@@ -214,9 +214,10 @@ class CabtBridge(object):
         return response
 
     def all_card_data(self):
-        """Static card metadata for every distinct card in the active game's
-        decks. Reference data only: legal actions always come from
-        ``observation.select``."""
+        """Card metadata for every distinct card in the active game's deduped
+        deck pool. This is game-scoped (not a global card database): it
+        requires an active game and only covers cards in the decks. Reference
+        data only — legal actions always come from ``observation.select``."""
         return self.request({"command": "all_card_data"})["cards"]
 
     def visualize_data(self):
