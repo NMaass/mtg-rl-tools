@@ -75,9 +75,11 @@ class CabtNumberPromptTest {
         assertThatThrownBy(() -> player.announceX(0, 3, "Choose X", game, StubGames.ability(), false))
                 .isInstanceOf(InvalidSelectionException.class)
                 .hasMessage("OPTION_INDEX_OUT_OF_RANGE");
-        // nothing applied: the trace never advanced past PENDING
+        // nothing applied: the trace records the rejected selection as FAILED
         assertThat(player.getTraceRecorder().getLastTrace().getStage())
-                .isEqualTo(CabtDecisionTrace.Stage.PENDING);
+                .isEqualTo(CabtDecisionTrace.Stage.FAILED);
+        assertThat(player.getTraceRecorder().getLastTrace().getError())
+                .contains("OPTION_INDEX_OUT_OF_RANGE");
     }
 
     @Test
