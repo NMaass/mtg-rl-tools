@@ -42,14 +42,24 @@ else
 fi
 
 step "Python: protocol smoke tests"
-# the subprocess protocol server is Task 18, which has not been delivered
-# yet; this stanza enables itself once the protocol entry point is built
 PROTOCOL_CLASS="$MODULE_DIR/target/classes/mage/player/cabt/CabtProtocolServer.class"
 if [ -f "$PROTOCOL_CLASS" ]; then
+    # build the launch classpath for the CabtProtocolServer subprocess:
+    # the module's classes plus its full dependency set
+    DEPS_FILE="$MODULE_DIR/target/cabt-classpath.txt"
+    FULL_CP_FILE="$MODULE_DIR/target/cabt-classpath.full.txt"
+    if [ ! -f "$DEPS_FILE" ] || [ "$MODULE_DIR/pom.xml" -nt "$DEPS_FILE" ]; then
+        mvn -q -pl "$MODULE" -f "$ROOT/pom.xml" dependency:build-classpath \
+            -Dmdep.outputFile="$DEPS_FILE"
+    fi
+    MAGIC_CABT_CLASSPATH="$MODULE_DIR/target/classes:$(cat "$DEPS_FILE")"
+    printf '%s' "$MAGIC_CABT_CLASSPATH" > "$FULL_CP_FILE"
+    export MAGIC_CABT_CLASSPATH
+    echo "MAGIC_CABT_CLASSPATH written to $FULL_CP_FILE"
     (cd "$PYTHON_DIR" && python3 -m unittest discover -s tests -p "test_protocol*.py")
 else
     echo "SKIPPED: no protocol entry point at $PROTOCOL_CLASS"
-    echo "         (subprocess protocol is Task 18; not delivered yet)."
+    echo "         (build the Java module first: mvn -pl $MODULE compile)."
 fi
 
 step "CABT adapter verification suite passed"
