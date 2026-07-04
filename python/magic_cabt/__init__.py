@@ -16,6 +16,7 @@ Note: ``all_card_data`` is exported in two senses —
   through the subprocess protocol.  The latter requires an active game.
 """
 
+from .arena_log import ArenaLogNormalizer, iter_log_entries, normalize_arena_log
 from .card_data import all_card_data, cards_by_id, cards_by_name
 from .dataset import read_dataset
 from .protocol import (
@@ -27,9 +28,12 @@ from .protocol import (
 )
 
 __all__ = [
+    "ArenaLogNormalizer",
     "all_card_data",
     "cards_by_id",
     "cards_by_name",
+    "iter_log_entries",
+    "normalize_arena_log",
     "read_dataset",
     "CabtBridge",
     "CabtGameError",
