@@ -1,12 +1,11 @@
 package mage.player.cabt;
 
-import mage.MageObject;
 import mage.abilities.ActivatedAbility;
+import mage.constants.AbilityType;
 import mage.game.Game;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * CABT bridge: builds one PRIORITY option per playable ability returned by
@@ -16,25 +15,41 @@ import java.util.UUID;
  */
 public final class CabtPriorityOptionFactory {
 
+    static final String PAYLOAD_PLAYABLE_INDEX = "playableIndex";
+    static final String PAYLOAD_ABILITY_TYPE = "abilityType";
+    static final String PAYLOAD_ABILITY_ID = "abilityId";
+    static final String PAYLOAD_SOURCE_ID = "sourceId";
+    static final String PAYLOAD_SOURCE_NAME = "sourceName";
+    static final String PAYLOAD_RULE = "rule";
+    static final String PAYLOAD_MANA_COST = "manaCost";
+
     private CabtPriorityOptionFactory() {
     }
 
     public static MagicOption playableOption(Game game, ActivatedAbility ability, int playableIndex) {
         MagicOptionType type = optionType(ability);
-        String sourceName = sourceName(game, ability);
+        String sourceName = CabtSourceNames.sourceName(game, ability.getSourceId());
+        // payload fields beyond the index are descriptive and must never crash
+        // prompt construction, so each one is null-safe on its own
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
-        payload.put("playableIndex", playableIndex);
-        payload.put("abilityType", ability.getAbilityType().name());
-        payload.put("abilityId", ability.getId().toString());
-        payload.put("sourceId", ability.getSourceId() == null ? null : ability.getSourceId().toString());
-        payload.put("sourceName", sourceName);
-        payload.put("rule", ability.getRule());
-        payload.put("manaCost", ability.getManaCostsToPay().getText());
+        payload.put(PAYLOAD_PLAYABLE_INDEX, playableIndex);
+        payload.put(PAYLOAD_ABILITY_TYPE, ability.getAbilityType().name());
+        payload.put(PAYLOAD_ABILITY_ID, ability.getId() == null ? null : ability.getId().toString());
+        payload.put(PAYLOAD_SOURCE_ID, ability.getSourceId() == null ? null : ability.getSourceId().toString());
+        payload.put(PAYLOAD_SOURCE_NAME, sourceName);
+        payload.put(PAYLOAD_RULE, ability.getRule());
+        payload.put(PAYLOAD_MANA_COST,
+                ability.getManaCostsToPay() == null ? "" : ability.getManaCostsToPay().getText());
         return new MagicOption(type, label(type, ability, sourceName), payload);
     }
 
     static MagicOptionType optionType(ActivatedAbility ability) {
-        switch (ability.getAbilityType()) {
+        AbilityType abilityType = ability.getAbilityType();
+        if (abilityType == null) {
+            throw new CabtUnhandledDecisionException(
+                    "getPlayable returned an ability without an ability type: " + ability.getRule());
+        }
+        switch (abilityType) {
             case PLAY_LAND:
                 return MagicOptionType.PLAY_LAND;
             case SPELL:
@@ -48,7 +63,7 @@ public final class CabtPriorityOptionFactory {
             default:
                 throw new CabtUnhandledDecisionException(
                         "getPlayable returned an ability type with no priority option mapping: "
-                                + ability.getAbilityType().name() + " (" + ability.getRule() + ')');
+                                + abilityType.name() + " (" + ability.getRule() + ')');
         }
     }
 
@@ -66,17 +81,5 @@ public final class CabtPriorityOptionFactory {
             default:
                 throw new IllegalStateException("not a priority option type: " + type);
         }
-    }
-
-    private static String sourceName(Game game, ActivatedAbility ability) {
-        UUID sourceId = ability.getSourceId();
-        if (sourceId == null) {
-            return null;
-        }
-        MageObject object = game.getObject(sourceId);
-        if (object == null) {
-            object = game.getCard(sourceId);
-        }
-        return object == null ? null : object.getName();
     }
 }

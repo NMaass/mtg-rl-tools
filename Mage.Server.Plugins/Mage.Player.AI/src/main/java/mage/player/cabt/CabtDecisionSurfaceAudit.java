@@ -298,8 +298,10 @@ public final class CabtDecisionSurfaceAudit {
                 PKG + "CabtPriorityPromptBuilder",
                 PKG + "CabtPriorityPromptBuilderTest",
                 "Player.getPlayable(Game, boolean); CabtBridgePlayer.priority(Game)",
-                "The priority prompt's playable-action source: one PLAY_LAND/CAST_SPELL/"
-                        + "ACTIVATE_ABILITY/SPECIAL_ACTION option per returned ability.",
+                "The current root-priority implementation: one PLAY_LAND/CAST_SPELL/"
+                        + "ACTIVATE_ABILITY/SPECIAL_ACTION option per returned ability. Future "
+                        + "refinement, not final form: compare with getPlayableOptions/"
+                        + "getPlayableObjects for alternate-cost and casting-option payloads.",
                 "CabtPriorityPromptBuilderTest / CabtBridgePlayerPriorityTest."));
         list.add(new CabtDecisionSurface(
                 "getPlayableOptions(Ability, Game)",

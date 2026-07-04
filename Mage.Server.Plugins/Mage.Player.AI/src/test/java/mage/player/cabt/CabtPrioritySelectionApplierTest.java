@@ -1,6 +1,7 @@
 package mage.player.cabt;
 
 import mage.abilities.ActivatedAbility;
+import mage.abilities.PlayLandAbility;
 import mage.constants.RangeOfInfluence;
 import mage.game.Game;
 import mage.players.Player;
@@ -14,10 +15,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * PASS_PRIORITY passes and reports "no action"; a playable option must carry
- * the playableIndex that links it back to the live ability. The playable
- * dispatch itself (activateAbility into the engine) is covered by the
- * real-engine smoke tests — stub games cannot host it honestly.
+ * PASS_PRIORITY passes and reports PASSED; a playable option must carry the
+ * playableIndex that links it back to the live ability, and the engine's
+ * activateAbility answer is reported (APPLIED/REJECTED), never assumed. The
+ * successful dispatch path (activateAbility actually performing the action)
+ * is covered by the real-engine smoke tests — stub games cannot host it
+ * honestly, but they do host the engine's own rejection path (playLand on a
+ * card the game cannot resolve returns false).
  */
 class CabtPrioritySelectionApplierTest {
 
@@ -41,10 +45,29 @@ class CabtPrioritySelectionApplierTest {
         CabtPriorityPrompt prompt = builder.build(
                 player, game, Collections.<ActivatedAbility>emptyList());
 
-        boolean acted = applier.apply(player, game, Selection.of(0), prompt);
+        CabtPrioritySelectionApplier.Result result =
+                applier.apply(player, game, Selection.of(0), prompt);
 
-        assertThat(acted).isFalse();
+        assertThat(result).isEqualTo(CabtPrioritySelectionApplier.Result.PASSED);
         assertThat(player.isPassed()).isTrue();
+    }
+
+    @Test
+    void engineDecliningActivationReportsRejectedNotApplied() {
+        setUp();
+        // a real PlayLandAbility whose source card the stub game cannot
+        // resolve: PlayerImpl.playLand answers false — the engine's own
+        // rejection path, not a bridge error
+        PlayLandAbility playLand = new PlayLandAbility("Forest");
+        playLand.setSourceId(UUID.randomUUID());
+        CabtPriorityPrompt prompt = builder.build(
+                player, game, Collections.<ActivatedAbility>singletonList(playLand));
+
+        CabtPrioritySelectionApplier.Result result =
+                applier.apply(player, game, Selection.of(1), prompt);
+
+        assertThat(result).isEqualTo(CabtPrioritySelectionApplier.Result.REJECTED);
+        assertThat(player.isPassed()).isFalse();
     }
 
     @Test

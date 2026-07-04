@@ -8,9 +8,14 @@ import java.util.UUID;
 /**
  * CABT bridge: lifecycle record of one decision — the prompt was built
  * (PENDING), the controller answered (SELECTED), and the answer was applied
- * to the engine (APPLIED); a selection or validation error moves the trace to
- * FAILED instead. Stages advance strictly PENDING → SELECTED → APPLIED, with
- * FAILED reachable from PENDING and SELECTED.
+ * to the engine (APPLIED). Two non-success ends exist and mean different
+ * things: FAILED (an error while selecting, validating, or applying — the
+ * bridge or controller misbehaved) and REJECTED (the selection reached the
+ * engine but the engine declined or cancelled the action — e.g.
+ * activateAbility returned false; the response was still consumed and the
+ * engine re-offers the decision). Stages advance strictly
+ * PENDING → SELECTED → APPLIED, with FAILED reachable from PENDING and
+ * SELECTED and REJECTED reachable from SELECTED.
  * <p>
  * {@code sequenceNumber} orders traces across one recorder (one per live
  * bridge player), so trace N pairs with observation N recorded by the
@@ -27,6 +32,11 @@ public final class CabtDecisionTrace {
         PENDING,
         SELECTED,
         APPLIED,
+        /**
+         * The selection was dispatched but the engine declined or cancelled
+         * the action; the decision response was still consumed.
+         */
+        REJECTED,
         FAILED
     }
 
@@ -65,8 +75,15 @@ public final class CabtDecisionTrace {
         this.stage = Stage.APPLIED;
     }
 
+    void markRejected() {
+        if (stage != Stage.SELECTED) {
+            throw new IllegalStateException("trace " + traceId + " is " + stage + ", not SELECTED");
+        }
+        this.stage = Stage.REJECTED;
+    }
+
     void markFailed(String error) {
-        if (stage == Stage.APPLIED || stage == Stage.FAILED) {
+        if (stage == Stage.APPLIED || stage == Stage.REJECTED || stage == Stage.FAILED) {
             throw new IllegalStateException("trace " + traceId + " already " + stage);
         }
         this.stage = Stage.FAILED;

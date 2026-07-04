@@ -71,6 +71,24 @@ class CabtBridgePlayerCopyAndSimulationTest {
     }
 
     @Test
+    void priorityFailsClosedBeforeEnumeratingPlayables() {
+        CabtBridgePlayer player = new CabtBridgePlayer("CABT", RangeOfInfluence.ALL,
+                new ScriptedBridgeController(Collections.singletonList(Selection.of(0))));
+
+        // the guard sits at the top of priority(), before getPlayable — a
+        // simulation game must not even reach playable enumeration
+        assertThatThrownBy(() -> player.priority(gameFlagged(true, false)))
+                .isInstanceOf(CabtUnhandledDecisionException.class)
+                .hasMessageContaining("simulation");
+        assertThat(player.getTraceRecorder().getTraces()).isEmpty();
+
+        assertThatThrownBy(() -> player.priority(gameFlagged(false, true)))
+                .isInstanceOf(CabtUnhandledDecisionException.class)
+                .hasMessageContaining("playable-check");
+        assertThat(player.getTraceRecorder().getTraces()).isEmpty();
+    }
+
+    @Test
     void playableCheckGamePromptFailsClosed() {
         CabtBridgePlayer player = new CabtBridgePlayer("CABT", RangeOfInfluence.ALL,
                 new ScriptedBridgeController(Collections.singletonList(Selection.of(0))));

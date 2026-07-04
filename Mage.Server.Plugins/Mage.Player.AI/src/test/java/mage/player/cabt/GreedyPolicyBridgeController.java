@@ -38,13 +38,18 @@ final class GreedyPolicyBridgeController implements CabtBridgeController {
     private Selection decide(Player player, PendingDecision decision) {
         switch (decision.selectType()) {
             case TARGET:
-                // only expected at game init: "choose the starting player" —
-                // pick yourself so the smoke game's turn order is fixed
-                Integer self = firstIndexWithPayload(decision, "targetId", player.getId().toString());
-                if (self != null) {
-                    return Selection.of(self);
+                // the only TARGET prompt this policy answers is the game-init
+                // "choose the starting player" (every option is a player):
+                // pick yourself so the smoke game's turn order is fixed. Any
+                // other TARGET prompt falls through to the loud default so a
+                // new surface can't be silently mis-answered.
+                if (allOptionsAre(decision, MagicOptionType.PROMPT_PLAYER)) {
+                    Integer self = firstIndexWithPayload(decision, "targetId", player.getId().toString());
+                    return Selection.of(self != null ? self : 0);
                 }
-                return Selection.of(0);
+                throw new IllegalStateException(
+                        "smoke-game policy only answers player-choice TARGET prompts "
+                                + "(starting player), got: " + decision.options());
             case PRIORITY:
                 Integer land = firstIndexOf(decision, MagicOptionType.PLAY_LAND);
                 if (land != null) {
@@ -74,6 +79,15 @@ final class GreedyPolicyBridgeController implements CabtBridgeController {
                 throw new IllegalStateException(
                         "smoke-game policy has no rule for prompt " + decision.selectType());
         }
+    }
+
+    private static boolean allOptionsAre(PendingDecision decision, MagicOptionType type) {
+        for (MagicOption option : decision.options()) {
+            if (option.type() != type) {
+                return false;
+            }
+        }
+        return !decision.options().isEmpty();
     }
 
     private static Integer firstIndexWithPayload(PendingDecision decision, String key, String value) {

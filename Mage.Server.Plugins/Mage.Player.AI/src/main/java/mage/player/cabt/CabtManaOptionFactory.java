@@ -61,15 +61,8 @@ public final class CabtManaOptionFactory {
         payload.put("unpaid", unpaid == null ? null : unpaid.getText());
         payload.put("sourceId", abilityToCast == null || abilityToCast.getSourceId() == null
                 ? null : abilityToCast.getSourceId().toString());
-        payload.put("sourceName", sourceName(game, abilityToCast));
+        payload.put("sourceName", CabtSourceNames.sourceName(
+                game, abilityToCast == null ? null : abilityToCast.getSourceId()));
         return payload;
-    }
-
-    private static String sourceName(Game game, Ability abilityToCast) {
-        if (abilityToCast == null || abilityToCast.getSourceId() == null) {
-            return null;
-        }
-        MageObject object = game.getObject(abilityToCast.getSourceId());
-        return object == null ? null : object.getName();
     }
 }

@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * CABT bridge: XMage player whose decisions are routed to a {@link CabtBridgeController}
@@ -39,7 +40,9 @@ import java.util.UUID;
  * ordering, replacement-effect choice, mana payment, combat declarations, and
  * the pregame mulligan. Every surfaced decision is traced
  * PENDING → SELECTED → APPLIED through the shared
- * {@link CabtDecisionTraceRecorder}. Audited callbacks that are decisions but
+ * {@link CabtDecisionTraceRecorder} — REJECTED when the engine declines the
+ * selected action, FAILED when selecting, validating, or applying throws.
+ * Audited callbacks that are decisions but
  * are not surfaced yet fail closed with
  * {@link CabtUnhandledDecisionException}; Player callbacks outside the audit
  * still fall back to ComputerPlayer (see docs/cabt-decision-surface.md for
@@ -105,13 +108,29 @@ public final class CabtBridgePlayer extends ComputerPlayer {
 
     @Override
     public boolean priority(Game game) {
+        // guard the whole priority path, not just the prompt: getPlayable
+        // below must never run for a simulation/playable-check game either
+        assertLiveDecisionGame("PRIORITY", game);
         passed = false;
         CabtPriorityPrompt priorityPrompt = priorityPromptBuilder.build(
                 this, game, getPlayable(game, true));
         TracedSelection traced = prompt("PRIORITY", priorityPrompt.getDecision(), game);
-        boolean acted = prioritySelectionApplier.apply(this, game, traced.selection, priorityPrompt);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return acted;
+        CabtPrioritySelectionApplier.Result result;
+        try {
+            result = prioritySelectionApplier.apply(this, game, traced.selection, priorityPrompt);
+        } catch (RuntimeException e) {
+            traceRecorder.recordFailed(traced.trace, e);
+            throw e;
+        }
+        if (result == CabtPrioritySelectionApplier.Result.REJECTED) {
+            // the engine declined/cancelled the activation: the response is
+            // consumed (the engine re-offers priority, like after a cancelled
+            // HumanPlayer cast), but the trace must not claim it was applied
+            traceRecorder.recordRejected(traced.trace);
+            return true;
+        }
+        traceRecorder.recordApplied(traced.trace);
+        return result == CabtPrioritySelectionApplier.Result.APPLIED;
     }
 
     // --- target selection ---
@@ -163,10 +182,8 @@ public final class CabtBridgePlayer extends ComputerPlayer {
             return false;
         }
         TracedSelection traced = prompt(method, decision, game);
-        boolean result = targetSelectionApplier.applyToTarget(
-                target, source, game, traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return result;
+        return applyTraced(traced, () -> targetSelectionApplier.applyToTarget(
+                target, source, game, traced.selection, decision));
     }
 
     private boolean resolveTargetCardDecision(String method, PendingDecision decision,
@@ -175,10 +192,8 @@ public final class CabtBridgePlayer extends ComputerPlayer {
             return false;
         }
         TracedSelection traced = prompt(method, decision, game);
-        boolean result = targetSelectionApplier.applyToTargetCard(
-                target, game, traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return result;
+        return applyTraced(traced, () -> targetSelectionApplier.applyToTargetCard(
+                target, game, traced.selection, decision));
     }
 
     // --- yes/no (chooseUse) ---
@@ -199,10 +214,10 @@ public final class CabtBridgePlayer extends ComputerPlayer {
 
     private boolean resolveYesNo(PendingDecision decision, Game game) {
         TracedSelection traced = prompt("CHOOSE_USE", decision, game);
-        MagicOption selected = decision.options().get(traced.selection.indices().get(0));
-        boolean result = selected.type() == MagicOptionType.PROMPT_YES;
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return result;
+        return applyTraced(traced, () -> {
+            MagicOption selected = decision.options().get(traced.selection.indices().get(0));
+            return selected.type() == MagicOptionType.PROMPT_YES;
+        });
     }
 
     // --- generic Choice ---
@@ -214,9 +229,7 @@ public final class CabtBridgePlayer extends ComputerPlayer {
             return false;
         }
         TracedSelection traced = prompt("CHOOSE_CHOICE", decision, game);
-        boolean result = choiceSelectionApplier.apply(choice, traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return result;
+        return applyTraced(traced, () -> choiceSelectionApplier.apply(choice, traced.selection, decision));
     }
 
     // --- pile choice ---
@@ -226,10 +239,11 @@ public final class CabtBridgePlayer extends ComputerPlayer {
                               List<? extends Card> pile1, List<? extends Card> pile2, Game game) {
         PendingDecision decision = pilePromptBuilder.build(this, message, pile1, pile2);
         TracedSelection traced = prompt("CHOOSE_PILE", decision, game);
-        MagicOption selected = decision.options().get(traced.selection.indices().get(0));
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        // true = pile 1, matching HumanPlayer.choosePile's boolean convention
-        return Integer.valueOf(1).equals(selected.payload().get("pileIndex"));
+        return applyTraced(traced, () -> {
+            MagicOption selected = decision.options().get(traced.selection.indices().get(0));
+            // true = pile 1, matching HumanPlayer.choosePile's boolean convention
+            return Integer.valueOf(1).equals(selected.payload().get("pileIndex"));
+        });
     }
 
     // --- mode selection ---
@@ -245,9 +259,8 @@ public final class CabtBridgePlayer extends ComputerPlayer {
             return null;
         }
         TracedSelection traced = prompt("CHOOSE_MODE", decision, game);
-        Mode mode = modeSelectionApplier.apply(modes, source, game, traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return mode;
+        return applyTraced(traced, () -> modeSelectionApplier.apply(
+                modes, source, game, traced.selection, decision));
     }
 
     // --- numeric prompts ---
@@ -265,9 +278,7 @@ public final class CabtBridgePlayer extends ComputerPlayer {
     private int resolveNumber(String method, int min, int max, String message, Game game) {
         PendingDecision decision = numberPromptBuilder.build(this, min, max, message);
         TracedSelection traced = prompt(method, decision, game);
-        int value = numberSelectionApplier.apply(traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return value;
+        return applyTraced(traced, () -> numberSelectionApplier.apply(traced.selection, decision));
     }
 
     @Override
@@ -279,9 +290,7 @@ public final class CabtBridgePlayer extends ComputerPlayer {
         }
         PendingDecision decision = multiAmountPromptBuilder.build(this, messages, totalMin, totalMax);
         TracedSelection traced = prompt("GET_MULTI_AMOUNT", decision, game);
-        List<Integer> assignment = multiAmountSelectionApplier.apply(traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return assignment;
+        return applyTraced(traced, () -> multiAmountSelectionApplier.apply(traced.selection, decision));
     }
 
     // --- triggered-ability ordering ---
@@ -297,10 +306,8 @@ public final class CabtBridgePlayer extends ComputerPlayer {
         }
         PendingDecision decision = triggeredAbilityPromptBuilder.build(this, game, abilities);
         TracedSelection traced = prompt("CHOOSE_TRIGGERED_ABILITY", decision, game);
-        TriggeredAbility selected = triggeredAbilitySelectionApplier.apply(
-                abilities, traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return selected;
+        return applyTraced(traced, () -> triggeredAbilitySelectionApplier.apply(
+                abilities, traced.selection, decision));
     }
 
     // --- replacement-effect choice ---
@@ -314,9 +321,8 @@ public final class CabtBridgePlayer extends ComputerPlayer {
         }
         PendingDecision decision = replacementEffectPromptBuilder.build(this, effectsMap, objectsMap);
         TracedSelection traced = prompt("CHOOSE_REPLACEMENT_EFFECT", decision, game);
-        int result = replacementEffectSelectionApplier.apply(traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return result;
+        return applyTraced(traced, () -> replacementEffectSelectionApplier.apply(
+                traced.selection, decision));
     }
 
     // --- mana payment ---
@@ -325,9 +331,8 @@ public final class CabtBridgePlayer extends ComputerPlayer {
     public boolean playMana(Ability abilityToCast, ManaCost unpaid, String promptText, Game game) {
         PendingDecision decision = manaPromptBuilder.build(this, game, abilityToCast, unpaid, promptText);
         TracedSelection traced = prompt("PLAY_MANA", decision, game);
-        boolean result = manaSelectionApplier.apply(this, game, traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return result;
+        return applyTraced(traced, () -> manaSelectionApplier.apply(
+                this, game, traced.selection, decision));
     }
 
     // package-private bridges to the inherited player's own mana path, so the
@@ -360,8 +365,8 @@ public final class CabtBridgePlayer extends ComputerPlayer {
             return;
         }
         TracedSelection traced = prompt("SELECT_ATTACKERS", decision, game);
-        attackersSelectionApplier.apply(this, game, traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
+        applyTracedVoid(traced, () -> attackersSelectionApplier.apply(
+                this, game, traced.selection, decision));
     }
 
     @Override
@@ -371,8 +376,8 @@ public final class CabtBridgePlayer extends ComputerPlayer {
             return;
         }
         TracedSelection traced = prompt("SELECT_BLOCKERS", decision, game);
-        blockersSelectionApplier.apply(this, game, traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
+        applyTracedVoid(traced, () -> blockersSelectionApplier.apply(
+                this, game, traced.selection, decision));
     }
 
     // --- pregame mulligan ---
@@ -381,34 +386,62 @@ public final class CabtBridgePlayer extends ComputerPlayer {
     public boolean chooseMulligan(Game game) {
         PendingDecision decision = mulliganPromptBuilder.build(this, game);
         TracedSelection traced = prompt("CHOOSE_MULLIGAN", decision, game);
-        boolean result = mulliganSelectionApplier.apply(traced.selection, decision);
-        traceRecorder.recordApplied(traced.trace.getTraceId());
-        return result;
+        return applyTraced(traced, () -> mulliganSelectionApplier.apply(traced.selection, decision));
     }
 
     // --- shared prompt plumbing ---
 
-    private TracedSelection prompt(String method, PendingDecision decision, Game game) {
+    private void assertLiveDecisionGame(String method, Game game) {
         if (game != null && (game.isSimulation() || game.inCheckPlayableState())) {
-            // a simulation or playable-calc game reached a bridge prompt: the
-            // controller only answers decisions of the live game, so this must
-            // fail closed instead of silently consuming (or inventing) an
-            // agent decision. HumanPlayer answers silent defaults here; doing
-            // the same is a future task and must be explicit, not inherited.
+            // a simulation or playable-calc game reached a bridge decision:
+            // the controller only answers decisions of the live game, so this
+            // must fail closed instead of silently consuming (or inventing)
+            // an agent decision. HumanPlayer answers silent defaults here;
+            // doing the same is a future task and must be explicit, not
+            // inherited.
             throw new CabtUnhandledDecisionException(
                     method + " was invoked from a simulation/playable-check game; "
                             + "the CABT bridge only answers live-game decisions");
         }
+    }
+
+    private TracedSelection prompt(String method, PendingDecision decision, Game game) {
+        assertLiveDecisionGame(method, game);
         CabtDecisionTrace trace = traceRecorder.recordPending(method, decision);
         try {
             Selection selection = bridge.requestSelection(game, this, decision);
             SelectionValidator.validate(decision, selection);
-            traceRecorder.recordSelected(trace.getTraceId(), selection);
+            traceRecorder.recordSelected(trace, selection);
             return new TracedSelection(trace, selection);
         } catch (RuntimeException e) {
-            traceRecorder.recordFailed(trace.getTraceId(), e);
+            traceRecorder.recordFailed(trace, e);
             throw e;
         }
+    }
+
+    /**
+     * Runs the apply phase of a prompted decision under the trace lifecycle:
+     * APPLIED on success, FAILED (with the error, rethrown) when the applier
+     * or the engine dispatch under it throws — so an apply-phase error never
+     * strands the trace at SELECTED.
+     */
+    private <T> T applyTraced(TracedSelection traced, Supplier<T> applyPhase) {
+        T result;
+        try {
+            result = applyPhase.get();
+        } catch (RuntimeException e) {
+            traceRecorder.recordFailed(traced.trace, e);
+            throw e;
+        }
+        traceRecorder.recordApplied(traced.trace);
+        return result;
+    }
+
+    private void applyTracedVoid(TracedSelection traced, Runnable applyPhase) {
+        applyTraced(traced, () -> {
+            applyPhase.run();
+            return null;
+        });
     }
 
     private static final class TracedSelection {

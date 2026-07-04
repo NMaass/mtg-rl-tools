@@ -68,6 +68,34 @@ class CabtDecisionTraceRecorderTest {
     }
 
     @Test
+    void engineRejectionMovesSelectedTraceToRejected() {
+        CabtDecisionTrace trace = recorder.recordPending("PRIORITY", decision(UUID.randomUUID()));
+        recorder.recordSelected(trace, Selection.of(0));
+
+        recorder.recordRejected(trace);
+
+        assertThat(trace.getStage()).isEqualTo(CabtDecisionTrace.Stage.REJECTED);
+        // the selection stays readable — the trace says what was attempted
+        assertThat(trace.getSelectedOptions()).hasSize(1);
+        assertThat(trace.getError()).isNull();
+        // a rejected trace is final: no applied/failed afterwards
+        assertThatThrownBy(() -> recorder.recordApplied(trace))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> recorder.recordFailed(trace, new RuntimeException("x")))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void rejectionRequiresASelectedTrace() {
+        CabtDecisionTrace trace = recorder.recordPending("PRIORITY", decision(UUID.randomUUID()));
+
+        // PENDING → REJECTED is not a legal transition: rejection is the
+        // engine's answer to a dispatched selection
+        assertThatThrownBy(() -> recorder.recordRejected(trace))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
     void invalidBridgeSelectionLeavesFailedTraceOnThePlayer() {
         CabtBridgePlayer player = new CabtBridgePlayer("CABT",
                 mage.constants.RangeOfInfluence.ALL,
