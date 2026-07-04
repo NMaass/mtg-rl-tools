@@ -51,9 +51,18 @@ STACK → BATTLEFIELD, the paid mana source tapped, zone moves chain per
 object, the final battlefield agrees with the moves, opponent hands never
 leak). The test fails if any artifact is missing or the invariants disagree.
 
-Smoke games over the **subprocess protocol** (Python client driving the
-same games) still need the protocol server (Task 18); the in-process smoke
-games above cover the engine side of that path today.
+Two more full-engine layers run the same loop through the session and
+protocol boundaries:
+
+- **`CabtGameSessionTest`**: the pull-based session API (start → events →
+  validated selections → game over) driving a real game to its turn limit,
+  plus invalid-selection recovery and unknown-card fail-closed checks.
+- **`CabtProtocolServerTest`**: raw request lines through
+  `CabtProtocolServer.handleLine` — exactly what a Python client sends —
+  including a full game played from serialized observations alone, the
+  hidden-hand boundary asserted on every observation, structured errors for
+  invalid selections that leave the pending decision answerable, and
+  fail-closed unknown/malformed commands.
 
 ### Python unit tests
 
@@ -71,10 +80,26 @@ the same script run.
 
 ### End-to-end protocol smoke tests
 
-Not available yet: they need the subprocess protocol server (Task 18) and
-Python client (Task 19). The script auto-enables this layer when
-`mage.player.cabt.CabtProtocolServer` appears in the module's compiled
-classes, and runs `python/tests/test_protocol*.py` against it.
+`python/tests/test_protocol_live.py` launches the real Java
+`CabtProtocolServer` as a subprocess and plays a full game from Python
+(greedy agent over `observation.select.option` indices), asserting the
+hidden-hand boundary on every observation and the structured-error path for
+invalid selections. It needs `MAGIC_CABT_CLASSPATH`; the script computes and
+exports it (also written to
+`Mage.Server.Plugins/Mage.Player.AI/target/cabt-classpath.full.txt` for
+manual runs) once `mage.player.cabt.CabtProtocolServer` appears in the
+module's compiled classes, then runs `python/tests/test_protocol*.py`.
+Without the variable these tests skip.
+
+The runnable example on top of the same stack:
+
+```sh
+MAGIC_CABT_CLASSPATH="$(cat Mage.Server.Plugins/Mage.Player.AI/target/cabt-classpath.full.txt)" \
+    python3 examples/run_selfplay.py --seed 42 --max-turns 15
+```
+
+drives two random legal agents through a real game and writes a replay
+(observations + selections + result) to `target/cabt-selfplay/replay.jsonl`.
 
 ## When a test fails, look here
 
@@ -83,6 +108,8 @@ classes, and runs `python/tests/test_protocol*.py` against it.
 | `SelectionValidatorTest`, `InvalidSelectionException` in many tests | Selection plumbing (Tasks 1–2) |
 | `CabtPriorityPromptBuilderTest`, `CabtPrioritySelectionApplierTest`, `CabtBridgePlayerPriorityTest` | Priority playable options (getPlayable enumeration / activateAbility dispatch) |
 | `CabtRealGameSmokeTest` | Full-engine integration: any bridge surface misbehaving against the real game loop |
+| `CabtGameSessionTest` | Session layer: game-thread handoff, event ordering, validation-before-dispatch, deck construction |
+| `CabtProtocolServerTest`, `python test_protocol_live` | Protocol boundary: request/response shapes, error codes, observation serialization over the wire |
 | `CabtRealGameSmokeTest.smokeRunBundleIsGeneratedAndInternallyConsistent`, `invariants.json` with `"passed": false` | Smoke-run bundle inconsistency: read the failing check's evidence in `target/cabt-smoke-run/invariants.json`, then the named sequence in `transitions.jsonl` / `timeline.html` |
 | `CabtDecisionTraceRecorderTest` | Decision trace lifecycle/sequence/error recording |
 | `CabtBridgePlayerOverrideAuditTest` | A SURFACED/FAIL_CLOSED Player callback is no longer overridden by the bridge, or the audit drifted from the real Player interface |

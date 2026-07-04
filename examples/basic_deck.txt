@@ -1,0 +1,4 @@
+# Minimal mono-green deck for the CABT bridge examples.
+# Format: "<count> <card name>" per line; blank lines and # comments ignored.
+24 Forest
+36 Grizzly Bears

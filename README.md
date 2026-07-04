@@ -45,14 +45,38 @@ actual `GameImpl` games through the bridge):
 - **Data layer**: static card metadata export and a JSONL transition dataset
   writer (Java), with `python/magic_cabt` parsers tested against
   Java-regenerated fixtures.
+- **Subprocess protocol server + Python live-game client** (the CABT
+  competition loop): `CabtProtocolServer` speaks newline-delimited JSON over
+  stdin/stdout — `ping`, `capabilities`, `game_start`, `game_select`,
+  `game_finish`, `all_card_data`, `visualize_data` — backed by
+  `CabtGameSession` running a real `GameImpl` on a game thread. Selections
+  are validated before the engine is touched: invalid ones return structured
+  errors (`OPTION_INDEX_OUT_OF_RANGE`, `INVALID_SELECTION_COUNT`,
+  `DUPLICATE_SELECTION`) and leave the pending decision answerable; unknown
+  or malformed commands fail closed. Deck input is name+count entries
+  resolved to real card classes (`CabtDeckFactory`), failing closed on
+  unknown names; `game_start` takes optional `seed`, `maxTurns`, and player
+  names. The Python client (`magic_cabt.CabtBridge`) is the
+  `battle_start`/`battle_select`/`battle_finish`/`visualize_data`
+  equivalent. Tested at three boundaries: `CabtGameSessionTest` (session
+  API), `CabtProtocolServerTest` (raw request lines, full game from
+  serialized observations only, hidden-hand checks per observation), and
+  `python/tests/test_protocol_live.py` (real subprocess from Python).
 
 Not implemented yet — do not rely on these:
 
-- **Subprocess protocol server** (`CabtProtocolServer`) and the Python
-  live-game client: the Python package is a card-data/dataset **parser
-  only**; there is no `game_start`/`game_select` interface yet. The
-  verification script auto-enables protocol smoke tests once the server
-  class exists.
+- **Search/lookahead API** (the CABT `search_begin`/`search_step`
+  equivalent): no cloned-game forward model is exposed to Python yet.
+- **Global `all_card_data`** — the protocol's `all_card_data` is
+  game-scoped (exports the active game's deduped deck pool only);
+  `capabilities()` reports this as `"cardDataScope":
+  "ACTIVE_GAME_DECK_POOL"`. A global static card-data export is future
+  work.
+- **Full card-name resolution** — `CabtDeckFactory` uses a class-name
+  heuristic that works for simple names (Forest, Grizzly Bears) but
+  fails closed for split cards, variant suffixes, and any card whose
+  XMage class name differs from the naive transform. Full repository
+  lookup is future work.
 - **Amount-distribution targeting** (`chooseTargetAmount`) fails closed by
   design until a distribution payload is built.
 - **Player callbacks outside the audited surface** still fall back to
@@ -66,10 +90,13 @@ same paths they occupy inside an XMage checkout.
 
 ```
 Mage.Server.Plugins/Mage.Player.AI/
-  src/main/java/mage/player/cabt/   the bridge (player, prompts, appliers, data export)
+  src/main/java/mage/player/cabt/   the bridge (player, prompts, appliers, data export,
+                                    game session + protocol server)
   src/test/java/mage/player/cabt/   unit + callback-boundary + full-engine smoke tests
   docs/                             decision-surface audit, verification guide
-python/                             magic_cabt package (card data + dataset parsers)
+python/                             magic_cabt package (card data + dataset parsers,
+                                    live-game protocol client)
+examples/                           random legal agent, example deck, self-play runner
 scripts/                            run-cabt-adapter-tests.sh
 ```
 
@@ -86,6 +113,35 @@ cd mage && scripts/run-cabt-adapter-tests.sh
 No XMage core file is modified — the bridge player extends `ComputerPlayer`
 and everything lives in the new `mage.player.cabt` package. The code targets
 Java 8 (XMage's build level).
+
+### Playing a live game from Python
+
+After the suite has run once (it writes the launch classpath to
+`Mage.Server.Plugins/Mage.Player.AI/target/cabt-classpath.full.txt`):
+
+```sh
+export MAGIC_CABT_CLASSPATH="$(cat Mage.Server.Plugins/Mage.Player.AI/target/cabt-classpath.full.txt)"
+python3 examples/run_selfplay.py --seed 42 --max-turns 15
+```
+
+runs two random legal agents through a real engine game and writes a replay
+to `target/cabt-selfplay/replay.jsonl`. The agent contract is the CABT one —
+observation dict in, option-index list out:
+
+```python
+import random
+from magic_cabt import CabtBridge, load_decklist
+
+deck = load_decklist("examples/basic_deck.txt")   # "24 Forest" per line
+with CabtBridge() as bridge:
+    response = bridge.game_start(deck, deck, seed=7, max_turns=20)
+    while not bridge.finished:
+        select = response["observation"]["select"]
+        count = random.randint(select["minCount"], select["maxCount"])
+        picks = random.sample(range(len(select["option"])), count)
+        response = bridge.game_select(picks)
+    print(bridge.result["winner"])
+```
 
 Key docs:
 
