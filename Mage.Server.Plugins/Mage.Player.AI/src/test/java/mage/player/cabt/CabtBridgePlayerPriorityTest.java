@@ -16,9 +16,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Proves the Task 1 seam: priority() builds a CABT-style prompt, asks the bridge,
- * validates the answer, and dispatches PASS_PRIORITY as pass(game) + return false —
- * matching ComputerPlayer's minimum priority behavior, but routed through the bridge.
+ * priority() enumerates the engine's playable abilities (getPlayable), builds
+ * a PRIORITY prompt, asks the bridge, validates the answer, and dispatches
+ * the selection — PASS_PRIORITY as pass(game) + return false, playables
+ * through activateAbility (covered by the real-engine smoke tests).
+ * <p>
+ * On the proxy stub game getPlayable returns empty (getStep() is null, the
+ * engine's own start-of-game guard), so these prompts are pass-only; the
+ * playable-option paths are exercised by CabtPriorityPromptBuilderTest and
+ * the real-engine tests.
  */
 class CabtBridgePlayerPriorityTest {
 
@@ -88,6 +94,12 @@ class CabtBridgePlayerPriorityTest {
         assertThat(decision.maxCount()).isEqualTo(1);
         assertThat(decision.options()).hasSize(1);
         assertThat(decision.options().get(0).type()).isEqualTo(MagicOptionType.PASS_PRIORITY);
+
+        // priority decisions are traced like every other surfaced decision
+        CabtDecisionTrace trace = player.getTraceRecorder().getLastTrace();
+        assertThat(trace.getMethod()).isEqualTo("PRIORITY");
+        assertThat(trace.getSelectType()).isEqualTo(MagicSelectType.PRIORITY);
+        assertThat(trace.getStage()).isEqualTo(CabtDecisionTrace.Stage.APPLIED);
     }
 
     @Test

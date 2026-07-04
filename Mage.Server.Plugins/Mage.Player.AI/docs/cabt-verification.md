@@ -28,10 +28,32 @@ CABT adapter tests. Two layers live there:
   selectAttackers, chooseMulligan, ...) driven end to end through
   controller → validation → applier → trace, asserting on real engine state
   afterwards.
+- **Full-engine smoke games** (`CabtRealGameSmokeTest`): a real `GameImpl`
+  runs its own loop — turns, priority, the stack, mana payment, combat
+  steps, state-based actions — with both players driven through the bridge
+  by an in-process policy controller. No stubs: real cards
+  (`mage.cards.basiclands.Forest`, `mage.cards.g.GrizzlyBears`), a real
+  mulligan phase, a real starting-player choice. Asserts that priority
+  prompts carry engine-enumerated playable options, that selecting
+  PLAY_LAND/CAST_SPELL changes actual hand/battlefield/stack state through
+  the real mana-payment loop, and that own-hand cards resolve to real names
+  in serialized observations.
 
-Full-engine smoke games (boot a game, play scripted turns over the
-subprocess protocol) are Task 20 and do not exist yet; when delivered they
-join the module suite and this script.
+The smoke game also emits a reviewable **artifact bundle** under
+`target/cabt-smoke-run/`: `manifest.json`, `decklists.json`,
+`observations.jsonl` (every prompt as seen), `transitions.jsonl`
+(before/selected/after per decision with object-id zone moves and tap
+changes as the delta), `timeline.html` (human-readable), `final-state.json`,
+and `invariants.json` — machine-checked cross-file claims, each carrying the
+transition sequence numbers that prove it (the selected PLAY_LAND card id is
+the id that moved HAND → BATTLEFIELD, the cast spell's id resolved
+STACK → BATTLEFIELD, the paid mana source tapped, zone moves chain per
+object, the final battlefield agrees with the moves, opponent hands never
+leak). The test fails if any artifact is missing or the invariants disagree.
+
+Smoke games over the **subprocess protocol** (Python client driving the
+same games) still need the protocol server (Task 18); the in-process smoke
+games above cover the engine side of that path today.
 
 ### Python unit tests
 
@@ -59,6 +81,12 @@ classes, and runs `python/tests/test_protocol*.py` against it.
 | Failure | Likely task area |
 | --- | --- |
 | `SelectionValidatorTest`, `InvalidSelectionException` in many tests | Selection plumbing (Tasks 1–2) |
+| `CabtPriorityPromptBuilderTest`, `CabtPrioritySelectionApplierTest`, `CabtBridgePlayerPriorityTest` | Priority playable options (getPlayable enumeration / activateAbility dispatch) |
+| `CabtRealGameSmokeTest` | Full-engine integration: any bridge surface misbehaving against the real game loop |
+| `CabtRealGameSmokeTest.smokeRunBundleIsGeneratedAndInternallyConsistent`, `invariants.json` with `"passed": false` | Smoke-run bundle inconsistency: read the failing check's evidence in `target/cabt-smoke-run/invariants.json`, then the named sequence in `transitions.jsonl` / `timeline.html` |
+| `CabtDecisionTraceRecorderTest` | Decision trace lifecycle/sequence/error recording |
+| `CabtBridgePlayerOverrideAuditTest` | A SURFACED/FAIL_CLOSED Player callback is no longer overridden by the bridge, or the audit drifted from the real Player interface |
+| `CabtBridgePlayerCopyAndSimulationTest` | copy()/rollback sharing or the simulation fail-closed guard |
 | `MagicObservation*Test`, `MagicObjectViewFactoryTest` | Public state serialization / hidden-info boundary (Task 6) |
 | `CabtTargetPromptBuilderTest`, `CabtBridgePlayerTargetPromptTest` | Target prompts (Task 7) |
 | `CabtYesNoPromptTest`, `CabtChoicePromptTest`, `CabtPilePromptTest` | Generic choice prompts (Task 8) |

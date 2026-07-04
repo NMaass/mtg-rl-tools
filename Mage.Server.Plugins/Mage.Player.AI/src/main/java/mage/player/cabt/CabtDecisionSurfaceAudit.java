@@ -58,8 +58,9 @@ public final class CabtDecisionSurfaceAudit {
                 PKG + "CabtBridgePlayer",
                 PKG + "CabtBridgePlayerPriorityTest",
                 "Player.priority(Game); CabtBridgePlayer.priority(Game)",
-                "Build PendingDecision with pass option, later add priority playable options.",
-                "Existing pass-only priority test."));
+                "PRIORITY prompt: PASS_PRIORITY plus one option per playable ability from "
+                        + "Player.getPlayable(Game, true); dispatched through PlayerImpl.activateAbility.",
+                "CabtBridgePlayerPriorityTest / CabtPriorityPromptBuilderTest / real-engine smoke test."));
 
         list.add(new CabtDecisionSurface(
                 "choose(Outcome, Target, Ability, Game)",
@@ -293,32 +294,39 @@ public final class CabtDecisionSurfaceAudit {
 
         list.add(new CabtDecisionSurface(
                 "getPlayable(Game, boolean)",
-                PLAYABLE_OBJECTS, REFERENCE_ONLY,
-                "", "",
-                "Player.getPlayable(Game, boolean)",
-                "Use as reference for enumerating castable/activatable options in the priority prompt.",
-                "Add later when priority playable options are implemented."));
+                PLAYABLE_OBJECTS, SURFACED,
+                PKG + "CabtPriorityPromptBuilder",
+                PKG + "CabtPriorityPromptBuilderTest",
+                "Player.getPlayable(Game, boolean); CabtBridgePlayer.priority(Game)",
+                "The current root-priority implementation: one PLAY_LAND/CAST_SPELL/"
+                        + "ACTIVATE_ABILITY/SPECIAL_ACTION option per returned ability. Future "
+                        + "refinement, not final form: compare with getPlayableOptions/"
+                        + "getPlayableObjects for alternate-cost and casting-option payloads.",
+                "CabtPriorityPromptBuilderTest / CabtBridgePlayerPriorityTest."));
         list.add(new CabtDecisionSurface(
                 "getPlayableOptions(Ability, Game)",
                 PLAYABLE_OBJECTS, REFERENCE_ONLY,
                 "", "",
                 "Player.getPlayableOptions(Ability, Game)",
-                "Use as reference for expanding a playable ability into its concrete casting options.",
-                "Add later when priority playable options are implemented."));
+                "Expansion of one playable ability into concrete casting options; the bridge instead "
+                        + "surfaces those choices through the downstream prompts (targets, modes, X, mana).",
+                "Downstream prompt tests cover the expanded choices."));
         list.add(new CabtDecisionSurface(
                 "getPlayableObjects(Game, Zone)",
                 PLAYABLE_OBJECTS, REFERENCE_ONLY,
                 "", "",
                 "Player.getPlayableObjects(Game, Zone); GameSessionPlayer.prepareGameView(...)",
-                "Use as reference for priority playable action payloads.",
-                "Add later when priority playable options are implemented."));
+                "Per-object aggregation of getPlayable used by the UI; the priority prompt uses "
+                        + "getPlayable(Game, boolean) directly, one option per ability.",
+                "Covered by the priority prompt tests."));
         list.add(new CabtDecisionSurface(
                 "getPlayableActivatedAbilities(MageObject, Zone, Game)",
                 PLAYABLE_OBJECTS, REFERENCE_ONLY,
                 "", "",
                 "Player.getPlayableActivatedAbilities(MageObject, Zone, Game)",
-                "Use as reference for per-object activated-ability options in the priority prompt.",
-                "Add later when priority playable options are implemented."));
+                "Per-object filter of getPlayable used by HumanPlayer's click-a-card flow; the "
+                        + "priority prompt enumerates the whole action space instead.",
+                "Covered by the priority prompt tests."));
 
         // --- Source 2: GameSessionPlayer client/UI callback surface ---
         // The existing XMage path for showing prompts (and UI-visible priority
@@ -372,7 +380,7 @@ public final class CabtDecisionSurfaceAudit {
                 "", "",
                 "GameSessionPlayer.prepareGameView(...): gameView.setCanPlayObjects(priorityPlayer.getPlayableObjects(sourceGame, Zone.ALL))",
                 "The existing XMage path for UI-visible priority playable objects; reference for priority option payloads.",
-                "Add later when priority playable options are implemented."));
+                "Covered by the priority prompt tests."));
 
         // --- Arena / replay comparison note ---
 

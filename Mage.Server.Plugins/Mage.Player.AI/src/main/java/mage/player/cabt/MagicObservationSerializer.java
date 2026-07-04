@@ -34,11 +34,16 @@ public final class MagicObservationSerializer {
         return new MagicObservation(Collections.emptyList(), current, select);
     }
 
-    private MagicCurrent serializeCurrent(Game game, UUID selectingPlayerId) {
+    /**
+     * Bare state snapshot without a pending prompt — same hidden-information
+     * rules ({@code perspectivePlayerId}'s own hand is visible, others stay
+     * counts-only). Used for the final state of a recorded run.
+     */
+    public MagicCurrent serializeCurrent(Game game, UUID perspectivePlayerId) {
         List<UUID> playerIds = orderedPlayerIds(game);
         List<MagicPlayerView> players = new ArrayList<MagicPlayerView>();
         for (int i = 0; i < playerIds.size(); i++) {
-            players.add(serializePlayer(game, playerIds.get(i), i, selectingPlayerId));
+            players.add(serializePlayer(game, playerIds.get(i), i, perspectivePlayerId));
         }
         List<MagicPermanentView> battlefield = serializeBattlefield(game);
         List<MagicStackObjectView> stack = serializeStack(game);

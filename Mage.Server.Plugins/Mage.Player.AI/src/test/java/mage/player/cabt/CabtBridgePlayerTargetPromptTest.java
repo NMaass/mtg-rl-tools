@@ -124,6 +124,37 @@ class CabtBridgePlayerTargetPromptTest {
     }
 
     @Test
+    void applierFailureRecordsFailedTraceNotSelected() {
+        ScriptedBridgeController scripted = new ScriptedBridgeController(
+                Collections.singletonList(Selection.of(0)));
+        CabtBridgePlayer player = new CabtBridgePlayer("CABT", RangeOfInfluence.ALL, scripted);
+
+        UUID bearsId = UUID.randomUUID();
+        Battlefield battlefield = new Battlefield();
+        battlefield.addPermanent(StubGames.permanent(
+                bearsId, "Grizzly Bears", player.getId(), player.getId(), false, 2, 2));
+        Game game = gameWith(player, battlefield);
+        // the selection is valid, but the engine-side apply blows up — the
+        // trace must end FAILED (with the error), not strand at SELECTED
+        StubTarget target = new StubTarget(1, 1, Collections.singletonList(bearsId)) {
+            @Override
+            public void addTarget(UUID id, mage.abilities.Ability source, Game aGame) {
+                throw new IllegalStateException("apply phase exploded");
+            }
+        };
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> player.chooseTarget(Outcome.Damage, target, StubGames.ability(), game))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("apply phase exploded");
+
+        CabtDecisionTrace trace = player.getTraceRecorder().getLastTrace();
+        assertThat(trace.getStage()).isEqualTo(CabtDecisionTrace.Stage.FAILED);
+        assertThat(trace.getSelection().indices()).containsExactly(0);
+        assertThat(trace.getError()).contains("apply phase exploded");
+    }
+
+    @Test
     void noPossibleTargetsMeansNoPromptAndNoTrace() {
         ScriptedBridgeController scripted = new ScriptedBridgeController(
                 Collections.<Selection>emptyList());
