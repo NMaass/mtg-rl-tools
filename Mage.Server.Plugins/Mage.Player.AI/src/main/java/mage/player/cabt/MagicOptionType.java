@@ -2,13 +2,18 @@ package mage.player.cabt;
 
 /**
  * CABT bridge: the kind of game action or answer an option represents.
- * PROMPT_* options answer an engine prompt by referencing a player, game
- * object, card, choice value, pile, mode, or number; there is deliberately
- * no catch-all/unknown value — an unrecognized action must fail, not be
- * bucketed.
+ * PLAY_LAND/CAST_SPELL/ACTIVATE_ABILITY/SPECIAL_ACTION are the root priority
+ * actions enumerated from Player.getPlayable; PROMPT_* options answer an
+ * engine prompt by referencing a player, game object, card, choice value,
+ * pile, mode, or number; there is deliberately no catch-all/unknown value —
+ * an unrecognized action must fail, not be bucketed.
  */
 public enum MagicOptionType {
     PASS_PRIORITY,
+    PLAY_LAND,
+    CAST_SPELL,
+    ACTIVATE_ABILITY,
+    SPECIAL_ACTION,
     PROMPT_OBJECT,
     PROMPT_PLAYER,
     PROMPT_CARD,

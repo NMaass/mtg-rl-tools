@@ -32,19 +32,25 @@ import java.util.UUID;
  * CABT bridge: XMage player whose decisions are routed to a {@link CabtBridgeController}
  * as CABT-style option-index prompts instead of being made by the built-in AI.
  * <p>
- * Surfaced so far: priority (pass-only), target selection, yes/no (chooseUse),
- * generic Choice, pile choice, mode selection, numeric prompts
- * (announceX/getAmount/multi-amount), triggered-ability ordering,
- * replacement-effect choice, mana payment, combat declarations, and the
- * pregame mulligan. Every surfaced decision is traced
+ * Surfaced so far: priority (pass plus the engine-enumerated playable
+ * actions: play land, cast spell, activate ability, special action), target
+ * selection, yes/no (chooseUse), generic Choice, pile choice, mode selection,
+ * numeric prompts (announceX/getAmount/multi-amount), triggered-ability
+ * ordering, replacement-effect choice, mana payment, combat declarations, and
+ * the pregame mulligan. Every surfaced decision is traced
  * PENDING → SELECTED → APPLIED through the shared
- * {@link CabtDecisionTraceRecorder}. Other callbacks still fall back to
- * ComputerPlayer.
+ * {@link CabtDecisionTraceRecorder}. Audited callbacks that are decisions but
+ * are not surfaced yet fail closed with
+ * {@link CabtUnhandledDecisionException}; Player callbacks outside the audit
+ * still fall back to ComputerPlayer (see docs/cabt-decision-surface.md for
+ * the audited surface and its enforcement).
  */
 public final class CabtBridgePlayer extends ComputerPlayer {
 
     private final CabtBridgeController bridge;
     private final CabtDecisionTraceRecorder traceRecorder;
+    private final CabtPriorityPromptBuilder priorityPromptBuilder = new CabtPriorityPromptBuilder();
+    private final CabtPrioritySelectionApplier prioritySelectionApplier = new CabtPrioritySelectionApplier();
     private final CabtTargetPromptBuilder targetPromptBuilder = new CabtTargetPromptBuilder();
     private final CabtTargetSelectionApplier targetSelectionApplier = new CabtTargetSelectionApplier();
     private final CabtYesNoPromptBuilder yesNoPromptBuilder = new CabtYesNoPromptBuilder();
@@ -78,6 +84,12 @@ public final class CabtBridgePlayer extends ComputerPlayer {
 
     private CabtBridgePlayer(final CabtBridgePlayer player) {
         super(player);
+        // deliberately shared, not copied: XMage's bookmark/rollback restores
+        // player COPIES into the live game (GameState.copy/restore), so a copy
+        // must keep the live controller and the live trace history to survive
+        // a rollback. The hazard of sharing — a simulation copy consuming live
+        // agent decisions — is closed in prompt(): simulation/playable-check
+        // games fail closed instead of reaching the bridge.
         this.bridge = player.bridge;
         this.traceRecorder = player.traceRecorder;
     }
@@ -93,15 +105,13 @@ public final class CabtBridgePlayer extends ComputerPlayer {
 
     @Override
     public boolean priority(Game game) {
-        PendingDecision decision = PendingDecision.priority(getId());
-        Selection selection = bridge.requestSelection(game, this, decision);
-        SelectionValidator.validate(decision, selection);
-        MagicOption selected = decision.options().get(selection.indices().get(0));
-        if (selected.type() == MagicOptionType.PASS_PRIORITY) {
-            pass(game);
-            return false;
-        }
-        throw new IllegalStateException("Unsupported CABT priority option: " + selected.type());
+        passed = false;
+        CabtPriorityPrompt priorityPrompt = priorityPromptBuilder.build(
+                this, game, getPlayable(game, true));
+        TracedSelection traced = prompt("PRIORITY", priorityPrompt.getDecision(), game);
+        boolean acted = prioritySelectionApplier.apply(this, game, traced.selection, priorityPrompt);
+        traceRecorder.recordApplied(traced.trace.getTraceId());
+        return acted;
     }
 
     // --- target selection ---
@@ -379,11 +389,26 @@ public final class CabtBridgePlayer extends ComputerPlayer {
     // --- shared prompt plumbing ---
 
     private TracedSelection prompt(String method, PendingDecision decision, Game game) {
+        if (game != null && (game.isSimulation() || game.inCheckPlayableState())) {
+            // a simulation or playable-calc game reached a bridge prompt: the
+            // controller only answers decisions of the live game, so this must
+            // fail closed instead of silently consuming (or inventing) an
+            // agent decision. HumanPlayer answers silent defaults here; doing
+            // the same is a future task and must be explicit, not inherited.
+            throw new CabtUnhandledDecisionException(
+                    method + " was invoked from a simulation/playable-check game; "
+                            + "the CABT bridge only answers live-game decisions");
+        }
         CabtDecisionTrace trace = traceRecorder.recordPending(method, decision);
-        Selection selection = bridge.requestSelection(game, this, decision);
-        SelectionValidator.validate(decision, selection);
-        traceRecorder.recordSelected(trace.getTraceId(), selection);
-        return new TracedSelection(trace, selection);
+        try {
+            Selection selection = bridge.requestSelection(game, this, decision);
+            SelectionValidator.validate(decision, selection);
+            traceRecorder.recordSelected(trace.getTraceId(), selection);
+            return new TracedSelection(trace, selection);
+        } catch (RuntimeException e) {
+            traceRecorder.recordFailed(trace.getTraceId(), e);
+            throw e;
+        }
     }
 
     private static final class TracedSelection {

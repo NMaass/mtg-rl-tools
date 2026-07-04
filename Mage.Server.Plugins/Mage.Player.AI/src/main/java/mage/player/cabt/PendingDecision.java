@@ -28,8 +28,9 @@ public final class PendingDecision {
     }
 
     /**
-     * Prompt for a priority stop: choose exactly one action.
-     * Task 1 offers PASS_PRIORITY only; later tasks add the playable actions.
+     * Base prompt for a priority stop: choose exactly one action, with
+     * PASS_PRIORITY fixed at index 0. {@link CabtPriorityPromptBuilder}
+     * appends the engine-backed playable actions behind it.
      */
     public static PendingDecision priority(UUID playerId) {
         PendingDecision decision = new PendingDecision(MagicSelectType.PRIORITY, playerId, 1, 1);
