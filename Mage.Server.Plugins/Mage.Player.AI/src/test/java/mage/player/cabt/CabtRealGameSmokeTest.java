@@ -16,7 +16,9 @@ import org.junit.jupiter.api.Timeout;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,15 +46,20 @@ class CabtRealGameSmokeTest {
     private CabtBridgePlayer alice;
     private GreedyPolicyBridgeController bobPolicy;
     private CabtBridgePlayer bob;
+    private CabtRunRecorder runRecorder;
 
     private void startSmokeGame() {
         game = new CabtSmokeDuel();
 
+        // both players' decisions flow through one globally-ordered run log,
+        // from which the smoke-run artifact bundle is generated
+        runRecorder = new CabtRunRecorder();
         alicePolicy = new GreedyPolicyBridgeController();
-        aliceBridge = new RecordingBridgeController(alicePolicy, new MagicObservationSerializer());
+        aliceBridge = new RecordingBridgeController(
+                runRecorder.wrap(alicePolicy), new MagicObservationSerializer());
         alice = new CabtBridgePlayer("Alice", RangeOfInfluence.ALL, aliceBridge);
         bobPolicy = new GreedyPolicyBridgeController();
-        bob = new CabtBridgePlayer("Bob", RangeOfInfluence.ALL, bobPolicy);
+        bob = new CabtBridgePlayer("Bob", RangeOfInfluence.ALL, runRecorder.wrap(bobPolicy));
 
         Deck emptyDeck1 = new Deck();
         Deck emptyDeck2 = new Deck();
@@ -168,6 +175,64 @@ class CabtRealGameSmokeTest {
             handNames.add(cardView.getRef().getName());
         }
         assertThat(handNames).containsExactlyInAnyOrder("Forest", "Grizzly Bears");
+    }
+
+    @Test
+    void smokeRunBundleIsGeneratedAndInternallyConsistent() throws Exception {
+        startSmokeGame();
+
+        java.io.File bundleDir = new java.io.File("target/cabt-smoke-run");
+        Map<String, Object> manifest = new LinkedHashMap<String, Object>();
+        manifest.put("testName", "play_land_cast_grizzly_bears");
+        manifest.put("generator", getClass().getName());
+        manifest.put("stopOnTurn", 3);
+        Map<String, Object> decklists = new LinkedHashMap<String, Object>();
+        decklists.put("alice", decklist(
+                java.util.Arrays.asList("Forest", "Grizzly Bears"),
+                java.util.Arrays.asList("Forest", "Forest", "Forest", "Forest")));
+        decklists.put("bob", decklist(
+                java.util.Arrays.asList("Forest"),
+                java.util.Arrays.asList("Forest", "Forest", "Forest", "Forest")));
+
+        CabtSmokeRunBundleWriter.Result result = new CabtSmokeRunBundleWriter(bundleDir).write(
+                manifest, decklists, runRecorder.getSteps(), runRecorder.finalState(game, alice));
+
+        // every artifact exists and is non-empty
+        for (String fileName : new String[]{"manifest.json", "decklists.json",
+                "observations.jsonl", "transitions.jsonl", "timeline.html",
+                "final-state.json", "invariants.json"}) {
+            java.io.File file = new java.io.File(bundleDir, fileName);
+            assertThat(file).as(fileName).exists();
+            assertThat(file.length()).as(fileName + " is non-empty").isGreaterThan(0);
+        }
+
+        // the writer's cross-file invariants all hold: PLAY_LAND moved its
+        // card HAND->BATTLEFIELD, CAST_SPELL moved it HAND->STACK, the mana
+        // source tapped, a spell resolved STACK->BATTLEFIELD, moves chain,
+        // the final battlefield agrees, and no opponent hand leaked
+        assertThat(result.getFailedChecks()).isEmpty();
+        assertThat(result.isPassed()).isTrue();
+
+        // spot-check the evidence from outside the writer: the resolved
+        // spell named in invariants.json is the Grizzly Bears, and the
+        // transitions file records the STACK->BATTLEFIELD move
+        String invariants = new String(java.nio.file.Files.readAllBytes(
+                new java.io.File(bundleDir, "invariants.json").toPath()),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(invariants).contains("Grizzly Bears");
+        assertThat(invariants).contains("transitionSequence");
+        String transitions = new String(java.nio.file.Files.readAllBytes(
+                new java.io.File(bundleDir, "transitions.jsonl").toPath()),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(transitions).contains("\"from\":\"STACK\",\"to\":\"BATTLEFIELD\"");
+        assertThat(transitions).contains("\"from\":\"HAND\",\"to\":\"BATTLEFIELD\"");
+    }
+
+    private static Map<String, Object> decklist(List<String> openingHand, List<String> libraryTopFirst) {
+        Map<String, Object> decklist = new LinkedHashMap<String, Object>();
+        decklist.put("openingHand", openingHand);
+        decklist.put("libraryTopFirst", libraryTopFirst);
+        return decklist;
     }
 
     // --- fixtures ---

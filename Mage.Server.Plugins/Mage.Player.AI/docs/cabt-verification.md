@@ -39,6 +39,18 @@ CABT adapter tests. Two layers live there:
   the real mana-payment loop, and that own-hand cards resolve to real names
   in serialized observations.
 
+The smoke game also emits a reviewable **artifact bundle** under
+`target/cabt-smoke-run/`: `manifest.json`, `decklists.json`,
+`observations.jsonl` (every prompt as seen), `transitions.jsonl`
+(before/selected/after per decision with object-id zone moves and tap
+changes as the delta), `timeline.html` (human-readable), `final-state.json`,
+and `invariants.json` — machine-checked cross-file claims, each carrying the
+transition sequence numbers that prove it (the selected PLAY_LAND card id is
+the id that moved HAND → BATTLEFIELD, the cast spell's id resolved
+STACK → BATTLEFIELD, the paid mana source tapped, zone moves chain per
+object, the final battlefield agrees with the moves, opponent hands never
+leak). The test fails if any artifact is missing or the invariants disagree.
+
 Smoke games over the **subprocess protocol** (Python client driving the
 same games) still need the protocol server (Task 18); the in-process smoke
 games above cover the engine side of that path today.
@@ -71,6 +83,7 @@ classes, and runs `python/tests/test_protocol*.py` against it.
 | `SelectionValidatorTest`, `InvalidSelectionException` in many tests | Selection plumbing (Tasks 1–2) |
 | `CabtPriorityPromptBuilderTest`, `CabtPrioritySelectionApplierTest`, `CabtBridgePlayerPriorityTest` | Priority playable options (getPlayable enumeration / activateAbility dispatch) |
 | `CabtRealGameSmokeTest` | Full-engine integration: any bridge surface misbehaving against the real game loop |
+| `CabtRealGameSmokeTest.smokeRunBundleIsGeneratedAndInternallyConsistent`, `invariants.json` with `"passed": false` | Smoke-run bundle inconsistency: read the failing check's evidence in `target/cabt-smoke-run/invariants.json`, then the named sequence in `transitions.jsonl` / `timeline.html` |
 | `CabtDecisionTraceRecorderTest` | Decision trace lifecycle/sequence/error recording |
 | `CabtBridgePlayerOverrideAuditTest` | A SURFACED/FAIL_CLOSED Player callback is no longer overridden by the bridge, or the audit drifted from the real Player interface |
 | `CabtBridgePlayerCopyAndSimulationTest` | copy()/rollback sharing or the simulation fail-closed guard |

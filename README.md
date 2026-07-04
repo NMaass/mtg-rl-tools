@@ -13,17 +13,29 @@ actual `GameImpl` games through the bridge):
 
 - **Priority with playable actions**: PASS_PRIORITY plus one option per
   ability from `Player.getPlayable` (play land, cast spell, activate ability,
-  special action), dispatched through `PlayerImpl.activateAbility`. A smoke
-  game plays a land from hand and casts a creature through the real mana
-  payment and stack-resolution path.
+  special action), dispatched through `PlayerImpl.activateAbility` — the
+  engine's answer is recorded, not assumed (a declined activation traces as
+  REJECTED). A smoke game plays a land from hand and casts a creature through
+  the real mana payment and stack-resolution path. This is the current root
+  priority implementation, not its final form: `getPlayableOptions` /
+  `getPlayableObjects` remain future refinements for alternate-cost and
+  casting-option payloads.
 - **Callback prompts**: targets, yes/no, generic choice, pile, modes,
   numbers/X/multi-amount, trigger ordering, replacement effects, mana
   payment, attacker/blocker declarations, mulligan — each with unit +
   callback-boundary tests; priority, targeting, mana payment and mulligan
   also covered by the full-engine smoke games.
 - **Decision traces**: every surfaced decision is numbered and traced
-  PENDING → SELECTED → APPLIED (or FAILED with the error), with the selected
-  options resolvable per trace.
+  PENDING → SELECTED → APPLIED — or REJECTED when the engine declines the
+  selected action, or FAILED (with the error) when selecting, validating, or
+  applying throws — with the selected options resolvable per trace.
+- **Smoke-run artifact bundle**: the smoke test writes
+  `target/cabt-smoke-run/` (manifest, decklists, `observations.jsonl`,
+  `transitions.jsonl` with object-id zone-move deltas, `timeline.html`,
+  `final-state.json`, `invariants.json`) and fails unless the files are
+  mutually consistent — e.g. the selected PLAY_LAND option's card id is the
+  id that moved HAND → BATTLEFIELD, and the cast spell's id resolves
+  STACK → BATTLEFIELD.
 - **Fail-closed policy, enforced**: audited callbacks that are not surfaced
   throw `CabtUnhandledDecisionException` instead of letting the inherited
   `ComputerPlayer` AI decide; a reflection audit
