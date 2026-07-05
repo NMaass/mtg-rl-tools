@@ -14,13 +14,12 @@ import re
 
 __all__ = ["ArenaLogNormalizer", "normalize_arena_log", "iter_log_entries"]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 LOG_START_RE = re.compile(
     r"^\[(?P<channel>UnityCrossThreadLogger|Client GRE)\](?P<time>\d[\d:/ .T-]*(?:AM|PM)?)?"
 )
 TIMESTAMP_RE = re.compile(r"^(?P<time>\d[\d/.-]+[ T]\d+:\d+:\d+(?: ?(?:AM|PM))?)")
-JSON_START_RE = re.compile(r"[\[\{]")
 TIME_FORMATS = (
     "%Y-%m-%d %I:%M:%S %p",
     "%Y-%m-%d %H:%M:%S",
@@ -35,6 +34,50 @@ TIME_FORMATS = (
     "%d.%m.%Y %I:%M:%S %p",
 )
 
+# GRE messages that ask the local player for a decision. These are paired in
+# game_history.jsonl with the ARENA_CLIENT_DECISION the client sent back.
+DECISION_PROMPT_GRE_TYPES = frozenset((
+    "GREMessageType_ActionsAvailableReq",
+    "GREMessageType_AssignDamageReq",
+    "GREMessageType_CastingTimeOptionsReq",
+    "GREMessageType_ChooseStartingPlayerReq",
+    "GREMessageType_DeclareAttackersReq",
+    "GREMessageType_DeclareBlockersReq",
+    "GREMessageType_GroupReq",
+    "GREMessageType_MulliganReq",
+    "GREMessageType_NumericInputReq",
+    "GREMessageType_OptionalActionMessage",
+    "GREMessageType_OrderReq",
+    "GREMessageType_PayCostsReq",
+    "GREMessageType_SearchReq",
+    "GREMessageType_SelectNReq",
+    "GREMessageType_SelectTargetsReq",
+))
+
+# Client -> GRE messages that carry the player's actual choice.
+DECISION_CLIENT_TYPES = frozenset((
+    "ClientMessageType_AssignDamageResp",
+    "ClientMessageType_CastingTimeOptionsResp",
+    "ClientMessageType_ChooseStartingPlayerResp",
+    "ClientMessageType_ConcedeReq",
+    "ClientMessageType_DeclareAttackersResp",
+    "ClientMessageType_DeclareBlockersResp",
+    "ClientMessageType_EffectCostResp",
+    "ClientMessageType_GroupResp",
+    "ClientMessageType_MulliganResp",
+    "ClientMessageType_NumericInputResp",
+    "ClientMessageType_OptionalActionResp",
+    "ClientMessageType_OrderResp",
+    "ClientMessageType_PerformActionResp",
+    "ClientMessageType_PerformAutoTapActionsResp",
+    "ClientMessageType_SearchResp",
+    "ClientMessageType_SelectNResp",
+    "ClientMessageType_SelectTargetsResp",
+    "ClientMessageType_SubmitAttackersReq",
+    "ClientMessageType_SubmitBlockersReq",
+    "ClientMessageType_SubmitTargetsReq",
+))
+
 
 class ArenaLogNormalizer:
     """Normalize saved Arena log text into local replay artifacts."""
@@ -44,17 +87,25 @@ class ArenaLogNormalizer:
         self._next_raw_id = 1
         self._next_event_id = 1
         self._latest_game_state_event_id = None
+        self._current_match_id = None
+        self._current_game_number = None
+        self._game_over_keys = set()
         self.records = {
             "raw_events": [],
             "normalized_events": [],
             "game_history": [],
         }
+        self.decks = []
         self.deck_info = {}
         self.summary = {
             "schemaVersion": SCHEMA_VERSION,
             "matchId": None,
+            "matchIds": [],
+            "games": [],
             "seatId": None,
             "gameStateMessages": 0,
+            "decisionPrompts": {},
+            "clientDecisions": {},
             "clientSelectNRespDecisions": 0,
             "gameOverEvents": 0,
             "deckCardIdsFound": [],
@@ -92,7 +143,10 @@ class ArenaLogNormalizer:
             os.path.join(output_dir, "game_history.jsonl"),
             self.records["game_history"],
         )
-        _write_json(os.path.join(output_dir, "deck_info.json"), self.deck_info)
+        _write_json(
+            os.path.join(output_dir, "deck_info.json"),
+            {"schemaVersion": SCHEMA_VERSION, "decks": self.decks},
+        )
         _write_json(os.path.join(output_dir, "summary.json"), self.summary)
         return self
 
@@ -139,11 +193,21 @@ class ArenaLogNormalizer:
 
     def _extract_json(self, entry):
         text = entry["text"]
-        match = JSON_START_RE.search(text)
-        if match is None:
-            return None
+        start = text.find("{")
+        if start < 0:
+            # No object payload. Plain-text entries routinely contain "["
+            # ("[Manifest]...", "[PhysX]..."), so a failed decode from "[" is
+            # log noise, not a malformed payload — try it silently.
+            bracket = text.find("[")
+            if bracket < 0:
+                return None
+            try:
+                payload, _ = self._decoder.raw_decode(text, bracket)
+                return payload
+            except ValueError:
+                return None
         try:
-            payload, _ = self._decoder.raw_decode(text, match.start())
+            payload, _ = self._decoder.raw_decode(text, start)
             return payload
         except ValueError as exc:
             self.summary["parseErrors"].append(
@@ -164,6 +228,20 @@ class ArenaLogNormalizer:
             self._emit_game_state(message, raw_event, queued=False)
         elif message_type == "GREMessageType_QueuedGameStateMessage":
             self._emit_game_state(message, raw_event, queued=True)
+        elif message_type in DECISION_PROMPT_GRE_TYPES:
+            counts = self.summary["decisionPrompts"]
+            counts[message_type] = counts.get(message_type, 0) + 1
+            self._emit(
+                "ARENA_DECISION_PROMPT",
+                raw_event,
+                {
+                    "messageType": message_type,
+                    "matchId": self._current_match_id,
+                    "precedingGameStateEventId": self._latest_game_state_event_id,
+                    "payload": message,
+                },
+                history=True,
+            )
         else:
             self._emit(
                 "ARENA_GRE_MESSAGE",
@@ -176,32 +254,53 @@ class ArenaLogNormalizer:
             )
 
     def _handle_client_to_gre_message(self, payload, raw_event):
-        if payload.get("type") != "ClientMessageType_SelectNResp":
+        message_type = payload.get("type")
+        if message_type not in DECISION_CLIENT_TYPES:
             self._emit(
                 "ARENA_CLIENT_TO_GRE_MESSAGE",
                 raw_event,
-                {"messageType": payload.get("type"), "payload": payload},
+                {"messageType": message_type, "payload": payload},
                 history=False,
             )
             return
 
-        self.summary["clientSelectNRespDecisions"] += 1
+        if message_type == "ClientMessageType_SelectNResp":
+            self.summary["clientSelectNRespDecisions"] += 1
+        counts = self.summary["clientDecisions"]
+        counts[message_type] = counts.get(message_type, 0) + 1
         self._emit(
-            "ARENA_SELECT_N_RESP",
+            "ARENA_CLIENT_DECISION",
             raw_event,
             {
+                "messageType": message_type,
+                "matchId": self._current_match_id,
                 "precedingGameStateEventId": self._latest_game_state_event_id,
                 "payload": payload,
             },
             history=True,
         )
 
+    def _register_match(self, match_id):
+        if match_id is None:
+            return
+        if self.summary["matchId"] is None:
+            self.summary["matchId"] = match_id
+        if match_id not in self.summary["matchIds"]:
+            self.summary["matchIds"].append(match_id)
+        if match_id != self._current_match_id:
+            self._current_match_id = match_id
+            self._current_game_number = None
+        # A match's ConnectResp (which carries the deck) arrives before the
+        # first message that names the match id; adopt pending decks now.
+        for deck in self.decks:
+            if deck["matchId"] is None:
+                deck["matchId"] = match_id
+
     def _emit_match_state_changed(self, match_event, raw_event):
         game_room_info = match_event.get("gameRoomInfo", {})
         game_room_config = game_room_info.get("gameRoomConfig", {})
         match_id = game_room_config.get("matchId")
-        if match_id is not None:
-            self.summary["matchId"] = match_id
+        self._register_match(match_id)
         self._emit(
             "ARENA_MATCH_STATE_CHANGED",
             raw_event,
@@ -213,36 +312,55 @@ class ArenaLogNormalizer:
             history=True,
         )
         if "finalMatchResult" in game_room_info:
-            self.summary["gameOverEvents"] += 1
-            self._emit(
-                "ARENA_GAME_OVER",
-                raw_event,
-                {
-                    "matchId": match_id,
-                    "payload": game_room_info["finalMatchResult"],
-                },
-                history=True,
-            )
+            key = ("final", match_id)
+            if key not in self._game_over_keys:
+                self._game_over_keys.add(key)
+                self.summary["gameOverEvents"] += 1
+                self._emit(
+                    "ARENA_GAME_OVER",
+                    raw_event,
+                    {
+                        "matchId": match_id,
+                        "payload": game_room_info["finalMatchResult"],
+                    },
+                    history=True,
+                )
 
     def _emit_connect_resp(self, message, raw_event):
         connect_resp = message.get("connectResp", {})
         deck_message = connect_resp.get("deckMessage", {})
-        main_deck = _card_ids_from_cards(deck_message.get("mainDeck"))
-        sideboard = _card_ids_from_cards(deck_message.get("sideboard"))
-        self.deck_info = {
+        # Current clients send flat grpId lists under deckCards/sideboardCards;
+        # mainDeck/sideboard is the older card-object shape.
+        main_deck = _card_ids_from_cards(
+            _first_present(deck_message, ("deckCards", "mainDeck"))
+        )
+        sideboard = _card_ids_from_cards(
+            _first_present(deck_message, ("sideboardCards", "sideboard"))
+        )
+        seat_ids = message.get("systemSeatIds") or []
+        seat_id = seat_ids[0] if seat_ids else None
+        if seat_id is not None and self.summary["seatId"] is None:
+            self.summary["seatId"] = seat_id
+        deck_entry = {
             "schemaVersion": SCHEMA_VERSION,
-            "matchId": self.summary["matchId"],
+            "matchId": None,  # filled in by _register_match
+            "seatId": seat_id,
             "mainDeckArenaIds": main_deck,
             "sideboardArenaIds": sideboard,
             "rawDeckMessage": deck_message,
         }
-        self.summary["deckCardIdsFound"] = sorted(set(main_deck + sideboard))
+        self.decks.append(deck_entry)
+        self.deck_info = deck_entry
+        found = set(self.summary["deckCardIdsFound"])
+        found.update(main_deck)
+        found.update(sideboard)
+        self.summary["deckCardIdsFound"] = sorted(found)
         self._emit(
             "ARENA_CONNECT_RESP",
             raw_event,
             {
                 "connectResp": connect_resp,
-                "deckInfo": self.deck_info,
+                "deckInfo": deck_entry,
             },
             history=True,
         )
@@ -253,9 +371,19 @@ class ArenaLogNormalizer:
         game_info = game_state.get("gameInfo", {})
         match_id = game_info.get("matchID") or game_info.get("matchId")
         if match_id is not None:
-            self.summary["matchId"] = match_id
-            if self.deck_info:
-                self.deck_info["matchId"] = match_id
+            self._register_match(match_id)
+        else:
+            # Diff states omit gameInfo; attribute them to the active match.
+            match_id = self._current_match_id
+        game_number = game_info.get("gameNumber")
+        if game_number is None:
+            game_number = self._current_game_number
+        else:
+            self._current_game_number = game_number
+        if match_id is not None and game_number is not None:
+            game = {"matchId": match_id, "gameNumber": game_number}
+            if game not in self.summary["games"]:
+                self.summary["games"].append(game)
         if self.summary["seatId"] is None:
             self.summary["seatId"] = _first_present(
                 game_state,
@@ -278,13 +406,17 @@ class ArenaLogNormalizer:
         self.summary["gameStateMessages"] += 1
         self._latest_game_state_event_id = normalized["eventId"]
         if _is_game_over(game_state):
-            self.summary["gameOverEvents"] += 1
-            self._emit(
-                "ARENA_GAME_OVER",
-                raw_event,
-                {"matchId": match_id, "payload": game_state},
-                history=True,
-            )
+            # The GameOver stage persists across several diffs; emit once per game.
+            over_key = ("state", match_id, game_number)
+            if over_key not in self._game_over_keys:
+                self._game_over_keys.add(over_key)
+                self.summary["gameOverEvents"] += 1
+                self._emit(
+                    "ARENA_GAME_OVER",
+                    raw_event,
+                    {"matchId": match_id, "payload": game_state},
+                    history=True,
+                )
 
     def _emit(self, event_type, raw_event, body, history):
         event = {
