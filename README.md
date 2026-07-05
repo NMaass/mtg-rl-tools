@@ -44,7 +44,10 @@ actual `GameImpl` games through the bridge):
   simulation/playable-check games fail closed too.
 - **Data layer**: static card metadata export and a JSONL transition dataset
   writer (Java), with `python/magic_cabt` parsers tested against
-  Java-regenerated fixtures.
+  Java-regenerated fixtures. The Python package also includes a local
+  MTG Arena `Player.log` normalizer that writes raw events, normalized events,
+  game history, deck info, and summary JSON artifacts for later XMage
+  validation.
 - **Subprocess protocol server + Python live-game client** (the CABT
   competition loop): `CabtProtocolServer` speaks newline-delimited JSON over
   stdin/stdout — `ping`, `capabilities`, `game_start`, `game_select`,
