@@ -45,6 +45,9 @@ def main(argv=None):
     live.add_argument("--java", default="java", help="java executable")
     live.add_argument("--card-db", default=None,
                       help="MTGA Raw_CardDatabase path (default: auto-detect)")
+    live.add_argument("--raw-audit", action="store_true",
+                      help="also write raw_audit.jsonl (unredacted normalized "
+                           "events; may contain raw Arena payloads)")
     live.add_argument("--quiet", action="store_true")
 
     replay = commands.add_parser("replay", help="replay a recorded bundle")
@@ -61,9 +64,19 @@ def main(argv=None):
     replay.add_argument("--classpath", default=None)
     replay.add_argument("--java", default="java")
 
+    gui = commands.add_parser("gui", help="launcher GUI (logs, actions, "
+                                          "locate-logs, auto-open XMage)")
+    gui.add_argument("--classpath", default=None)
+    gui.add_argument("--java", default="java")
+
     args = parser.parse_args(argv)
     if args.mode == "live":
         return run_live(args)
+    if args.mode == "gui":
+        from . import gui as gui_mod
+        return gui_mod.main(
+            ["--java", args.java]
+            + (["--classpath", args.classpath] if args.classpath else []))
     return run_replay(args)
 
 
@@ -85,7 +98,8 @@ def run_live(args):
         display = MirrorDisplay(classpath=args.classpath, java=args.java)
         display.ping()
 
-    recorder = MirrorRecorder(out_dir, card_db=card_db)
+    recorder = MirrorRecorder(out_dir, card_db=card_db,
+                              raw_audit=args.raw_audit)
     session = MirrorSession(recorder=recorder, display=display,
                             card_db=card_db, verbose=not args.quiet)
     sys.stderr.write("[arena-mirror] recording to %s\n" % out_dir)

@@ -476,6 +476,75 @@ class HiddenInfoTest(unittest.TestCase):
             shutil.rmtree(directory, ignore_errors=True)
 
 
+class SessionAutoOpenTest(unittest.TestCase):
+    """The GUI relies on lazy display open + status/action callbacks."""
+
+    def _log_text(self):
+        return (
+            _gre_line(GAME_STATE_FULL)
+            + _gre_line({
+                "type": "GREMessageType_ActionsAvailableReq",
+                "systemSeatIds": [1], "msgId": 19, "gameStateId": 1,
+                "actionsAvailableReq": {"actions": [
+                    {"actionType": "ActionType_Play", "grpId": 90001,
+                     "instanceId": 102},
+                    {"actionType": "ActionType_Pass"},
+                ]},
+            })
+            + _client_line({
+                "type": "ClientMessageType_PerformActionResp", "respId": 19,
+                "gameStateId": 1,
+                "performActionResp": {"actions": [
+                    {"actionType": "ActionType_Play", "grpId": 90001,
+                     "instanceId": 102},
+                ]},
+            })
+        )
+
+    def test_display_opens_lazily_and_callbacks_fire(self):
+        from magic_cabt.arena_log import iter_log_entries
+        from magic_cabt.arena_mirror.session import MirrorSession
+
+        sent_states = []
+        factory_calls = []
+
+        class FakeDisplay(object):
+            def start_game(self, players, **kwargs):
+                pass
+
+            def send_state(self, state):
+                sent_states.append(state)
+
+            def finish_game(self, result=None):
+                pass
+
+            def close(self):
+                pass
+
+        def factory():
+            factory_calls.append(1)
+            return FakeDisplay()
+
+        statuses = []
+        actions = []
+        games = []
+        session = MirrorSession(
+            display_factory=factory, verbose=False,
+            on_status=lambda text: statuses.append(text),
+            on_action=lambda line, record: actions.append(line),
+            on_game=lambda kind, match_id, game: games.append(kind))
+
+        # no display until the first live board update arrives
+        self.assertEqual(0, len(factory_calls))
+        session.feed_entries(iter_log_entries(self._log_text().splitlines(True)))
+
+        self.assertEqual(1, len(factory_calls), "display opened exactly once")
+        self.assertTrue(sent_states, "board states were streamed to XMage")
+        self.assertTrue(any("decision #1" in line for line in actions))
+        self.assertIn("game_start", games)
+        self.assertTrue(statuses)
+
+
 class LauncherTest(unittest.TestCase):
     """The Python launcher must target the real Java class + package."""
 
