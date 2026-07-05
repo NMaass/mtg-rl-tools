@@ -394,6 +394,10 @@ class ArenaMatchTracker(object):
         self._on_game_event = on_game_event
         self._pending_prompts = []
         self._decision_sequence = 0
+        # monotonic id per game instance; the GRE gameId is absent on early
+        # (pregame/mulligan) states, so stamp our own stable identity that
+        # keeps game 2's states from colliding with game 1's restarted seqs
+        self._game_instance = 0
 
     def handle_event(self, event):
         """Route one normalized event (from StreamingNormalizer.feed)."""
@@ -421,10 +425,19 @@ class ArenaMatchTracker(object):
             game_number = game_info["gameNumber"]
             if game_number != self.game_number:
                 self.game_number = game_number
+                self._game_instance += 1
                 self._fire_game_event("game_start", event)
+        if self._game_instance == 0:
+            self._game_instance = 1  # states before the first gameInfo
         self.state.apply(payload)
         if self._on_snapshot is not None:
-            self._on_snapshot(self.state.snapshot(), event)
+            self._on_snapshot(self._stamp(self.state.snapshot()), event)
+
+    def _stamp(self, snapshot):
+        snapshot["matchId"] = self.match_id
+        snapshot["gameNumber"] = self.game_number
+        snapshot["gameInstance"] = self._game_instance
+        return snapshot
 
     def _handle_connect(self, event):
         deck_info = event.get("deckInfo") or {}
@@ -447,7 +460,7 @@ class ArenaMatchTracker(object):
     def _handle_prompt(self, event):
         prompt = options_mod.build_prompt(event)
         if prompt is not None:
-            prompt["snapshot"] = self.state.snapshot()
+            prompt["snapshot"] = self._stamp(self.state.snapshot())
             self._pending_prompts.append(prompt)
             # Arena occasionally abandons prompts (auto-pass); keep the
             # queue short so stale prompts don't mis-pair later responses.

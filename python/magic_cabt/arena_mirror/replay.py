@@ -35,29 +35,45 @@ class ReplayPlayer(object):
         self.interval = interval
         self.step = step
         self._log = log_stream or sys.stdout
+        self.narrated = []
 
     def play(self, bundle_dir):
         states, decisions, summary = load_bundle(bundle_dir)
         if not states:
             raise ValueError("no mirror_states.jsonl content in %s" % bundle_dir)
         decisions_by_state = self._index_decisions(decisions)
+        self.narrated = []  # decision sequence numbers, in playback order
         self._say("replaying %d states, %d decisions from %s"
                   % (len(states), len(decisions), bundle_dir))
 
         game_key = None
+        match_key = None
         previous_time = None
         for state in states:
-            key = (state.get("matchId"), state.get("gameId"))
+            key = state.get("gameInstance")
             if key != game_key:
                 game_key = key
                 self._open_game(state)
+            # a decision with no board snapshot (e.g. concede) is attributed
+            # to the end of its match; flush the previous match's leftovers
+            # when the match changes so nothing is dropped or misordered
+            if state.get("matchId") != match_key:
+                self._flush_unplaced(decisions_by_state, match_key)
+                match_key = state.get("matchId")
             if self.display is not None:
                 self.display.send_state(state)
-            for decision in decisions_by_state.get(_state_key(state), []):
+            # consume on first occurrence: several states can share a seq
+            # (queued/diff states), and each decision narrates exactly once
+            for decision in decisions_by_state.pop(_state_key(state), []):
                 self._narrate_decision(decision)
             self._pace(previous_time, state.get("timestamp"))
             previous_time = state.get("timestamp")
+        self._flush_unplaced(decisions_by_state, match_key)
         self._say("replay finished")
+
+    def _flush_unplaced(self, decisions_by_state, match_id):
+        for decision in decisions_by_state.pop(("match", match_id, None), []):
+            self._narrate_decision(decision)
 
     # --- internals ---
 
@@ -72,14 +88,22 @@ class ReplayPlayer(object):
                                                   state.get("matchId")))
 
     def _index_decisions(self, decisions):
+        # key on gameId, not matchId: seq restarts each game within a match,
+        # so (matchId, seq) would attach a game-2 decision to a game-1 state.
+        # Decisions with no board snapshot (concede) key on (matchId, None)
+        # and are flushed at match end.
         by_state = {}
         for decision in decisions:
             current = (decision.get("observation") or {}).get("current") or {}
-            key = (decision.get("matchId"), current.get("seq"))
+            if current.get("seq") is not None:
+                key = ("game", current.get("gameInstance"), current.get("seq"))
+            else:
+                key = ("match", decision.get("matchId"), None)
             by_state.setdefault(key, []).append(decision)
         return by_state
 
     def _narrate_decision(self, decision):
+        self.narrated.append(decision.get("sequence"))
         select = (decision.get("observation") or {}).get("select") or {}
         chosen = []
         for index in decision.get("select") or []:
@@ -117,7 +141,7 @@ class ReplayPlayer(object):
 
 
 def _state_key(state):
-    return (state.get("matchId"), state.get("seq"))
+    return ("game", state.get("gameInstance"), state.get("seq"))
 
 
 def _iso_delta_seconds(previous_iso, current_iso):
