@@ -106,7 +106,9 @@ python/                             magic_cabt package (card data + dataset pars
                                     follower/tracker/recorder/replay)
 examples/                           random legal agent, example deck, self-play runner
 scripts/                            run-cabt-adapter-tests.sh,
-                                    setup-arena-mirror.ps1, arena-mirror.ps1
+                                    setup-arena-mirror.ps1, arena-mirror.ps1,
+                                    arena-mirror-gui.ps1
+.github/workflows/                  python-mirror-tests.yml (Python CI gate)
 ```
 
 ## Using it
@@ -181,13 +183,21 @@ scripts\setup-arena-mirror.ps1 -XmageDir C:\path\to\xmage-checkout
 ```
 
 Then, with MTG Arena set to log detailed data (Options → Account → "Detailed
-Logs (Plugin Support)"), run a live session and play a match:
+Logs (Plugin Support)"), launch the GUI (or the CLI) and play a match:
 
 ```powershell
-scripts\arena-mirror.ps1 live              # follows the default Player.log
+scripts\arena-mirror-gui.ps1               # window: Locate MTGA logs, live
+                                           # log + actions panes, Start/Stop
+scripts\arena-mirror.ps1 live              # CLI: follows the default Player.log
 scripts\arena-mirror.ps1 live --from-start # also process the current log first
 scripts\arena-mirror.ps1 replay <bundle>   # watch a recorded bundle back
 ```
+
+The **GUI** has a "Locate MTGA logs" button, shows the log/status feed and the
+recorded actions as they happen, and — with "Open XMage on live game" checked
+— launches XMage automatically once a live game appears in the log, then
+mirrors the current game while recording. XMage's own audio is muted for the
+mirror window (the user's persisted XMage sound settings are left untouched).
 
 Each live run writes `arena-mirror-runs/<timestamp>/`:
 
@@ -196,12 +206,16 @@ Each live run writes `arena-mirror-runs/<timestamp>/`:
   player actually chose.
 - `mirror_states.jsonl` — every board snapshot streamed to the display; also
   the replay playback stream.
-- `game_history.jsonl`, `summary.json`, `card_cache.json`.
+- `game_history.jsonl` (raw game-state payloads redacted), `summary.json`,
+  `card_cache.json`. `--raw-audit` (CLI) additionally writes an unredacted
+  `raw_audit.jsonl` for debugging.
 
-Hidden information is preserved: cards the log owner cannot see (the
-opponent's hand, face-down permanents) render as face-down placeholders, and
-their identity is never written to the bundle. Card names resolve from MTG
-Arena's own local card database.
+Hidden information is enforced, not assumed: any hand not owned by the log's
+own seat (and every hand until the local seat is known) is redacted to
+face-down placeholders — no grpId, name, or type line — **even if Arena
+describes the card**. Enrichment refuses to resolve a name for a redacted
+card, and raw Arena game-state payloads are kept out of the default bundle.
+Card names for visible cards resolve from MTG Arena's own local card database.
 
 Verified against real multi-match captures: decision prompt↔response pairing
 is exact (respId == msgId) at 1145/1145 across four logs (17 games), a

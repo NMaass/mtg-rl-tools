@@ -2,7 +2,9 @@
 
 This is the run loop behind ``python -m magic_cabt.arena_mirror live`` and,
 via ``feed_entries``, the offline/e2e test path (feed pre-captured entries
-instead of tailing a file).
+instead of tailing a file). It also backs the GUI: pass ``display_factory``
+to open XMage lazily on the first live board update, and the ``on_status`` /
+``on_action`` / ``on_game`` callbacks to feed the GUI panes.
 """
 
 import sys
@@ -19,16 +21,27 @@ FLUSH_INTERVAL_SECONDS = 5.0
 
 class MirrorSession(object):
 
-    def __init__(self, recorder=None, display=None, card_db=None,
-                 log_stream=None, verbose=True):
+    def __init__(self, recorder=None, display=None, display_factory=None,
+                 card_db=None, log_stream=None, verbose=True,
+                 on_status=None, on_action=None, on_game=None):
+        """``display`` is a ready display; ``display_factory`` is a callable
+        that builds one lazily on the first live board update (so the GUI can
+        open XMage only once gameplay actually appears). ``on_status`` /
+        ``on_action`` / ``on_game`` are optional observer callbacks the GUI
+        subscribes to for its log, actions, and lifecycle panes."""
         self.recorder = recorder
         self.display = display
+        self.display_factory = display_factory
         self.card_db = card_db
         self.verbose = verbose
         self._log_stream = log_stream or sys.stderr
+        self._on_status = on_status
+        self._on_action = on_action
+        self._on_game = on_game
         self._display_started_for = None
         self._last_flush = time.monotonic()
         self._display_failed = False
+        self._follower = None
         self.normalizer = StreamingNormalizer()
         self.tracker = ArenaMatchTracker(
             on_snapshot=self._on_snapshot,
@@ -39,16 +52,30 @@ class MirrorSession(object):
     # --- feeding ---
 
     def follow(self, log_path, from_start=False, poll_seconds=0.25):
-        """Tail a live Player.log until interrupted."""
-        follower = LogFollower(log_path, poll_seconds=poll_seconds,
-                               from_start=from_start)
+        """Tail a live Player.log until interrupted or ``stop()`` is called."""
+        self._follower = LogFollower(log_path, poll_seconds=poll_seconds,
+                                     from_start=from_start)
         self._say("following %s (from %s)" % (
             log_path, "start" if from_start else "current end"))
         try:
-            for entry in follower.follow():
+            for entry in self._follower.follow():
                 self.feed_entry(entry)
         finally:
             self.flush()
+
+    def stop(self):
+        """Stop an in-progress ``follow`` (safe to call from another thread)."""
+        follower = self._follower
+        if follower is not None:
+            follower.stop()
+
+    def close_display(self):
+        if self.display is not None and not self._display_failed:
+            try:
+                self.display.close()
+            except Exception:
+                pass
+        self.display = None
 
     def feed_entries(self, entries):
         for entry in entries:
@@ -81,16 +108,18 @@ class MirrorSession(object):
     def _on_decision(self, record):
         if self.recorder is not None:
             self.recorder.record_decision(record)
-        if self.verbose:
-            select = record["observation"]["select"]
-            chosen = []
-            for index in record.get("select") or []:
-                for option in select["option"]:
-                    if option["index"] == index:
-                        chosen.append(option["label"])
-            self._say("decision #%d %s -> %s" % (
-                record["sequence"], select["type"],
-                "; ".join(chosen) if chosen else str(record.get("select"))))
+        select = record["observation"]["select"]
+        chosen = []
+        for index in record.get("select") or []:
+            for option in select["option"]:
+                if option["index"] == index:
+                    chosen.append(option["label"])
+        line = "decision #%d %s -> %s" % (
+            record["sequence"], select["type"],
+            "; ".join(chosen) if chosen else str(record.get("select")))
+        self._say(line)
+        if self._on_action is not None:
+            self._on_action(line, record)
 
     def _on_game_event(self, kind, event):
         if self.recorder is not None:
@@ -106,10 +135,26 @@ class MirrorSession(object):
             self._say("game over: match=%s" % (event.get("matchId"),))
             if self.display is not None and not self._display_failed:
                 self._display_call(self.display.finish_game, None)
+        if self._on_game is not None:
+            self._on_game(kind, self.tracker.match_id, self.tracker.game_number)
 
     # --- display plumbing ---
 
+    def _ensure_display(self):
+        """Open the XMage display on first live activity (GUI auto-open)."""
+        if self.display is not None or self._display_failed:
+            return
+        if self.display_factory is None:
+            return
+        try:
+            self._say("live gameplay detected - launching XMage...")
+            self.display = self.display_factory()
+        except Exception as error:
+            self._display_failed = True
+            self._say("could not launch XMage display: %s" % (error,))
+
     def _send_to_display(self, snapshot):
+        self._ensure_display()
         if self.display is None or self._display_failed:
             return
         key = (self.tracker.match_id, self.tracker.game_number)
@@ -140,3 +185,5 @@ class MirrorSession(object):
         if self.verbose:
             self._log_stream.write("[arena-mirror] %s\n" % text)
             self._log_stream.flush()
+        if self._on_status is not None:
+            self._on_status(text)
