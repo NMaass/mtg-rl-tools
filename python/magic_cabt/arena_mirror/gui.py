@@ -46,6 +46,11 @@ class ArenaMirrorApp(object):
         self._session = None
         self._thread = None
         self._stop_requested = False
+        # The XMage window is owned by the GUI, not by a single follow run:
+        # it opens on first live activity and stays up across Start/Stop until
+        # the user closes the XMage window itself or closes this GUI.
+        self._display = None
+        self._display_lock = threading.Lock()
 
         self._build_layout()
         self.root.after(100, self._drain_queue)
@@ -167,10 +172,7 @@ class ArenaMirrorApp(object):
             card_db = None
 
         recorder = MirrorRecorder(out_dir, card_db=card_db)
-        display_factory = None
-        if self.display_var.get():
-            def display_factory():
-                return MirrorDisplay(classpath=self.classpath, java=self.java)
+        display_factory = self._get_display if self.display_var.get() else None
 
         session = MirrorSession(
             recorder=recorder, display_factory=display_factory,
@@ -187,9 +189,25 @@ class ArenaMirrorApp(object):
         except Exception as error:
             self._post(("log", "Follow error: %s" % error))
         finally:
+            # finalize the recording, but leave the XMage window open — it
+            # stays until the user closes it (or this GUI). Detach it from the
+            # stopped session so a later Start reuses the same window.
             recorder.close()
-            session.close_display()
+            session.display = None
             self._post(("done", None))
+
+    def _get_display(self):
+        """Return the shared, GUI-owned XMage display, launching it (or
+        relaunching it if the user closed the window) on demand. Called by the
+        session on the first live board update."""
+        with self._display_lock:
+            if self._display is not None and self._display.alive:
+                return self._display
+            self._post(("log", "Launching XMage window..."))
+            self._display = MirrorDisplay(classpath=self.classpath,
+                                          java=self.java)
+            self._display.ping()
+            return self._display
 
     # ------------------------------------------------------------- Tk queue
     def _post(self, item):
@@ -207,6 +225,9 @@ class ArenaMirrorApp(object):
                     self.start_btn.config(state=tk.NORMAL)
                     self.stop_btn.config(state=tk.DISABLED)
                     self.status_var.set("stopped")
+                    if self._display is not None and self._display.alive:
+                        self._log("Stopped following. XMage stays open — "
+                                  "close its window or this app to end.")
         except queue.Empty:
             pass
         self.root.after(100, self._drain_queue)
@@ -220,9 +241,18 @@ class ArenaMirrorApp(object):
         view.see(tk.END)
 
     def _on_close(self):
+        # closing the GUI is the user's signal to end everything: stop
+        # following and close the XMage window they left open.
         self._stop_requested = True
         if self._session is not None:
             self._session.stop()
+        with self._display_lock:
+            if self._display is not None:
+                try:
+                    self._display.close()
+                except Exception:
+                    pass
+                self._display = None
         self.root.after(200, self.root.destroy)
 
 
