@@ -157,6 +157,11 @@ class MirrorDisplay(object):
         return self.request({"command": "mirror_game_over",
                              "result": result_text})
 
+    def screenshot(self, path):
+        """Render the mirror window to a PNG file; returns its path."""
+        return self.request({"command": "mirror_screenshot",
+                             "path": path})["path"]
+
 
 def _to_int(value):
     try:
