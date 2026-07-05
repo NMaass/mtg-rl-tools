@@ -98,10 +98,15 @@ Mage.Server.Plugins/Mage.Player.AI/
                                     game session + protocol server)
   src/test/java/mage/player/cabt/   unit + callback-boundary + full-engine smoke tests
   docs/                             decision-surface audit, verification guide
+Mage.Client/
+  src/main/java/mage/client/cabtmirror/   XMage-client display for the live Arena
+                                          mirror (puppet game + GameView renderer)
 python/                             magic_cabt package (card data + dataset parsers,
-                                    live-game protocol client)
+                                    live-game protocol client, arena_mirror live
+                                    follower/tracker/recorder/replay)
 examples/                           random legal agent, example deck, self-play runner
-scripts/                            run-cabt-adapter-tests.sh
+scripts/                            run-cabt-adapter-tests.sh,
+                                    setup-arena-mirror.ps1, arena-mirror.ps1
 ```
 
 ## Using it
@@ -153,6 +158,56 @@ Key docs:
   audited decision surface and fail-closed policy.
 - `Mage.Server.Plugins/Mage.Player.AI/docs/cabt-verification.md` — test
   layers and failure-to-feature mapping.
+
+### Live MTG Arena mirror (`magic_cabt.arena_mirror`)
+
+Follow a live MTG Arena game from its `Player.log`, mirror the board into an
+XMage window in real time, and record a CABT-format replay bundle — the same
+`observation.select` option-index shape the engine bridge emits, so Arena
+games and self-play games share one dataset schema.
+
+```
+Arena Player.log ──tail──▶ normalizer ──▶ GRE state tracker ──▶ snapshot
+                                    │                              │
+                            decision prompts + responses           ├─▶ XMage display (puppet game, GameView)
+                            (indexed option lists)                 └─▶ CABT bundle (decisions.jsonl, mirror_states.jsonl)
+```
+
+One-time setup (needs JDK 17 + Maven; copies this overlay into an XMage
+checkout, builds it, and prewarms XMage's card database):
+
+```powershell
+scripts\setup-arena-mirror.ps1 -XmageDir C:\path\to\xmage-checkout
+```
+
+Then, with MTG Arena set to log detailed data (Options → Account → "Detailed
+Logs (Plugin Support)"), run a live session and play a match:
+
+```powershell
+scripts\arena-mirror.ps1 live              # follows the default Player.log
+scripts\arena-mirror.ps1 live --from-start # also process the current log first
+scripts\arena-mirror.ps1 replay <bundle>   # watch a recorded bundle back
+```
+
+Each live run writes `arena-mirror-runs/<timestamp>/`:
+
+- `decisions.jsonl` — one CABT decision per line: the pre-decision board
+  observation, the indexed legal-option list, and the indices the Arena
+  player actually chose.
+- `mirror_states.jsonl` — every board snapshot streamed to the display; also
+  the replay playback stream.
+- `game_history.jsonl`, `summary.json`, `card_cache.json`.
+
+Hidden information is preserved: cards the log owner cannot see (the
+opponent's hand, face-down permanents) render as face-down placeholders, and
+their identity is never written to the bundle. Card names resolve from MTG
+Arena's own local card database.
+
+Verified against real multi-match captures: decision prompt↔response pairing
+is exact (respId == msgId) at 1145/1145 across four logs (17 games), a
+simulated live tail reproduces the batch parse byte-for-byte, and replaying a
+recorded bundle re-emits every state and decision in the original order
+(`python -m unittest tests.test_arena_mirror tests.test_arena_mirror_e2e`).
 
 ## History note
 
