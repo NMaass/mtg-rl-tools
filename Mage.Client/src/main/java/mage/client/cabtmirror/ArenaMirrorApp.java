@@ -10,6 +10,7 @@ import com.google.gson.JsonSyntaxException;
 import mage.cards.repository.CardScanner;
 import mage.cards.repository.RepositoryUtil;
 import mage.client.MageFrame;
+import mage.client.dialog.PreferencesDialog;
 import mage.client.game.GamePanel;
 import mage.view.GameView;
 import org.apache.log4j.Appender;
@@ -90,10 +91,41 @@ public final class ArenaMirrorApp {
         // the real XMage client startup (splash, look&feel, card db, plugins)
         MageFrame.main(new String[]{});
         waitForMageFrame();
+        muteClientAudio();
         SwingUtilities.invokeLater(ArenaMirrorApp::hideConnectDialog);
 
         new ArenaMirrorApp().protocolLoop(protocolOut);
         System.exit(0);
+    }
+
+    /**
+     * Silence the XMage client. Each {@code AudioManager.play*} only fires
+     * when the sound group's preference is on, so seeding "false" into the
+     * in-memory preference cache mutes every group. This uses the cache-only
+     * path (reflection into {@code PreferencesDialog.updateCache}) so the
+     * user's persisted XMage sound settings are left untouched.
+     */
+    private static void muteClientAudio() {
+        String[] soundKeys = {
+                PreferencesDialog.KEY_SOUNDS_GAME_ON,
+                PreferencesDialog.KEY_SOUNDS_DRAFT_ON,
+                PreferencesDialog.KEY_SOUNDS_SKIP_BUTTONS_ON,
+                PreferencesDialog.KEY_SOUNDS_OTHER_ON,
+        };
+        try {
+            java.lang.reflect.Method updateCache =
+                    PreferencesDialog.class.getDeclaredMethod(
+                            "updateCache", String.class, String.class);
+            updateCache.setAccessible(true);
+            for (String key : soundKeys) {
+                updateCache.invoke(null, key, "false");
+            }
+        } catch (ReflectiveOperationException e) {
+            // fall back to persisting the setting if the cache API moved
+            for (String key : soundKeys) {
+                PreferencesDialog.saveValue(key, "false");
+            }
+        }
     }
 
     /**
@@ -197,6 +229,8 @@ public final class ArenaMirrorApp {
                     return error("UNKNOWN_COMMAND",
                             "unknown command: " + command.getAsString());
             }
+        } catch (MalformedRequestException e) {
+            return error("MALFORMED_REQUEST", e.getMessage());
         } catch (Exception e) {
             logger.error("mirror: command failed", e);
             return error("INTERNAL", e.getClass().getSimpleName()
@@ -204,14 +238,60 @@ public final class ArenaMirrorApp {
         }
     }
 
+    /** Client-facing type errors map to MALFORMED_REQUEST, not INTERNAL. */
+    private static final class MalformedRequestException extends RuntimeException {
+        MalformedRequestException(String message) {
+            super(message);
+        }
+    }
+
+    private static JsonArray requireArray(JsonObject request, String field) {
+        JsonElement element = request.get(field);
+        if (element == null || !element.isJsonArray()) {
+            throw new MalformedRequestException(
+                    "field \"" + field + "\" must be an array");
+        }
+        return element.getAsJsonArray();
+    }
+
+    private static JsonObject requireObject(JsonObject request, String field) {
+        JsonElement element = request.get(field);
+        if (element == null || !element.isJsonObject()) {
+            throw new MalformedRequestException(
+                    "field \"" + field + "\" must be an object");
+        }
+        return element.getAsJsonObject();
+    }
+
+    private static String requireString(JsonObject request, String field) {
+        JsonElement element = request.get(field);
+        if (element == null || !element.isJsonPrimitive()
+                || !element.getAsJsonPrimitive().isString()) {
+            throw new MalformedRequestException(
+                    "field \"" + field + "\" must be a string");
+        }
+        return element.getAsString();
+    }
+
+    private static Integer optionalInt(JsonObject request, String field) {
+        JsonElement element = request.get(field);
+        if (element == null || element.isJsonNull()) {
+            return null;
+        }
+        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
+            throw new MalformedRequestException(
+                    "field \"" + field + "\" must be an integer");
+        }
+        return element.getAsInt();
+    }
+
     private String mirrorStart(JsonObject request) throws Exception {
-        JsonArray players = request.getAsJsonArray("players");
-        if (players == null || players.size() < 2) {
+        JsonArray players = requireArray(request, "players");
+        if (players.size() < 2) {
             return error("MALFORMED_REQUEST",
                     "mirror_start needs \"players\": [{seat,name}, ...]");
         }
-        Integer localSeat = request.has("localSeat") && !request.get("localSeat").isJsonNull()
-                ? request.get("localSeat").getAsInt() : null;
+        Integer localSeat = optionalInt(request, "localSeat");
 
         closeCurrentPane();
         game = new MirrorGame();
@@ -236,10 +316,7 @@ public final class ArenaMirrorApp {
         if (game == null) {
             return error("NO_ACTIVE_GAME", "send mirror_start first");
         }
-        JsonObject state = request.getAsJsonObject("state");
-        if (state == null) {
-            return error("MALFORMED_REQUEST", "mirror_state needs \"state\"");
-        }
+        JsonObject state = requireObject(request, "state");
         applier.apply(state);
         pushView();
         return ok().toString();
@@ -263,11 +340,7 @@ public final class ArenaMirrorApp {
 
     /** Render the mirror window to a PNG (proof/screenshot for the user). */
     private String mirrorScreenshot(JsonObject request) throws Exception {
-        JsonElement pathElement = request.get("path");
-        if (pathElement == null || !pathElement.isJsonPrimitive()) {
-            return error("MALFORMED_REQUEST", "mirror_screenshot needs \"path\"");
-        }
-        String path = pathElement.getAsString();
+        String path = requireString(request, "path");
         final java.awt.image.BufferedImage[] holder =
                 new java.awt.image.BufferedImage[1];
         SwingUtilities.invokeAndWait(() -> {

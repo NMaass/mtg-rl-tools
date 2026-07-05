@@ -10,6 +10,8 @@ from magic_cabt.arena_mirror.follower import EntryAssembler, LogFollower
 from magic_cabt.arena_mirror.tracker import (
     ArenaMatchTracker, GameStateTracker, StreamingNormalizer)
 from magic_cabt.arena_mirror import options
+from magic_cabt.arena_mirror import mirror as mirror_mod
+from magic_cabt.arena_mirror.mirror import enrich_snapshot
 from magic_cabt.arena_mirror.recorder import MirrorRecorder
 from magic_cabt.arena_mirror.replay import load_bundle
 
@@ -140,6 +142,7 @@ class GameStateTrackerTest(unittest.TestCase):
 
     def test_full_state_snapshot_and_hidden_hand(self):
         tracker = GameStateTracker()
+        tracker.set_local_seat(1)  # perspective: seat 1 sees its own hand
         tracker.set_seat_name(1, "Alice")
         tracker.set_seat_name(2, "Bob")
         tracker.apply(GAME_STATE_FULL["gameStateMessage"])
@@ -348,6 +351,157 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(len(snapshots), len(states))
         self.assertEqual(1, summary["decisions"])
         self.assertEqual(1, summary["decisionsMatched"])
+
+
+def _state_with_described_opponent_hand():
+    """A full state where the opponent's hand card IS described with a grpId.
+
+    Arena normally omits hidden-zone identities, but the redaction boundary
+    must not depend on that: seat 2's hand object 103 carries grpId 55555.
+    """
+    message = json.loads(json.dumps(GAME_STATE_FULL["gameStateMessage"]))
+    for zone in message["zones"]:
+        if zone.get("ownerSeatId") == 2 and zone["type"] == "ZoneType_Hand":
+            zone["objectInstanceIds"] = [103]
+    message["gameObjects"].append({
+        "instanceId": 103, "grpId": 55555, "type": "GameObjectType_Card",
+        "zoneId": 35, "ownerSeatId": 2, "controllerSeatId": 2,
+        "cardTypes": ["CardType_Creature"],
+    })
+    return message
+
+
+class HiddenInfoTest(unittest.TestCase):
+    """The opponent's hand identity must never leak, even if Arena sends it."""
+
+    OPPONENT_GRP_ID = 55555
+
+    def _snapshot_local_seat_1(self):
+        tracker = GameStateTracker()
+        tracker.set_local_seat(1)
+        tracker.apply(_state_with_described_opponent_hand())
+        return tracker.snapshot()
+
+    def test_opponent_hand_redacted_even_when_described(self):
+        snapshot = self._snapshot_local_seat_1()
+        opp_hand = snapshot["zones"]["hands"]["2"]
+        self.assertEqual(1, len(opp_hand))
+        self.assertIsNone(opp_hand[0]["grpId"])
+        self.assertTrue(opp_hand[0]["faceDown"])
+        self.assertNotIn("name", opp_hand[0])
+        # our own hand is still fully visible
+        own_hand = snapshot["zones"]["hands"]["1"]
+        self.assertEqual(90001, own_hand[0]["grpId"])
+        self.assertFalse(own_hand[0]["faceDown"])
+
+    def test_all_hands_redacted_when_local_seat_unknown(self):
+        tracker = GameStateTracker()  # never told which seat is local
+        tracker.apply(_state_with_described_opponent_hand())
+        snapshot = tracker.snapshot()
+        for hand in snapshot["zones"]["hands"].values():
+            for card in hand:
+                self.assertIsNone(card["grpId"])
+                self.assertTrue(card["faceDown"])
+
+    def test_enrich_does_not_name_redacted_hand(self):
+        looked_up = []
+
+        class RecordingDB(object):
+            def lookup(self, grp_id):
+                looked_up.append(grp_id)
+                return None  # unknown to the DB -> would render face-down
+
+        snapshot = self._snapshot_local_seat_1()
+        enrich_snapshot(snapshot, RecordingDB())
+        # the opponent's hidden card identity must never be resolved
+        self.assertNotIn(self.OPPONENT_GRP_ID, looked_up)
+        for card in snapshot["zones"]["hands"]["2"]:
+            self.assertNotIn("name", card)
+            self.assertTrue(card["faceDown"])
+
+    def test_recorder_output_has_no_opponent_identity(self):
+        directory = tempfile.mkdtemp()
+        try:
+            text = (
+                _gre_line({
+                    "type": "GREMessageType_GameStateMessage",
+                    "systemSeatIds": [1], "msgId": 2, "gameStateId": 1,
+                    "gameStateMessage": _state_with_described_opponent_hand(),
+                })
+            )
+            from magic_cabt.arena_log import iter_log_entries
+
+            recorder = MirrorRecorder(directory)
+            normalizer = StreamingNormalizer()
+            tracker = ArenaMatchTracker(
+                on_snapshot=lambda snap, event: recorder.record_state(
+                    snap, event))
+            tracker.state.set_local_seat(1)
+            for entry in iter_log_entries(text.splitlines(True)):
+                for event in normalizer.feed(entry)[1]:
+                    recorder.record_history_event(event)
+                    tracker.handle_event(event)
+            recorder.close()
+
+            needle = str(self.OPPONENT_GRP_ID)
+            for name in ("mirror_states.jsonl", "decisions.jsonl",
+                         "game_history.jsonl"):
+                path = os.path.join(directory, name)
+                if not os.path.exists(path):
+                    continue
+                with open(path, encoding="utf-8") as handle:
+                    body = handle.read()
+                self.assertNotIn(needle, body,
+                                 "%s leaked the opponent's card grpId" % name)
+                # raw game-state payload must not be persisted either
+                self.assertNotIn('"gameObjects"', body)
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
+
+    def test_raw_audit_opt_in_captures_full_events(self):
+        directory = tempfile.mkdtemp()
+        try:
+            recorder = MirrorRecorder(directory, raw_audit=True)
+            recorder.record_history_event({
+                "type": "ARENA_GAME_STATE", "inHistory": True,
+                "gameObjects": [{"grpId": 55555}], "seq": 1})
+            recorder.close()
+            audit = os.path.join(directory, "raw_audit.jsonl")
+            history = os.path.join(directory, "game_history.jsonl")
+            with open(audit, encoding="utf-8") as handle:
+                self.assertIn("55555", handle.read())
+            with open(history, encoding="utf-8") as handle:
+                self.assertNotIn("55555", handle.read())
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
+class LauncherTest(unittest.TestCase):
+    """The Python launcher must target the real Java class + package."""
+
+    def test_default_command_uses_real_main_class(self):
+        captured = {}
+
+        class FakePopen(object):
+            def __init__(self, command, **kwargs):
+                captured["command"] = command
+                self.stdin = self.stdout = None
+
+            def poll(self):
+                return None
+
+        original = mirror_mod.subprocess.Popen
+        mirror_mod.subprocess.Popen = FakePopen
+        try:
+            mirror_mod.MirrorDisplay(classpath="cp.jar")
+        finally:
+            mirror_mod.subprocess.Popen = original
+
+        command = captured["command"]
+        self.assertEqual("mage.client.cabtmirror.ArenaMirrorApp", command[-1])
+        self.assertIn("cp.jar", command)
+        self.assertEqual("mage.client.cabtmirror.ArenaMirrorApp",
+                         mirror_mod.APP_MAIN_CLASS)
 
 
 if __name__ == "__main__":

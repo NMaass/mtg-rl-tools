@@ -15,7 +15,7 @@ import subprocess
 
 __all__ = ["MirrorDisplay", "MirrorDisplayError", "enrich_snapshot"]
 
-APP_MAIN_CLASS = "mage.player.cabt.mirror.ArenaMirrorApp"
+APP_MAIN_CLASS = "mage.client.cabtmirror.ArenaMirrorApp"
 CLASSPATH_ENV_VAR = "MAGIC_CABT_CLASSPATH"
 
 
@@ -29,7 +29,13 @@ def enrich_snapshot(snapshot, card_db):
         return snapshot
 
     def enrich_object(obj):
-        info = card_db.lookup(obj.get("grpId")) if obj.get("grpId") else None
+        # never resolve a name for a redacted/face-down object: the tracker
+        # strips grpId from hidden cards, and enrichment must not reintroduce
+        # any identity for them
+        if obj.get("faceDown") or not obj.get("grpId"):
+            obj["faceDown"] = True
+            return
+        info = card_db.lookup(obj.get("grpId"))
         if info is not None:
             obj["name"] = info.name
             obj["cardTypeNames"] = info.types

@@ -295,7 +295,15 @@ class GameStateTracker(object):
                 if name == "LIBRARY" and owner is not None:
                     zones["libraries"][str(owner)] = self._count_zone(zone)
                 continue
-            objects = [self._object_view(i) for i in zone["objectIds"]]
+            # A hand is visible only to its owner; the opponent's hand (and
+            # every hand when we don't yet know which seat is local) is
+            # redacted to face-down placeholders so no hidden identity is
+            # ever put in a snapshot. Battlefield/stack/graveyard/exile are
+            # public zones both players see.
+            hidden = name == "HAND" and (
+                self.local_seat is None or owner != self.local_seat)
+            objects = [self._object_view(i, hidden=hidden)
+                       for i in zone["objectIds"]]
             objects = [o for o in objects if o is not None]
             if name == "BATTLEFIELD":
                 zones["battlefield"].extend(objects)
@@ -326,18 +334,22 @@ class GameStateTracker(object):
             "zones": zones,
         }
 
-    def _object_view(self, instance_id):
+    def _object_view(self, instance_id, hidden=False):
         obj = self.objects.get(instance_id)
-        if obj is None:
-            # A zone lists an instance the GRE never described: hidden card.
+        if obj is None or hidden:
+            # Either the GRE never described this instance (hidden card), or
+            # it lives in a zone this perspective may not see. Emit a
+            # face-down placeholder carrying no card identity — never a grpId,
+            # name, or type line — regardless of what the GRE object holds.
             zone_id = self.object_zone.get(instance_id)
             zone = self.zones.get(zone_id) or {}
+            owner = (obj.get("ownerSeat") if obj else None) or zone.get("ownerSeat")
             return {
                 "instanceId": instance_id,
                 "grpId": None,
                 "faceDown": True,
-                "ownerSeat": zone.get("ownerSeat"),
-                "controllerSeat": zone.get("ownerSeat"),
+                "ownerSeat": owner,
+                "controllerSeat": owner,
             }
         grp_id = obj.get("grpId") or obj.get("overlayGrpId")
         face_down = bool(obj.get("faceDownFlag")) or not grp_id
