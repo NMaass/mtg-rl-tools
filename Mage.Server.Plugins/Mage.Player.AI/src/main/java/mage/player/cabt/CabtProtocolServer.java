@@ -27,7 +27,8 @@ import java.util.Map;
  * human-readable {@code "message"}.
  * <p>
  * Commands: {@code ping}, {@code capabilities}, {@code game_start},
- * {@code game_select}, {@code game_finish}, {@code all_card_data},
+ * {@code game_select}, {@code game_finish}, {@code resolve_card},
+ * {@code validate_deck}, {@code all_card_data}, {@code global_card_data},
  * {@code visualize_data}. Unknown or malformed requests fail closed with an
  * error response; they never guess and never touch the running game. Invalid
  * selections return a structured error and leave the pending decision
@@ -47,6 +48,7 @@ public final class CabtProtocolServer {
             .create();
 
     private final MagicCardDataExporter cardDataExporter = new MagicCardDataExporter();
+    private final CardResolver cardResolver = new CardResolver();
     private CabtGameSession session;
 
     /**
@@ -81,8 +83,14 @@ public final class CabtProtocolServer {
                     return gameSelect(id, request);
                 case "game_finish":
                     return gameFinish(id);
+                case "resolve_card":
+                    return resolveCard(id, request);
+                case "validate_deck":
+                    return validateDeck(id, request);
                 case "all_card_data":
                     return allCardData(id);
+                case "global_card_data":
+                    return globalCardData(id, request);
                 case "visualize_data":
                     return visualizeData(id);
                 default:
@@ -113,7 +121,8 @@ public final class CabtProtocolServer {
         response.addProperty("protocolVersion", PROTOCOL_VERSION);
         JsonArray commands = new JsonArray();
         for (String name : new String[]{"ping", "capabilities", "game_start", "game_select",
-                "game_finish", "all_card_data", "visualize_data"}) {
+                "game_finish", "resolve_card", "validate_deck", "all_card_data",
+                "global_card_data", "visualize_data"}) {
             commands.add(name);
         }
         response.add("commands", commands);
@@ -122,10 +131,11 @@ public final class CabtProtocolServer {
             selectTypes.add(type.name());
         }
         response.add("selectTypes", selectTypes);
-        // all_card_data is game-scoped (the active game's deduped deck pool),
-        // not a global static-card-data export; clients should read this
-        // field to decide whether the command fits their use case.
+        // all_card_data is game-scoped (the active game's deduped deck pool);
+        // global_card_data is the game-independent export keyed by card name.
+        // Clients read these fields to pick the command that fits their use.
         response.addProperty("cardDataScope", "ACTIVE_GAME_DECK_POOL");
+        response.addProperty("globalCardDataScope", "REPOSITORY_BY_NAME");
         return GSON.toJson(response);
     }
 
@@ -140,14 +150,25 @@ public final class CabtProtocolServer {
             return error(id, "MALFORMED_REQUEST",
                     "game_start needs \"decks\": [deck0, deck1]");
         }
+        List<CabtDeckFactory.Entry> deck0;
+        List<CabtDeckFactory.Entry> deck1;
+        CabtGameSession.Config config;
         try {
-            List<CabtDeckFactory.Entry> deck0 = parseDeck(decksElement.getAsJsonArray().get(0));
-            List<CabtDeckFactory.Entry> deck1 = parseDeck(decksElement.getAsJsonArray().get(1));
-            CabtGameSession.Config config = parseConfig(request.get("options"));
-            session = new CabtGameSession(deck0, deck1, config);
+            deck0 = parseDeck(decksElement.getAsJsonArray().get(0));
+            deck1 = parseDeck(decksElement.getAsJsonArray().get(1));
+            config = parseConfig(request.get("options"));
         } catch (IllegalArgumentException e) {
             return error(id, "MALFORMED_REQUEST", e.getMessage());
         }
+        // Resolve both decks against XMage's card identity before the engine
+        // touches them; fail closed with the exact unresolved cards rather than
+        // silently shortening a deck.
+        DeckValidation validation0 = cardResolver.validateDeck(deck0);
+        DeckValidation validation1 = cardResolver.validateDeck(deck1);
+        if (!validation0.isValid() || !validation1.isValid()) {
+            return deckValidationError(id, validation0, validation1);
+        }
+        session = new CabtGameSession(deck0, deck1, config, cardResolver);
         return eventResponse(id, session.start());
     }
 
@@ -177,6 +198,107 @@ public final class CabtProtocolServer {
             session = null;
         }
         return GSON.toJson(okResponse(id));
+    }
+
+    /**
+     * Resolves a single card name against XMage's card identity. Always an
+     * ok-response (resolution is a query, not an action): the payload's
+     * {@code resolution.resolved} flag and diagnostics tell the caller what
+     * happened. Needs no active game.
+     */
+    private String resolveCard(JsonElement id, JsonObject request) {
+        String name;
+        try {
+            name = requiredString(request, "name");
+        } catch (IllegalArgumentException e) {
+            return error(id, "MALFORMED_REQUEST", e.getMessage());
+        }
+        JsonObject response = okResponse(id);
+        response.add("resolution", resolutionJson(cardResolver.resolve(name)));
+        return GSON.toJson(response);
+    }
+
+    /**
+     * Validates a full decklist without starting a game. Ok-response with a
+     * per-entry {@code resolutions} list and the unresolved subset in
+     * {@code failures}; {@code valid} is true only when every entry resolved.
+     */
+    private String validateDeck(JsonElement id, JsonObject request) {
+        JsonElement deckElement = request.get("deck");
+        if (deckElement == null || !deckElement.isJsonArray()) {
+            return error(id, "MALFORMED_REQUEST",
+                    "validate_deck needs \"deck\": [{\"name\", \"count\"}, ...]");
+        }
+        List<CabtDeckFactory.Entry> entries;
+        try {
+            entries = parseDeck(deckElement);
+        } catch (IllegalArgumentException e) {
+            return error(id, "MALFORMED_REQUEST", e.getMessage());
+        }
+        DeckValidation validation = cardResolver.validateDeck(entries);
+        JsonObject response = okResponse(id);
+        response.addProperty("valid", validation.isValid());
+        response.add("resolutions", entriesJson(validation.entries()));
+        response.add("failures", entriesJson(validation.failures()));
+        return GSON.toJson(response);
+    }
+
+    /**
+     * Global, game-independent card-data export: resolves each requested name
+     * through the repository and exports the static metadata for the distinct
+     * canonical cards. Distinct from {@code all_card_data}, which is scoped to
+     * the active game's deck pool. Fails closed with {@code UNKNOWN_CARD} if
+     * any requested name is unresolved — never a partial export.
+     */
+    private String globalCardData(JsonElement id, JsonObject request) {
+        JsonElement namesElement = request.get("names");
+        if (namesElement == null || !namesElement.isJsonArray()
+                || namesElement.getAsJsonArray().size() == 0) {
+            return error(id, "MALFORMED_REQUEST",
+                    "global_card_data needs a non-empty \"names\": [card name, ...]");
+        }
+        List<CardResolution> resolutions = new ArrayList<CardResolution>();
+        JsonArray failures = new JsonArray();
+        for (JsonElement element : namesElement.getAsJsonArray()) {
+            if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) {
+                return error(id, "MALFORMED_REQUEST", "each name must be a string");
+            }
+            CardResolution resolution = cardResolver.resolve(element.getAsString());
+            resolutions.add(resolution);
+            if (!resolution.isResolved()) {
+                failures.add(resolutionJson(resolution));
+            }
+        }
+        if (failures.size() > 0) {
+            JsonObject response = new JsonObject();
+            if (id != null) {
+                response.add("id", id);
+            }
+            response.addProperty("ok", false);
+            response.addProperty("error", "UNKNOWN_CARD");
+            response.addProperty("message",
+                    failures.size() + " requested card name(s) did not resolve");
+            response.add("failures", failures);
+            return GSON.toJson(response);
+        }
+        // one export per distinct canonical card; keep first-seen order
+        Map<String, Card> byName = new LinkedHashMap<String, Card>();
+        JsonArray resolutionArray = new JsonArray();
+        for (CardResolution resolution : resolutions) {
+            resolutionArray.add(resolutionJson(resolution));
+            Card card = resolution.createCard(java.util.UUID.randomUUID());
+            if (!byName.containsKey(card.getName())) {
+                byName.put(card.getName(), card);
+            }
+        }
+        JsonObject response = okResponse(id);
+        List<MagicCardData> cards = new ArrayList<MagicCardData>();
+        for (Card card : byName.values()) {
+            cards.add(cardDataExporter.export(card));
+        }
+        response.add("cards", GSON.toJsonTree(cards));
+        response.add("resolutions", resolutionArray);
+        return GSON.toJson(response);
     }
 
     private String allCardData(JsonElement id) {
@@ -411,6 +533,67 @@ public final class CabtProtocolServer {
             }
         }
         return text.toString();
+    }
+
+    /** Structured diagnostics for one card resolution. */
+    private static JsonObject resolutionJson(CardResolution resolution) {
+        JsonObject json = new JsonObject();
+        json.addProperty("requestedName", resolution.requestedName());
+        json.addProperty("normalizedName", resolution.normalizedName());
+        json.addProperty("resolved", resolution.isResolved());
+        json.addProperty("strategy",
+                resolution.strategy() == null ? null : resolution.strategy().name());
+        json.addProperty("canonicalName", resolution.canonicalName());
+        json.addProperty("setCode", resolution.setCode());
+        json.addProperty("cardNumber", resolution.cardNumber());
+        json.addProperty("error", resolution.failureCode());
+        json.addProperty("reason", resolution.failureReason());
+        return json;
+    }
+
+    /** A deck entry's count plus its card resolution, flattened for the wire. */
+    private static JsonArray entriesJson(List<DeckValidation.Entry> entries) {
+        JsonArray array = new JsonArray();
+        for (DeckValidation.Entry entry : entries) {
+            JsonObject json = resolutionJson(entry.resolution());
+            json.addProperty("count", entry.count());
+            array.add(json);
+        }
+        return array;
+    }
+
+    /**
+     * Fail-closed {@code UNKNOWN_CARD} response for a game_start whose decks did
+     * not fully resolve: names the first offender in the message and lists
+     * every unresolved entry (tagged with its deck index) under {@code failures}.
+     */
+    private static String deckValidationError(JsonElement id, DeckValidation deck0,
+                                              DeckValidation deck1) {
+        JsonArray failures = new JsonArray();
+        appendDeckFailures(failures, 0, deck0);
+        appendDeckFailures(failures, 1, deck1);
+        String firstName = failures.get(0).getAsJsonObject()
+                .get("requestedName").getAsString();
+        JsonObject response = new JsonObject();
+        if (id != null) {
+            response.add("id", id);
+        }
+        response.addProperty("ok", false);
+        response.addProperty("error", "UNKNOWN_CARD");
+        response.addProperty("message", "deck contains unresolved card(s); first: \""
+                + firstName + "\"");
+        response.add("failures", failures);
+        return GSON.toJson(response);
+    }
+
+    private static void appendDeckFailures(JsonArray failures, int deckIndex,
+                                           DeckValidation validation) {
+        for (DeckValidation.Entry entry : validation.failures()) {
+            JsonObject json = resolutionJson(entry.resolution());
+            json.addProperty("count", entry.count());
+            json.addProperty("deckIndex", deckIndex);
+            failures.add(json);
+        }
     }
 
     private static JsonObject okResponse(JsonElement id) {

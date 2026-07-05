@@ -7,7 +7,8 @@ Two layers live here:
 - the live-game protocol client (``CabtBridge``): a subprocess loop over
   the Java ``CabtProtocolServer`` with the CABT-parity commands
   ``game_start`` / ``game_select`` / ``game_finish`` / ``all_card_data`` /
-  ``visualize_data``.
+  ``visualize_data``, plus the card-identity commands ``resolve_card`` /
+  ``validate_deck`` / ``global_card_data`` (which need no active game).
 
 Note: ``all_card_data`` is exported in two senses —
   ``from magic_cabt import all_card_data``  parses an offline card-data

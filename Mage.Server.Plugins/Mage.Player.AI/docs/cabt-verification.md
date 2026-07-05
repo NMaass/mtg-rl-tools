@@ -64,15 +64,50 @@ protocol boundaries:
   invalid selections that leave the pending decision answerable, and
   fail-closed unknown/malformed commands.
 
+### Card identity resolution
+
+`CardResolver` resolves requested card names to real XMage cards
+**repository-first**: it queries `CardRepository` (which knows every imported
+card's canonical name, including split / adventure / modal cards and names
+with punctuation the class-name transform mangles), retrying once after
+conservative punctuation/whitespace normalization
+(`CardNameNormalizer`), and only falls back to the legacy
+`CabtDeckFactory` class-name heuristic when the repository has no match (a
+test JVM with no scanned database). Resolution **fails closed**: an unknown
+name is reported unresolved with diagnostics (requested name, normalized
+name, strategy, canonical name, printing, reason), never substituted.
+
+- **`CardNameNormalizerTest`**, **`CardResolverTest`**: pure/fake-repository
+  branch tests — repository-first precedence, normalize-then-retry, heuristic
+  fallback, fail-closed unknowns. Run in milliseconds with no database.
+- **`CardIdentityRepositoryTest`**: the real regression layer, run against
+  XMage's scanned card database (`CardScanner.scan()`). Resolves a realistic
+  decklist (`Forest`, `Lightning Bolt`, `Llanowar Elves`,
+  `Boseiju, Who Endures`, split `Fire // Ice`), the split card from a single
+  half (`Fire` → `Fire // Ice`), a curly-apostrophe name via normalization,
+  and unknown-card fail-closed; drives the `resolve_card` / `validate_deck` /
+  `global_card_data` protocol commands (all without an active game) and a
+  repository-resolved `game_start`; and regenerates the Python fixtures
+  (`validate_deck_response.json`, `global_card_data_response.json`). When the
+  set classes aren't on the classpath the database stays empty and this class
+  skips via a JUnit assumption, like the Python live tests skip without a
+  built bridge.
+
+The protocol distinguishes two card-data scopes: `all_card_data` is the
+active game's deduped deck pool (needs a game); `global_card_data` resolves
+arbitrary names through the repository and needs no game.
+
 ### Python unit tests
 
 ```sh
 cd python && python3 -m unittest discover -s tests
 ```
 
-Tests `magic_cabt` (card-data parsing, JSONL dataset reading) against
-fixtures that are **real Java output**: `MagicCardDataExporterTest` and
-`CabtDatasetWriterTest` regenerate them under
+Tests `magic_cabt` (card-data parsing, JSONL dataset reading, and the
+`resolve_card` / `validate_deck` / `global_card_data` client helpers via a
+fake transport in `test_card_identity.py`) against fixtures that are **real
+Java output**: `MagicCardDataExporterTest`, `CabtDatasetWriterTest`, and
+`CardIdentityRepositoryTest` regenerate them under
 `Mage.Server.Plugins/Mage.Player.AI/target/cabt-fixtures/` on every Java
 run, and the script copies them over `python/tests/fixtures/` before the
 Python layer runs — so a Java-side format change fails the Python tests in
@@ -125,6 +160,8 @@ drives two random legal agents through a real game and writes a replay
 | `CabtAttackers*Test`, `CabtBlockers*Test` | Combat declarations (Tasks 14–15) |
 | `CabtMulliganPromptTest`, `CabtBridgePlayerMulliganTest` | Mulligan (Task 16) |
 | `MagicCardDataExporterTest`, `python test_card_data` | Static card data export (Task 21) |
+| `CardNameNormalizerTest`, `CardResolverTest` | Card-name normalization / resolver branch logic (repository-first, heuristic fallback, fail-closed) |
+| `CardIdentityRepositoryTest`, `python test_card_identity` | Repository-backed resolution, `resolve_card`/`validate_deck`/`global_card_data` commands, deck validation before `game_start` |
 | `CabtDatasetWriterTest`, `python test_dataset` | Dataset writer/reader (Task 22) |
 | `CabtPromptAuditTest.allSurfacedPromptsHaveTests` | A surfaced prompt lost its implementation or test class — fix the audit entry or restore the class (Task 23) |
 | `CabtPromptAuditTest.failClosedPromptsThrow...` | A FAIL_CLOSED callback stopped throwing `CabtUnhandledDecisionException` — a decision may be silently AI-decided (Task 23) |

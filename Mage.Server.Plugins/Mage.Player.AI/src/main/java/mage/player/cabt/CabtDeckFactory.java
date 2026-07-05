@@ -21,15 +21,18 @@ import java.util.UUID;
  * for names that resolve to no class — a deck must never be silently
  * shortened.
  * <p>
- * <b>MVP limitation:</b> the class-name heuristic
+ * <b>Role:</b> this class-name heuristic is now the <em>fallback</em> resolver
+ * behind {@link CardResolver}, which resolves names against XMage's
+ * {@link mage.cards.repository.CardRepository} first. The heuristic
  * ({@link #classSimpleName(String)}) works for simple card names (Forest,
- * Grizzly Bears, Llanowar Elves) but will miss a non-trivial portion of
- * real Magic card names: split cards, alternate class names, special
- * punctuation, variant suffixes, and renamed/rebalanced variants whose
- * XMage class name differs from the naive transform. This is acceptable for
- * the current smoke milestone because resolution fails closed rather than
- * silently. A future {@code DeckResolutionStrategy} using XMage's card
- * repository / card-info lookup should replace this.
+ * Grizzly Bears, Llanowar Elves) but misses a non-trivial portion of real
+ * Magic card names — split cards, alternate class names, special punctuation,
+ * variant suffixes, and renamed/rebalanced variants whose XMage class name
+ * differs from the naive transform. The resolver only reaches it when the
+ * repository has no match (e.g. a test JVM with no scanned card database), and
+ * it still fails closed with {@link UnknownCardException} rather than
+ * substituting a card. Kept for that fallback path and for building card
+ * instances in unit-test fixtures.
  */
 public final class CabtDeckFactory {
 

@@ -169,6 +169,16 @@ public final class CabtGameSession {
 
     public CabtGameSession(List<CabtDeckFactory.Entry> deck0, List<CabtDeckFactory.Entry> deck1,
                            Config config) {
+        this(deck0, deck1, config, new CardResolver());
+    }
+
+    /**
+     * Builds the game with an explicit {@link CardResolver}, so a caller that
+     * already validated the decks (e.g. the protocol server) can reuse the
+     * same repository-backed resolver and its resolution cache.
+     */
+    public CabtGameSession(List<CabtDeckFactory.Entry> deck0, List<CabtDeckFactory.Entry> deck1,
+                           Config config, CardResolver resolver) {
         if (config == null) {
             config = new Config();
         }
@@ -184,9 +194,8 @@ public final class CabtGameSession {
         this.player0 = new CabtBridgePlayer(config.playerName0, RangeOfInfluence.ALL, controller);
         this.player1 = new CabtBridgePlayer(config.playerName1, RangeOfInfluence.ALL, controller);
 
-        CabtDeckFactory factory = new CabtDeckFactory();
-        addPlayer(player0, factory.buildDeck(player0.getId(), deck0));
-        addPlayer(player1, factory.buildDeck(player1.getId(), deck1));
+        addPlayer(player0, resolver.buildDeck(player0.getId(), deck0));
+        addPlayer(player1, resolver.buildDeck(player1.getId(), deck1));
 
         GameOptions options = new GameOptions();
         if (config.maxTurns != null) {
