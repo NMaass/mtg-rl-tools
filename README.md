@@ -46,8 +46,9 @@ actual `GameImpl` games through the bridge):
   writer (Java), with `python/magic_cabt` parsers tested against
   Java-regenerated fixtures. The Python package also includes a local
   MTG Arena `Player.log` normalizer that writes raw events, normalized events,
-  game history, deck info, and summary JSON artifacts for later XMage
-  validation.
+  game history (game states plus paired decision prompts and the client's
+  chosen actions), per-match deck info, and summary JSON artifacts for later
+  XMage validation — validated against real multi-match `Player.log` captures.
 - **Subprocess protocol server + Python live-game client** (the CABT
   competition loop): `CabtProtocolServer` speaks newline-delimited JSON over
   stdin/stdout — `ping`, `capabilities`, `game_start`, `game_select`,
