@@ -545,6 +545,104 @@ class SessionAutoOpenTest(unittest.TestCase):
         self.assertTrue(statuses)
 
 
+class GuiDisplayLifecycleTest(unittest.TestCase):
+    """The XMage window persists across Start/Stop until the GUI closes it."""
+
+    class FakeDisplay(object):
+        def __init__(self, **kwargs):
+            self.alive = True
+            self.pinged = False
+            self.closed = False
+
+        def ping(self):
+            self.pinged = True
+
+        def close(self):
+            self.closed = True
+            self.alive = False
+
+    def _make_app(self):
+        # a stand-in for the Tk app that only needs the display-lifecycle
+        # attributes/methods under test — no real Tk root required
+        from magic_cabt.arena_mirror import gui as gui_mod
+
+        app = gui_mod.ArenaMirrorApp.__new__(gui_mod.ArenaMirrorApp)
+        import threading
+        app.classpath = "cp.jar"
+        app.java = "java"
+        app._display = None
+        app._display_lock = threading.Lock()
+        app._session = None
+        app._logs = []
+        app._post = lambda item: app._logs.append(item)
+        return app, gui_mod
+
+    def test_display_reused_then_closed_only_on_gui_close(self):
+        app, gui_mod = self._make_app()
+        created = []
+        original = gui_mod.MirrorDisplay
+        gui_mod.MirrorDisplay = lambda **kwargs: created.append(
+            self.FakeDisplay(**kwargs)) or created[-1]
+        try:
+            # first live game opens the window
+            first = app._get_display()
+            self.assertTrue(first.pinged)
+            self.assertEqual(1, len(created))
+            # a later Start (same GUI) reuses the SAME live window
+            self.assertIs(first, app._get_display())
+            self.assertEqual(1, len(created))
+            # if the user closed the XMage window, a later Start relaunches it
+            first.alive = False
+            second = app._get_display()
+            self.assertIsNot(first, second)
+            self.assertEqual(2, len(created))
+            # closing the GUI closes the XMage window
+            app.root = _StubRoot()
+            gui_mod.ArenaMirrorApp._on_close(app)
+            self.assertTrue(second.closed)
+            self.assertIsNone(app._display)
+        finally:
+            gui_mod.MirrorDisplay = original
+
+
+class _StubRoot(object):
+    def after(self, *args, **kwargs):
+        pass
+
+    def destroy(self):
+        pass
+
+
+class ReplayDiscoveryTest(unittest.TestCase):
+    """The Replays tab lists any directory holding a mirror_states.jsonl."""
+
+    def test_discovers_bundles_at_runs_dir_and_one_level_down(self):
+        from magic_cabt.arena_mirror import gui as gui_mod
+
+        root = tempfile.mkdtemp()
+        try:
+            # a nested bundle: runs/session/mirror_states.jsonl
+            session = os.path.join(root, "session")
+            os.makedirs(session)
+            open(os.path.join(session, "mirror_states.jsonl"), "w").close()
+            # a non-bundle sibling directory is ignored
+            os.makedirs(os.path.join(root, "notes"))
+            found = gui_mod.ArenaMirrorApp._discover_bundles(root)
+            self.assertEqual([session], found)
+
+            # the runs dir may itself be a bundle
+            open(os.path.join(root, "mirror_states.jsonl"), "w").close()
+            found = gui_mod.ArenaMirrorApp._discover_bundles(root)
+            self.assertIn(root, found)
+            self.assertIn(session, found)
+
+            # a missing directory yields nothing (no crash)
+            self.assertEqual([], gui_mod.ArenaMirrorApp._discover_bundles(
+                os.path.join(root, "does-not-exist")))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+
 class LauncherTest(unittest.TestCase):
     """The Python launcher must target the real Java class + package."""
 
