@@ -331,10 +331,18 @@ final class MirrorStateApplier {
         Card card = null;
         if (name != null && !faceDown) {
             card = createCardByName(name);
+            if (card == null) {
+                // The card is known (we have its Arena name, types and P/T)
+                // but XMage's repository has no matching card — a brand-new
+                // set, or a digital-only Alchemy/conjured card. Show a token
+                // that carries the real name instead of a misleading
+                // face-down "Plains", so the board stays readable.
+                Token placeholder = buildToken(objectJson, name);
+                return new PermanentToken(placeholder, controllerId, game);
+            }
         }
         if (card == null) {
-            // unknown to XMage (alchemy card, unimported set), hidden, or
-            // face-down: show a face-down placeholder rather than dropping it
+            // genuinely hidden or face-down: a nameless card back
             card = createCardByName(PLACEHOLDER_CARD_NAME);
             faceDown = true;
         }
@@ -458,13 +466,10 @@ final class MirrorStateApplier {
     private Card createCardByName(String name) {
         CardInfo cardInfo = cardInfoCache.get(name);
         if (cardInfo == null) {
-            cardInfo = CardRepository.instance.findPreferredCoreExpansionCard(name);
-            if (cardInfo == null) {
-                // split/adventure names arrive as "A // B"
-                int split = name.indexOf(" // ");
-                if (split > 0) {
-                    cardInfo = CardRepository.instance
-                            .findPreferredCoreExpansionCard(name.substring(0, split));
+            for (String candidate : resolutionCandidates(name)) {
+                cardInfo = CardRepository.instance.findPreferredCoreExpansionCard(candidate);
+                if (cardInfo != null) {
+                    break;
                 }
             }
             if (cardInfo == null) {
@@ -474,6 +479,32 @@ final class MirrorStateApplier {
             cardInfoCache.put(name, cardInfo);
         }
         return cardInfo.createCard();
+    }
+
+    /**
+     * Names to try, in order, when resolving an Arena card name to an XMage
+     * card. Arena carries names XMage's repository does not index verbatim:
+     *
+     *  - Alchemy-rebalanced cards are prefixed "A-" (e.g. "A-Cauldron
+     *    Familiar"); XMage only has the original, so strip the prefix. This is
+     *    the same convention Scryfall/17Lands use to link a rebalanced card
+     *    back to its paper original.
+     *  - split / adventure / MDFC names arrive as "A // B"; XMage indexes the
+     *    combined card under its front (left) face.
+     */
+    private static java.util.List<String> resolutionCandidates(String name) {
+        java.util.LinkedHashSet<String> candidates = new java.util.LinkedHashSet<>();
+        candidates.add(name);
+        String base = name;
+        if (base.startsWith("A-") && base.length() > 2) {
+            base = base.substring(2);
+            candidates.add(base);
+        }
+        int split = base.indexOf(" // ");
+        if (split > 0) {
+            candidates.add(base.substring(0, split));
+        }
+        return new java.util.ArrayList<>(candidates);
     }
 
     private Card takeFiller(Integer seat, int index) {

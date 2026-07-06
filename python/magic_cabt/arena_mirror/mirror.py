@@ -41,6 +41,10 @@ def enrich_snapshot(snapshot, card_db):
             obj["cardTypeNames"] = info.types
             obj["subtypeNames"] = info.subtypes
             obj["isToken"] = info.is_token
+            # color identity (WUBRG letters) drives replay archetype naming;
+            # from a land it still reveals the colors it produces
+            if info.color_identity:
+                obj["colors"] = info.color_identity
             if info.power is not None and obj.get("power") is None:
                 obj["power"] = _to_int(info.power)
             if info.toughness is not None and obj.get("toughness") is None:

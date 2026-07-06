@@ -92,6 +92,7 @@ public final class ArenaMirrorApp {
         MageFrame.main(new String[]{});
         waitForMageFrame();
         muteClientAudio();
+        tuneBoardForViewing();
         SwingUtilities.invokeLater(ArenaMirrorApp::hideConnectDialog);
 
         new ArenaMirrorApp().protocolLoop(protocolOut);
@@ -112,19 +113,45 @@ public final class ArenaMirrorApp {
                 PreferencesDialog.KEY_SOUNDS_SKIP_BUTTONS_ON,
                 PreferencesDialog.KEY_SOUNDS_OTHER_ON,
         };
+        for (String key : soundKeys) {
+            putCachedPreference(key, "false");
+        }
+    }
+
+    /**
+     * XMage's default card sizes are tuned for a player clicking cards, which
+     * makes a passive mirror feel oversized (especially the hand). Shrink the
+     * battlefield, hand, and other zones so the whole game reads compactly.
+     * Cache-only (via {@link #putCachedPreference}) so the user's own XMage
+     * sizes are left untouched; {@link mage.client.util.GUISizeHelper} picks
+     * the new values up when the board opens.
+     */
+    private static void tuneBoardForViewing() {
+        putCachedPreference(PreferencesDialog.KEY_GUI_CARD_BATTLEFIELD_SIZE, "10");
+        putCachedPreference(PreferencesDialog.KEY_GUI_CARD_HAND_SIZE, "9");
+        putCachedPreference(PreferencesDialog.KEY_GUI_CARD_OTHER_ZONES_SIZE, "9");
+        try {
+            SwingUtilities.invokeAndWait(
+                    () -> mage.client.util.GUISizeHelper.calculateGUISizes());
+        } catch (Exception e) {
+            logger.warn("mirror: could not recompute GUI sizes", e);
+        }
+    }
+
+    /**
+     * Seed one preference into XMage's in-memory cache without persisting it,
+     * so runtime tweaks (mute, card sizes) don't rewrite the user's saved
+     * config. Falls back to persisting if the private cache API ever moves.
+     */
+    private static void putCachedPreference(String key, String value) {
         try {
             java.lang.reflect.Method updateCache =
                     PreferencesDialog.class.getDeclaredMethod(
                             "updateCache", String.class, String.class);
             updateCache.setAccessible(true);
-            for (String key : soundKeys) {
-                updateCache.invoke(null, key, "false");
-            }
+            updateCache.invoke(null, key, value);
         } catch (ReflectiveOperationException e) {
-            // fall back to persisting the setting if the cache API moved
-            for (String key : soundKeys) {
-                PreferencesDialog.saveValue(key, "false");
-            }
+            PreferencesDialog.saveValue(key, value);
         }
     }
 
@@ -307,6 +334,9 @@ public final class ArenaMirrorApp {
             pane.setVisible(true);
             pane.showGame(gameId, gameId, gameId, perspective);
             MageFrame.setActive(pane);
+            // apply the tuned card sizes and strip the interactive-only chrome
+            mage.client.util.GUISizeHelper.refreshGUIAndCards(false);
+            trimBoardControls();
         });
         pushView();
         return ok().toString();
@@ -391,6 +421,52 @@ public final class ArenaMirrorApp {
                 }
             }
         });
+    }
+
+    /**
+     * Hide the game panel's interactive-only chrome. A mirror never takes
+     * priority, so the F-key skip/pass button bank and the clickable
+     * phase-step column are pure clutter — hiding them (and the local player's
+     * "Hints" helper) gives the board more room. Reflection because these are
+     * private fields of stock {@link GamePanel}; each is best-effort so a
+     * renamed field never breaks the mirror.
+     */
+    private void trimBoardControls() {
+        GamePanel panel = MageFrame.getGame(gameId);
+        if (panel == null) {
+            return;
+        }
+        for (String field : new String[]{"pnlShortCuts", "phasesContainer",
+                "jPhases", "btnSwitchHands", "bottomHelperPanel"}) {
+            hideComponent(panel, field);
+        }
+    }
+
+    private static void hideComponent(Object owner, String fieldName) {
+        try {
+            Field field = findField(owner.getClass(), fieldName);
+            if (field == null) {
+                return;
+            }
+            field.setAccessible(true);
+            Object value = field.get(owner);
+            if (value instanceof java.awt.Component) {
+                ((java.awt.Component) value).setVisible(false);
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            logger.debug("mirror: could not hide " + fieldName);
+        }
+    }
+
+    private static Field findField(Class<?> type, String name) {
+        for (Class<?> c = type; c != null; c = c.getSuperclass()) {
+            try {
+                return c.getDeclaredField(name);
+            } catch (NoSuchFieldException ignored) {
+                // walk up to the superclass
+            }
+        }
+        return null;
     }
 
     private void closeCurrentPane() throws Exception {

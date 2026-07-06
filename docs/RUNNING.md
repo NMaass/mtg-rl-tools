@@ -58,7 +58,7 @@ The window has two tabs.
 ### Follow tab
 
 1. The **MTGA Player.log** path is pre-filled with the standard location; use
-   **Locate MTGA logs** if yours differs.
+   **Locate…** if yours differs.
 2. Pick an **Output folder** for the recording (default:
    `arena-mirror-runs\session`).
 3. Leave **Open XMage on live game** checked.
@@ -69,14 +69,28 @@ face-up, your opponent's hand face-down. The left pane shows a status feed; the
 right pane lists each decision as it's recorded. The XMage window stays open
 across Start/Stop until you close it (or close the GUI). XMage's audio is muted.
 
+**Process existing log** records every game *already* in the current log in one
+pass — headless (no XMage window) and at full speed — so past matches show up
+as replays in seconds. It writes to `arena-mirror-runs\imported-<timestamp>`.
+
 > First XMage launch takes ~15–30 s while it loads its card database — give it
 > a moment after the first game starts.
 
 ### Replays tab
 
-Every recording appears here with its game / decision / state counts. Select
-one and click **Watch replay** (or double-click) to play it back into XMage at
-the chosen **Speed**.
+Recordings are listed the way you'd think of them — **"Dimir vs Boros — Win
+(2-1) — Standard Ladder"** — with columns for result, event, game/decision
+counts, and when it was played, newest first. Select one and click **Watch**
+(or double-click) to play it back into XMage.
+
+A full transport bar drives playback:
+
+- **▶ / ⏯** play / pause, **⏮ / ⏭** step one board state back / forward.
+- **↷ next action** jumps to the next recorded decision; **⇥ next non-pass
+  action** skips priority passes and lands on the next real play (cast, attack,
+  block, mulligan, target…).
+- **Speed** adjusts playback live (0.5×–20×); the **scrubber** seeks anywhere in
+  the game, and the readout shows the current turn, active player, and phase.
 
 ## 4. What gets recorded
 
@@ -87,8 +101,8 @@ Each run writes a bundle under your output folder:
 | `decisions.jsonl` | one decision per line: the pre-decision board observation, the indexed legal-option list, and the option indices you actually chose (the CABT training format) |
 | `mirror_states.jsonl` | every board snapshot streamed to XMage; also the replay stream |
 | `game_history.jsonl` | decision prompts/responses + lifecycle events (raw game-state payloads redacted) |
-| `summary.json` | counts of games, decisions, and states |
-| `card_cache.json` | grpId → card info, so replays resolve cards on other machines |
+| `summary.json` | counts plus per-match metadata: players, deck colors/archetype, event, result, and the human-readable title shown in the Replays list |
+| `card_cache.json` | grpId → card info (name, types, colors), so replays resolve cards on other machines |
 
 Hidden information is never written: your opponent's hand and any face-down
 cards are recorded as face-down placeholders with no card identity.
@@ -110,7 +124,7 @@ python -m magic_cabt.arena_mirror gui                # the GUI
 ## Troubleshooting
 
 - **"Player.log not found"** — Arena isn't logging. Enable Detailed Logs (step
-  2) and start a game, or click **Locate MTGA logs** and point at the file.
+  2) and start a game, or click **Locate…** and point at the file.
 - **GUI opens but XMage never does** — XMage isn't built yet; run
   `scripts\setup-arena-mirror.ps1`. The GUI still records in the meantime.
 - **The board stops updating mid-game** — recording is unaffected (check
