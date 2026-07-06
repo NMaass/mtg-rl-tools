@@ -170,6 +170,9 @@ XMage window in real time, and record a CABT-format replay bundle — the same
 `observation.select` option-index shape the engine bridge emits, so Arena
 games and self-play games share one dataset schema.
 
+**→ Step-by-step run guide: [docs/RUNNING.md](docs/RUNNING.md)** (setup, the
+GUI, the Replays tab, the recorded files, troubleshooting).
+
 ```
 Arena Player.log ──tail──▶ normalizer ──▶ GRE state tracker ──▶ snapshot
                                     │                              │
