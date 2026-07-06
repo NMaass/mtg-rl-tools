@@ -1,11 +1,14 @@
-# Launch the Arena -> XMage mirror GUI (after scripts\setup-arena-mirror.ps1).
+# Launch the Arena -> XMage mirror GUI.
 #
-#   scripts\arena-mirror-gui.ps1
+#   scripts\arena-mirror-gui.ps1        (or double-click "Arena Mirror.bat")
 #
 # Opens a window with a "Locate MTGA logs" button, live log + actions panes,
 # and Start/Stop. On Start it follows the Player.log and, when a live game
 # appears, launches XMage and mirrors the current game while recording a
 # CABT bundle under the chosen output folder.
+#
+# If XMage has not been built yet (scripts\setup-arena-mirror.ps1), the GUI
+# still opens and records — it just can't show the XMage board until built.
 
 param(
     [string]$XmageDir = "C:\Users\nicho\Code\xmage-goldflush",
@@ -15,16 +18,37 @@ param(
 $ErrorActionPreference = "Stop"
 $overlay = Split-Path -Parent $PSScriptRoot
 
-$classpathFile = Join-Path $XmageDir "Mage.Client\target\mirror-classpath.txt"
-if (-not (Test-Path $classpathFile)) {
-    throw "No $classpathFile - run scripts\setup-arena-mirror.ps1 first."
+# Locate a Python interpreter.
+$python = (Get-Command python -ErrorAction SilentlyContinue).Source
+if (-not $python) {
+    $python = (Get-Command py -ErrorAction SilentlyContinue).Source
+}
+if (-not $python) {
+    throw "Python was not found on PATH. Install Python 3, then retry."
 }
 
-$env:MAGIC_CABT_CLASSPATH = (Get-Content $classpathFile -Raw).Trim()
+# Wire up the XMage display if it has been built; otherwise run record-only.
+$classpathFile = Join-Path $XmageDir "Mage.Client\target\mirror-classpath.txt"
+$javaExe = Join-Path $JavaHome "bin\java.exe"
+$guiArgs = @("-m", "magic_cabt.arena_mirror", "gui")
+$workDir = $overlay
+if (Test-Path $classpathFile) {
+    $env:MAGIC_CABT_CLASSPATH = (Get-Content $classpathFile -Raw).Trim()
+    if (Test-Path $javaExe) {
+        $guiArgs += @("--java", $javaExe)
+    }
+    # the display JVM must run from Mage.Client so XMage finds its db/ + images
+    $workDir = Join-Path $XmageDir "Mage.Client"
+    Write-Host "XMage display: ready."
+} else {
+    Write-Host "XMage is not built yet - the GUI will record only."
+    Write-Host "To enable the live board, run once:"
+    Write-Host "    scripts\setup-arena-mirror.ps1"
+}
+
 $env:PYTHONPATH = (Join-Path $overlay "python") + ";" + $env:PYTHONPATH
 
-# the display JVM must run from Mage.Client so XMage finds its db/ and images
-Push-Location (Join-Path $XmageDir "Mage.Client")
+Push-Location $workDir
 try {
-    python -m magic_cabt.arena_mirror gui --java "$JavaHome\bin\java.exe"
+    & $python @guiArgs
 } finally { Pop-Location }

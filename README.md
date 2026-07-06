@@ -105,9 +105,11 @@ python/                             magic_cabt package (card data + dataset pars
                                     live-game protocol client, arena_mirror live
                                     follower/tracker/recorder/replay)
 examples/                           random legal agent, example deck, self-play runner
+Arena Mirror.bat                    double-click launcher for the follower GUI
 scripts/                            run-cabt-adapter-tests.sh,
                                     setup-arena-mirror.ps1, arena-mirror.ps1,
-                                    arena-mirror-gui.ps1
+                                    arena-mirror-gui.ps1,
+                                    create-desktop-shortcut.ps1
 .github/workflows/                  python-mirror-tests.yml (Python CI gate)
 ```
 
@@ -183,7 +185,17 @@ scripts\setup-arena-mirror.ps1 -XmageDir C:\path\to\xmage-checkout
 ```
 
 Then, with MTG Arena set to log detailed data (Options → Account → "Detailed
-Logs (Plugin Support)"), launch the GUI (or the CLI) and play a match:
+Logs (Plugin Support)"), launch the mirror and play a match.
+
+**Double-click launcher (easiest):** double-click **`Arena Mirror.bat`** in
+the repo root to open the follower GUI — no terminal needed. For a Desktop
+icon, run once:
+
+```powershell
+scripts\create-desktop-shortcut.ps1        # adds an "Arena Mirror" Desktop icon
+```
+
+**Or from a terminal:**
 
 ```powershell
 scripts\arena-mirror-gui.ps1               # window: Locate MTGA logs, live
@@ -196,8 +208,11 @@ scripts\arena-mirror.ps1 replay <bundle>   # watch a recorded bundle back
 The **GUI** has a "Locate MTGA logs" button, shows the log/status feed and the
 recorded actions as they happen, and — with "Open XMage on live game" checked
 — launches XMage automatically once a live game appears in the log, then
-mirrors the current game while recording. XMage's own audio is muted for the
-mirror window (the user's persisted XMage sound settings are left untouched).
+mirrors the current game while recording. The XMage window stays open across
+Start/Stop until you close it (or close the GUI). XMage's own audio is muted
+for the mirror window (the user's persisted XMage sound settings are left
+untouched). If XMage isn't built yet, the GUI still opens and records — it
+just can't show the board until `setup-arena-mirror.ps1` has been run.
 
 Each live run writes `arena-mirror-runs/<timestamp>/`:
 
