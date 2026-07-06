@@ -8,19 +8,22 @@ appears in the log, it launches the XMage display and follows the current
 game; recording to a CABT bundle happens the whole time.
 """
 
+import json
 import os
 import queue
 import threading
 import tkinter as tk
-from tkinter import filedialog, scrolledtext
+from tkinter import filedialog, scrolledtext, ttk
 
 from .cards import CardDatabase
 from .mirror import MirrorDisplay
 from .recorder import MirrorRecorder
+from .replay import ReplayPlayer, load_bundle
 from .session import MirrorSession
 
 DEFAULT_LOG_PATH = os.path.expanduser(
     r"~\AppData\LocalLow\Wizards Of The Coast\MTGA\Player.log")
+DEFAULT_RUNS_DIR = "arena-mirror-runs"
 
 
 class ArenaMirrorApp(object):
@@ -51,6 +54,7 @@ class ArenaMirrorApp(object):
         # the user closes the XMage window itself or closes this GUI.
         self._display = None
         self._display_lock = threading.Lock()
+        self._replay_thread = None
 
         self._build_layout()
         self.root.after(100, self._drain_queue)
@@ -58,9 +62,21 @@ class ArenaMirrorApp(object):
 
     # ------------------------------------------------------------- layout
     def _build_layout(self):
-        frm = tk.Frame(self.root, padx=10, pady=10)
-        frm.pack(fill=tk.BOTH, expand=True)
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(fill=tk.BOTH, expand=True)
 
+        follow_tab = tk.Frame(notebook, padx=10, pady=10)
+        replays_tab = tk.Frame(notebook, padx=10, pady=10)
+        notebook.add(follow_tab, text="Follow")
+        notebook.add(replays_tab, text="Replays")
+        self._notebook = notebook
+        # refresh the replay list whenever the Replays tab is opened
+        notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+        self._build_follow_tab(follow_tab)
+        self._build_replays_tab(replays_tab)
+
+    def _build_follow_tab(self, frm):
         self._path_row(frm, "MTGA Player.log", self.log_var,
                        "Locate MTGA logs", self._pick_log)
         self._path_row(frm, "Output folder", self.out_var,
@@ -103,6 +119,45 @@ class ArenaMirrorApp(object):
         self.action_view.pack(fill=tk.BOTH, expand=True)
         panes.add(right, stretch="always")
 
+    def _build_replays_tab(self, frm):
+        top = tk.Frame(frm)
+        top.pack(fill=tk.X)
+        tk.Label(top, text="Recorded replays", anchor="w").pack(side=tk.LEFT)
+        tk.Button(top, text="Refresh",
+                  command=self._refresh_replays).pack(side=tk.RIGHT)
+        tk.Button(top, text="Browse folder...",
+                  command=self._pick_runs_dir).pack(side=tk.RIGHT, padx=4)
+
+        # a table of bundles with their summary counts
+        columns = ("bundle", "games", "decisions", "states")
+        self.replay_table = ttk.Treeview(frm, columns=columns,
+                                         show="headings", height=10)
+        for column, heading, width in (
+                ("bundle", "Replay", 320), ("games", "Games", 70),
+                ("decisions", "Decisions", 90), ("states", "States", 80)):
+            self.replay_table.heading(column, text=heading)
+            self.replay_table.column(column, width=width,
+                                     anchor=tk.W if column == "bundle" else tk.CENTER)
+        self.replay_table.pack(fill=tk.BOTH, expand=True, pady=(4, 4))
+        self.replay_table.bind("<Double-1>", lambda e: self.watch_replay())
+
+        controls = tk.Frame(frm)
+        controls.pack(fill=tk.X)
+        self.watch_btn = tk.Button(controls, text="Watch replay",
+                                   command=self.watch_replay)
+        self.watch_btn.pack(side=tk.LEFT, padx=4)
+        tk.Label(controls, text="Speed").pack(side=tk.LEFT, padx=(12, 2))
+        self.replay_speed_var = tk.StringVar(value="4")
+        tk.Spinbox(controls, from_=1, to=50, width=4,
+                   textvariable=self.replay_speed_var).pack(side=tk.LEFT)
+        self.replay_status_var = tk.StringVar(value="")
+        tk.Label(controls, textvariable=self.replay_status_var,
+                 fg="#06a").pack(side=tk.RIGHT)
+
+        self._runs_dir = DEFAULT_RUNS_DIR
+        self._replay_paths = {}
+        self._refresh_replays()
+
     def _path_row(self, parent, label, var, button_text, command):
         row = tk.Frame(parent, pady=2)
         row.pack(fill=tk.X)
@@ -111,6 +166,103 @@ class ArenaMirrorApp(object):
             side=tk.LEFT, fill=tk.X, expand=True)
         tk.Button(row, text=button_text, command=command).pack(
             side=tk.LEFT, padx=4)
+
+    # ------------------------------------------------------------- replays
+    def _on_tab_changed(self, event):
+        try:
+            selected = self._notebook.tab(self._notebook.select(), "text")
+        except Exception:
+            return
+        if selected == "Replays":
+            self._refresh_replays()
+
+    def _pick_runs_dir(self):
+        path = filedialog.askdirectory(
+            title="Folder containing recorded replays")
+        if path:
+            self._runs_dir = path
+            self._refresh_replays()
+
+    def _refresh_replays(self):
+        self.replay_table.delete(*self.replay_table.get_children())
+        self._replay_paths = {}
+        bundles = self._discover_bundles(self._runs_dir)
+        for path in bundles:
+            summary = {}
+            summary_path = os.path.join(path, "summary.json")
+            if os.path.exists(summary_path):
+                try:
+                    with open(summary_path, encoding="utf-8") as handle:
+                        summary = json.load(handle)
+                except Exception:
+                    pass
+            label = os.path.relpath(path, self._runs_dir)
+            if label == ".":
+                label = os.path.basename(os.path.abspath(path))
+            item = self.replay_table.insert("", tk.END, values=(
+                label,
+                len(summary.get("games", [])) or "?",
+                summary.get("decisions", "?"),
+                summary.get("mirrorStates", "?")))
+            self._replay_paths[item] = path
+        self.replay_status_var.set("%d replay(s) in %s"
+                                   % (len(bundles), self._runs_dir))
+
+    @staticmethod
+    def _discover_bundles(runs_dir):
+        """A bundle is any directory containing mirror_states.jsonl. Look at
+        the runs dir itself and one level down (the usual <runs>/<name> layout)."""
+        found = []
+        if not os.path.isdir(runs_dir):
+            return found
+        if os.path.isfile(os.path.join(runs_dir, "mirror_states.jsonl")):
+            found.append(runs_dir)
+        for entry in sorted(os.listdir(runs_dir)):
+            path = os.path.join(runs_dir, entry)
+            if os.path.isfile(os.path.join(path, "mirror_states.jsonl")):
+                found.append(path)
+        return found
+
+    def watch_replay(self):
+        if self._replay_thread and self._replay_thread.is_alive():
+            self.replay_status_var.set("A replay is already playing.")
+            return
+        selection = self.replay_table.selection()
+        if not selection:
+            self.replay_status_var.set("Select a replay first.")
+            return
+        bundle = self._replay_paths.get(selection[0])
+        if not bundle:
+            return
+        try:
+            speed = max(1.0, float(self.replay_speed_var.get()))
+        except ValueError:
+            speed = 4.0
+        self.watch_btn.config(state=tk.DISABLED)
+        self._replay_thread = threading.Thread(
+            target=self._run_replay, args=(bundle, speed), daemon=True)
+        self._replay_thread.start()
+
+    def _run_replay(self, bundle, speed):
+        self._post(("replay_status", "Opening XMage for replay..."))
+        try:
+            display = self._get_display()
+        except Exception as error:
+            self._post(("replay_status", "Cannot open XMage: %s" % error))
+            self._post(("replay_done", None))
+            return
+        stream = _QueueWriter(self._post)
+        player = ReplayPlayer(display=display, interval=1.0 / speed,
+                              log_stream=stream)
+        try:
+            self._post(("replay_status",
+                        "Playing %s ..." % os.path.basename(bundle)))
+            player.play(bundle)
+            self._post(("replay_status", "Replay finished."))
+        except Exception as error:
+            self._post(("replay_status", "Replay error: %s" % error))
+        finally:
+            self._post(("replay_done", None))
 
     # ------------------------------------------------------------- actions
     def _pick_log(self):
@@ -228,6 +380,10 @@ class ArenaMirrorApp(object):
                     if self._display is not None and self._display.alive:
                         self._log("Stopped following. XMage stays open — "
                                   "close its window or this app to end.")
+                elif kind == "replay_status":
+                    self.replay_status_var.set(payload)
+                elif kind == "replay_done":
+                    self.watch_btn.config(state=tk.NORMAL)
         except queue.Empty:
             pass
         self.root.after(100, self._drain_queue)
@@ -254,6 +410,25 @@ class ArenaMirrorApp(object):
                     pass
                 self._display = None
         self.root.after(200, self.root.destroy)
+
+
+class _QueueWriter(object):
+    """A minimal text sink that routes ReplayPlayer's narration into the GUI
+    log pane, one line per newline, via the thread-safe post callback."""
+
+    def __init__(self, post):
+        self._post = post
+        self._buffer = ""
+
+    def write(self, text):
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line.strip():
+                self._post(("log", line))
+
+    def flush(self):
+        pass
 
 
 def main(argv=None):

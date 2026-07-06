@@ -205,14 +205,21 @@ scripts\arena-mirror.ps1 live --from-start # also process the current log first
 scripts\arena-mirror.ps1 replay <bundle>   # watch a recorded bundle back
 ```
 
-The **GUI** has a "Locate MTGA logs" button, shows the log/status feed and the
-recorded actions as they happen, and — with "Open XMage on live game" checked
-— launches XMage automatically once a live game appears in the log, then
-mirrors the current game while recording. The XMage window stays open across
-Start/Stop until you close it (or close the GUI). XMage's own audio is muted
-for the mirror window (the user's persisted XMage sound settings are left
-untouched). If XMage isn't built yet, the GUI still opens and records — it
-just can't show the board until `setup-arena-mirror.ps1` has been run.
+The **GUI** has two tabs:
+
+- **Follow** — a "Locate MTGA logs" button, the log/status feed, and the
+  recorded actions as they happen. With "Open XMage on live game" checked it
+  launches XMage automatically once a live game appears in the log, then
+  mirrors the current game while recording. The XMage window stays open across
+  Start/Stop until you close it (or close the GUI).
+- **Replays** — a table of every recorded bundle (with its game/decision/state
+  counts). Select one and click **Watch replay** (or double-click) to play it
+  back into XMage at the chosen speed.
+
+XMage's own audio is muted for the mirror window (the user's persisted XMage
+sound settings are left untouched). If XMage isn't built yet, the GUI still
+opens and records — it just can't show the board until `setup-arena-mirror.ps1`
+has been run.
 
 Each live run writes `arena-mirror-runs/<timestamp>/`:
 

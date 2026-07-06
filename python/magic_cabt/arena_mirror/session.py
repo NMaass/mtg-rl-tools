@@ -177,9 +177,14 @@ class MirrorSession(object):
         try:
             method(*args, **kwargs)
         except Exception as error:
-            # Recording must survive a dead/errored display window.
-            self._display_failed = True
-            self._say("display disabled after error: %s" % (error,))
+            # A single bad update must not permanently blank the board: only
+            # give up when the window is actually gone. Otherwise skip this
+            # one update and keep mirroring (recording is never affected).
+            if self.display is None or not getattr(self.display, "alive", False):
+                self._display_failed = True
+                self._say("display closed; recording continues (%s)" % (error,))
+            else:
+                self._say("display update skipped: %s" % (error,))
 
     def _say(self, text):
         if self.verbose:

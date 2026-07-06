@@ -613,6 +613,36 @@ class _StubRoot(object):
         pass
 
 
+class ReplayDiscoveryTest(unittest.TestCase):
+    """The Replays tab lists any directory holding a mirror_states.jsonl."""
+
+    def test_discovers_bundles_at_runs_dir_and_one_level_down(self):
+        from magic_cabt.arena_mirror import gui as gui_mod
+
+        root = tempfile.mkdtemp()
+        try:
+            # a nested bundle: runs/session/mirror_states.jsonl
+            session = os.path.join(root, "session")
+            os.makedirs(session)
+            open(os.path.join(session, "mirror_states.jsonl"), "w").close()
+            # a non-bundle sibling directory is ignored
+            os.makedirs(os.path.join(root, "notes"))
+            found = gui_mod.ArenaMirrorApp._discover_bundles(root)
+            self.assertEqual([session], found)
+
+            # the runs dir may itself be a bundle
+            open(os.path.join(root, "mirror_states.jsonl"), "w").close()
+            found = gui_mod.ArenaMirrorApp._discover_bundles(root)
+            self.assertIn(root, found)
+            self.assertIn(session, found)
+
+            # a missing directory yields nothing (no crash)
+            self.assertEqual([], gui_mod.ArenaMirrorApp._discover_bundles(
+                os.path.join(root, "does-not-exist")))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+
 class LauncherTest(unittest.TestCase):
     """The Python launcher must target the real Java class + package."""
 

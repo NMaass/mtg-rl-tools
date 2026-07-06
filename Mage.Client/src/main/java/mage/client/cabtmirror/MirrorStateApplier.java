@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import mage.MageInt;
 import mage.cards.Card;
+import mage.cards.CardWithHalves;
 import mage.cards.repository.CardInfo;
 import mage.cards.repository.CardRepository;
 import mage.constants.PhaseStep;
@@ -327,27 +328,73 @@ final class MirrorStateApplier {
             Token token = buildToken(objectJson, name);
             return new PermanentToken(token, controllerId, game);
         }
-        Card card;
+        Card card = null;
         if (name != null && !faceDown) {
             card = createCardByName(name);
-            if (card == null) {
-                // unknown to XMage (alchemy card, unimported set): show the
-                // object face-down rather than dropping it from the board
-                card = createCardByName(PLACEHOLDER_CARD_NAME);
-                faceDown = true;
-            }
-        } else {
+        }
+        if (card == null) {
+            // unknown to XMage (alchemy card, unimported set), hidden, or
+            // face-down: show a face-down placeholder rather than dropping it
             card = createCardByName(PLACEHOLDER_CARD_NAME);
             faceDown = true;
         }
         if (card == null) {
             return null;
         }
-        game.loadCards(Collections.singleton(card), controllerId);
-        PermanentCard permanent = new PermanentCard(card, controllerId, game);
-        if (faceDown) {
-            permanent.setFaceDown(true, game);
+        try {
+            // split / modal double-faced cards (e.g. Pathway lands) go onto
+            // the battlefield as a single face; PermanentCard rejects the
+            // whole card, so pick the face the log named.
+            Card face = selectBattlefieldFace(card, name);
+            game.loadCards(Collections.singleton(card), controllerId);
+            PermanentCard permanent = new PermanentCard(face, controllerId, game);
+            if (faceDown) {
+                permanent.setFaceDown(true, game);
+            }
+            return permanent;
+        } catch (RuntimeException e) {
+            // one unrenderable card must never freeze the whole board: fall
+            // back to a face-down placeholder permanent.
+            logger.warn("mirror: cannot render '" + name + "' ("
+                    + e.getMessage() + "); showing it face-down");
+            return faceDownPlaceholder(controllerId);
         }
+    }
+
+    /**
+     * The battlefield face of a split / modal-double-faced card. MTGA names
+     * the exact face that entered (each face has its own grpId), so match by
+     * name; otherwise fall back to the front (left) face.
+     */
+    private Card selectBattlefieldFace(Card card, String name) {
+        if (!(card instanceof CardWithHalves)) {
+            return card;
+        }
+        CardWithHalves halves = (CardWithHalves) card;
+        Card left = halves.getLeftHalfCard();
+        Card right = halves.getRightHalfCard();
+        if (name != null) {
+            if (right != null && name.equalsIgnoreCase(right.getName())) {
+                return right;
+            }
+            if (left != null && name.equalsIgnoreCase(left.getName())) {
+                return left;
+            }
+        }
+        if (left != null) {
+            return left;
+        }
+        return right != null ? right : card;
+    }
+
+    private Permanent faceDownPlaceholder(UUID controllerId) {
+        Card filler = createCardByName(PLACEHOLDER_CARD_NAME);
+        if (filler == null) {
+            return null;
+        }
+        game.loadCards(Collections.singleton(filler), controllerId);
+        PermanentCard permanent = new PermanentCard(filler, controllerId, game);
+        permanent.setFaceDown(true, game);
         return permanent;
     }
 
