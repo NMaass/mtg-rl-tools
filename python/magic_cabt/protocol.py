@@ -213,12 +213,48 @@ class CabtBridge(object):
         self.finished = True
         return response
 
+    def resolve_card(self, name):
+        """Resolve a single card name against XMage's card identity.
+
+        Returns the resolution dict — ``requestedName``, ``normalizedName``,
+        ``resolved`` (bool), ``strategy`` (``EXACT`` / ``NORMALIZED`` /
+        ``CLASS_HEURISTIC`` or ``None``), ``canonicalName``, ``setCode``,
+        ``cardNumber``, and on failure ``error`` (``UNKNOWN_CARD``) plus
+        ``reason``. Needs no active game. Never substitutes: an unknown name
+        comes back ``resolved == False`` rather than as a different card."""
+        return self.request({"command": "resolve_card", "name": name})["resolution"]
+
+    def validate_deck(self, deck):
+        """Validate a full decklist against XMage's card identity, no game.
+
+        ``deck`` is an entry list (see ``parse_decklist``) or decklist text.
+        Returns ``{"valid": bool, "resolutions": [...], "failures": [...]}``:
+        one resolution per entry, with the unresolved subset in ``failures``.
+        Fail closed by checking ``valid`` (or that ``failures`` is empty)
+        before starting a game."""
+        return self.request(
+            {"command": "validate_deck", "deck": self._normalize_deck(deck)}
+        )
+
     def all_card_data(self):
         """Card metadata for every distinct card in the active game's deduped
         deck pool. This is game-scoped (not a global card database): it
         requires an active game and only covers cards in the decks. Reference
         data only — legal actions always come from ``observation.select``."""
         return self.request({"command": "all_card_data"})["cards"]
+
+    def repository_card_data(self, names):
+        """Static card metadata for a set of card names, independent of any
+        game (distinct from ``all_card_data``, which is the active game's deck
+        pool). ``names`` is a required iterable of card names — this is a
+        by-name repository lookup, not a whole-database dump; each name is
+        resolved through the repository and its metadata exported. Fails
+        closed: if any name is unknown the server raises ``CabtProtocolError``
+        (``UNKNOWN_CARD``) rather than returning a partial export. Returns the
+        list of card dicts."""
+        return self.request(
+            {"command": "repository_card_data", "names": list(names)}
+        )["cards"]
 
     def visualize_data(self):
         """Human-readable board render of the current state."""

@@ -27,6 +27,13 @@ FIXTURES_SRC="$MODULE_DIR/target/cabt-fixtures"
 FIXTURES_DST="$PYTHON_DIR/tests/fixtures"
 if [ -f "$FIXTURES_SRC/card_data_response.json" ] && [ -f "$FIXTURES_SRC/dataset_sample.jsonl" ]; then
     cp "$FIXTURES_SRC/card_data_response.json" "$FIXTURES_SRC/dataset_sample.jsonl" "$FIXTURES_DST/"
+    # card-identity fixtures only exist when the DB-backed test ran (i.e. the
+    # card database was scannable); refresh them when present.
+    for identity_fixture in validate_deck_response.json repository_card_data_response.json; do
+        if [ -f "$FIXTURES_SRC/$identity_fixture" ]; then
+            cp "$FIXTURES_SRC/$identity_fixture" "$FIXTURES_DST/"
+        fi
+    done
     echo "Fixtures refreshed from $FIXTURES_SRC."
 else
     echo "WARNING: Java-generated fixtures not found under $FIXTURES_SRC;"
