@@ -86,16 +86,23 @@ name, strategy, canonical name, printing, reason), never substituted.
   `Boseiju, Who Endures`, split `Fire // Ice`), the split card from a single
   half (`Fire` → `Fire // Ice`), a curly-apostrophe name via normalization,
   and unknown-card fail-closed; drives the `resolve_card` / `validate_deck` /
-  `global_card_data` protocol commands (all without an active game) and a
+  `repository_card_data` protocol commands (all without an active game) and a
   repository-resolved `game_start`; and regenerates the Python fixtures
-  (`validate_deck_response.json`, `global_card_data_response.json`). When the
-  set classes aren't on the classpath the database stays empty and this class
-  skips via a JUnit assumption, like the Python live tests skip without a
-  built bridge.
+  (`validate_deck_response.json`, `repository_card_data_response.json`). When
+  the set classes aren't on the classpath the database stays empty and this
+  class skips via a JUnit assumption, like the Python live tests skip without
+  a built bridge.
+- **`CardResolverProductionScanTest`**: proves a fresh `CabtProtocolServer`
+  resolves a repository-only name (`Boseiju, Who Endures`) through
+  `resolve_card` **without the test scanning first** — the resolver scans the
+  card database itself on its first lookup. Asserts `EXACT` + a set code (not
+  the heuristic fallback), so a regression that drops the production-path scan
+  fails here.
 
 The protocol distinguishes two card-data scopes: `all_card_data` is the
-active game's deduped deck pool (needs a game); `global_card_data` resolves
-arbitrary names through the repository and needs no game.
+active game's deduped deck pool (needs a game); `repository_card_data`
+resolves a requested list of names through the repository and needs no game
+(it is a by-name lookup, not a whole-database dump).
 
 ### Python unit tests
 
@@ -104,7 +111,7 @@ cd python && python3 -m unittest discover -s tests
 ```
 
 Tests `magic_cabt` (card-data parsing, JSONL dataset reading, and the
-`resolve_card` / `validate_deck` / `global_card_data` client helpers via a
+`resolve_card` / `validate_deck` / `repository_card_data` client helpers via a
 fake transport in `test_card_identity.py`) against fixtures that are **real
 Java output**: `MagicCardDataExporterTest`, `CabtDatasetWriterTest`, and
 `CardIdentityRepositoryTest` regenerate them under
@@ -161,7 +168,7 @@ drives two random legal agents through a real game and writes a replay
 | `CabtMulliganPromptTest`, `CabtBridgePlayerMulliganTest` | Mulligan (Task 16) |
 | `MagicCardDataExporterTest`, `python test_card_data` | Static card data export (Task 21) |
 | `CardNameNormalizerTest`, `CardResolverTest` | Card-name normalization / resolver branch logic (repository-first, heuristic fallback, fail-closed) |
-| `CardIdentityRepositoryTest`, `python test_card_identity` | Repository-backed resolution, `resolve_card`/`validate_deck`/`global_card_data` commands, deck validation before `game_start` |
+| `CardIdentityRepositoryTest`, `CardResolverProductionScanTest`, `python test_card_identity` | Repository-backed resolution, production-path DB scan, `resolve_card`/`validate_deck`/`repository_card_data` commands, deck validation before `game_start` |
 | `CabtDatasetWriterTest`, `python test_dataset` | Dataset writer/reader (Task 22) |
 | `CabtPromptAuditTest.allSurfacedPromptsHaveTests` | A surfaced prompt lost its implementation or test class — fix the audit entry or restore the class (Task 23) |
 | `CabtPromptAuditTest.failClosedPromptsThrow...` | A FAIL_CLOSED callback stopped throwing `CabtUnhandledDecisionException` — a decision may be silently AI-decided (Task 23) |

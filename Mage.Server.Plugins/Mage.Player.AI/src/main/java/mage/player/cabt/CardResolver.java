@@ -3,6 +3,7 @@ package mage.player.cabt;
 import mage.cards.Card;
 import mage.cards.repository.CardInfo;
 import mage.cards.repository.CardRepository;
+import mage.cards.repository.CardScanner;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -42,15 +43,41 @@ public final class CardResolver {
     private static final RepositoryLookup DEFAULT_REPOSITORY = new RepositoryLookup() {
         @Override
         public CardInfo find(String name) {
+            // The card database owns its own precondition: a fresh
+            // CabtProtocolServer subprocess must resolve repository-only names
+            // (Boseiju, Who Endures; Fire // Ice) without any caller having
+            // scanned first. Scanning happens here, before the first lookup can
+            // return — so no unresolved result is ever cached against an
+            // unscanned database.
+            ensureCardDatabaseScanned();
             try {
                 return CardRepository.instance.findPreferredCoreExpansionCard(name);
             } catch (RuntimeException e) {
-                // an unscanned / unavailable card database is a miss, not a
-                // crash: let the heuristic fallback take over
+                // an unavailable card database is a miss, not a crash: let the
+                // heuristic fallback take over
                 return null;
             }
         }
     };
+
+    // scanning the whole set catalogue is a one-time, idempotent cost
+    // (CardScanner guards on its own static flag); we guard again so a failed
+    // scan in a set-less JVM is attempted only once and degrades to the
+    // heuristic fallback rather than being retried on every lookup
+    private static volatile boolean scanAttempted;
+
+    private static synchronized void ensureCardDatabaseScanned() {
+        if (scanAttempted) {
+            return;
+        }
+        scanAttempted = true;
+        try {
+            CardScanner.scan();
+        } catch (RuntimeException e) {
+            // no set classes on the classpath (bare/partial checkout): leave
+            // the repository empty so resolution falls back to the heuristic
+        }
+    }
 
     private final RepositoryLookup repository;
     private final CabtDeckFactory heuristic;

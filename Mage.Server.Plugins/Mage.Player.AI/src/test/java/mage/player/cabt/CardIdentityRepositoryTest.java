@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * Repository-backed regression tests for the card identity layer, run against
  * XMage's real scanned card database. Covers the resolver directly and the
- * {@code resolve_card} / {@code validate_deck} / {@code global_card_data}
+ * {@code resolve_card} / {@code validate_deck} / {@code repository_card_data}
  * protocol commands (all of which work without an active game), and
  * regenerates the cross-language fixtures the Python tests parse.
  * <p>
@@ -176,10 +176,10 @@ class CardIdentityRepositoryTest {
     }
 
     @Test
-    void globalCardDataExportsWithoutAGameAndWritesFixture() throws IOException {
+    void repositoryCardDataExportsWithoutAGameAndWritesFixture() throws IOException {
         requireDatabase();
         JsonObject response = handle(server(),
-                "{\"command\": \"global_card_data\", \"names\": "
+                "{\"command\": \"repository_card_data\", \"names\": "
                         + "[\"Forest\", \"Lightning Bolt\", \"Boseiju, Who Endures\"]}");
 
         assertThat(response.get("ok").getAsBoolean()).isTrue();
@@ -188,14 +188,14 @@ class CardIdentityRepositoryTest {
         assertThat(cards.toString()).contains("Forest", "Lightning Bolt", "Boseiju, Who Endures");
         assertThat(response.getAsJsonArray("resolutions")).hasSize(3);
 
-        writeFixture("global_card_data_response.json", response.toString());
+        writeFixture("repository_card_data_response.json", response.toString());
     }
 
     @Test
-    void globalCardDataFailsClosedOnAnUnknownName() {
+    void repositoryCardDataFailsClosedOnAnUnknownName() {
         requireDatabase();
         JsonObject response = handle(server(),
-                "{\"command\": \"global_card_data\", \"names\": "
+                "{\"command\": \"repository_card_data\", \"names\": "
                         + "[\"Forest\", \"No Such Card Ever Printed\"]}");
 
         assertThat(response.get("ok").getAsBoolean()).isFalse();

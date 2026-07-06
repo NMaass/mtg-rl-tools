@@ -243,16 +243,17 @@ class CabtBridge(object):
         data only — legal actions always come from ``observation.select``."""
         return self.request({"command": "all_card_data"})["cards"]
 
-    def global_card_data(self, names):
+    def repository_card_data(self, names):
         """Static card metadata for a set of card names, independent of any
         game (distinct from ``all_card_data``, which is the active game's deck
-        pool). ``names`` is an iterable of card names; each is resolved through
-        the repository and its metadata exported. Fails closed: if any name is
-        unknown the server raises ``CabtProtocolError`` (``UNKNOWN_CARD``)
-        rather than returning a partial export. Returns the list of card
-        dicts."""
+        pool). ``names`` is a required iterable of card names — this is a
+        by-name repository lookup, not a whole-database dump; each name is
+        resolved through the repository and its metadata exported. Fails
+        closed: if any name is unknown the server raises ``CabtProtocolError``
+        (``UNKNOWN_CARD``) rather than returning a partial export. Returns the
+        list of card dicts."""
         return self.request(
-            {"command": "global_card_data", "names": list(names)}
+            {"command": "repository_card_data", "names": list(names)}
         )["cards"]
 
     def visualize_data(self):

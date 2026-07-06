@@ -3,10 +3,10 @@
 Two layers, both runnable on a Python-only checkout:
 
 - ``FakeBridge`` unit tests exercise ``resolve_card`` / ``validate_deck`` /
-  ``global_card_data`` against a canned responder — the exact request each
+  ``repository_card_data`` against a canned responder — the exact request each
   helper sends and how it surfaces success and fail-closed errors — without
   launching the Java subprocess.
-- fixture tests parse the ``validate_deck`` / ``global_card_data`` responses
+- fixture tests parse the ``validate_deck`` / ``repository_card_data`` responses
   the Java ``CardIdentityRepositoryTest`` emits (refreshed by
   scripts/run-cabt-adapter-tests.sh; checked-in copies keep this green
   standalone).
@@ -120,17 +120,17 @@ class ValidateDeckHelperTest(unittest.TestCase):
         self.assertEqual(result["failures"][0]["error"], "UNKNOWN_CARD")
 
 
-class GlobalCardDataHelperTest(unittest.TestCase):
+class RepositoryCardDataHelperTest(unittest.TestCase):
     def test_returns_card_list(self):
         cards = [{"name": "Forest"}, {"name": "Lightning Bolt"}]
         bridge = FakeBridge(lambda req: {"ok": True, "cards": cards, "resolutions": []})
 
-        result = bridge.global_card_data(["Forest", "Lightning Bolt"])
+        result = bridge.repository_card_data(["Forest", "Lightning Bolt"])
 
         self.assertEqual(result, cards)
         self.assertEqual(
             bridge.sent[0],
-            {"command": "global_card_data", "names": ["Forest", "Lightning Bolt"]},
+            {"command": "repository_card_data", "names": ["Forest", "Lightning Bolt"]},
         )
 
     def test_fails_closed_on_unknown_name(self):
@@ -144,7 +144,7 @@ class GlobalCardDataHelperTest(unittest.TestCase):
         )
 
         with self.assertRaises(CabtProtocolError) as ctx:
-            bridge.global_card_data(["Forest", "Bogus"])
+            bridge.repository_card_data(["Forest", "Bogus"])
         self.assertEqual(ctx.exception.code, "UNKNOWN_CARD")
 
 
@@ -171,8 +171,8 @@ class FixtureParsingTest(unittest.TestCase):
             self.assertIn(entry["strategy"], ("EXACT", "NORMALIZED", "CLASS_HEURISTIC"))
             self.assertIn("count", entry)
 
-    def test_global_card_data_response_shape(self):
-        response = self._load("global_card_data_response.json")
+    def test_repository_card_data_response_shape(self):
+        response = self._load("repository_card_data_response.json")
 
         self.assertTrue(response["ok"])
         self.assertGreater(len(response["cards"]), 0)

@@ -29,7 +29,7 @@ if [ -f "$FIXTURES_SRC/card_data_response.json" ] && [ -f "$FIXTURES_SRC/dataset
     cp "$FIXTURES_SRC/card_data_response.json" "$FIXTURES_SRC/dataset_sample.jsonl" "$FIXTURES_DST/"
     # card-identity fixtures only exist when the DB-backed test ran (i.e. the
     # card database was scannable); refresh them when present.
-    for identity_fixture in validate_deck_response.json global_card_data_response.json; do
+    for identity_fixture in validate_deck_response.json repository_card_data_response.json; do
         if [ -f "$FIXTURES_SRC/$identity_fixture" ]; then
             cp "$FIXTURES_SRC/$identity_fixture" "$FIXTURES_DST/"
         fi

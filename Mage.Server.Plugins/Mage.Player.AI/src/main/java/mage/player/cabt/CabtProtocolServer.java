@@ -28,7 +28,7 @@ import java.util.Map;
  * <p>
  * Commands: {@code ping}, {@code capabilities}, {@code game_start},
  * {@code game_select}, {@code game_finish}, {@code resolve_card},
- * {@code validate_deck}, {@code all_card_data}, {@code global_card_data},
+ * {@code validate_deck}, {@code all_card_data}, {@code repository_card_data},
  * {@code visualize_data}. Unknown or malformed requests fail closed with an
  * error response; they never guess and never touch the running game. Invalid
  * selections return a structured error and leave the pending decision
@@ -89,8 +89,8 @@ public final class CabtProtocolServer {
                     return validateDeck(id, request);
                 case "all_card_data":
                     return allCardData(id);
-                case "global_card_data":
-                    return globalCardData(id, request);
+                case "repository_card_data":
+                    return repositoryCardData(id, request);
                 case "visualize_data":
                     return visualizeData(id);
                 default:
@@ -122,7 +122,7 @@ public final class CabtProtocolServer {
         JsonArray commands = new JsonArray();
         for (String name : new String[]{"ping", "capabilities", "game_start", "game_select",
                 "game_finish", "resolve_card", "validate_deck", "all_card_data",
-                "global_card_data", "visualize_data"}) {
+                "repository_card_data", "visualize_data"}) {
             commands.add(name);
         }
         response.add("commands", commands);
@@ -132,10 +132,10 @@ public final class CabtProtocolServer {
         }
         response.add("selectTypes", selectTypes);
         // all_card_data is game-scoped (the active game's deduped deck pool);
-        // global_card_data is the game-independent export keyed by card name.
-        // Clients read these fields to pick the command that fits their use.
+        // repository_card_data is the game-independent export keyed by card
+        // name. Clients read these fields to pick the command for their use.
         response.addProperty("cardDataScope", "ACTIVE_GAME_DECK_POOL");
-        response.addProperty("globalCardDataScope", "REPOSITORY_BY_NAME");
+        response.addProperty("repositoryCardDataScope", "REPOSITORY_BY_NAME");
         return GSON.toJson(response);
     }
 
@@ -244,18 +244,20 @@ public final class CabtProtocolServer {
     }
 
     /**
-     * Global, game-independent card-data export: resolves each requested name
-     * through the repository and exports the static metadata for the distinct
-     * canonical cards. Distinct from {@code all_card_data}, which is scoped to
-     * the active game's deck pool. Fails closed with {@code UNKNOWN_CARD} if
-     * any requested name is unresolved — never a partial export.
+     * Game-independent card-data export for a set of requested names: resolves
+     * each name through the repository (by card name — hence the required
+     * {@code names} list; this is not a whole-database dump) and exports the
+     * static metadata for the distinct canonical cards. Distinct from
+     * {@code all_card_data}, which is scoped to the active game's deck pool.
+     * Fails closed with {@code UNKNOWN_CARD} if any requested name is
+     * unresolved — never a partial export.
      */
-    private String globalCardData(JsonElement id, JsonObject request) {
+    private String repositoryCardData(JsonElement id, JsonObject request) {
         JsonElement namesElement = request.get("names");
         if (namesElement == null || !namesElement.isJsonArray()
                 || namesElement.getAsJsonArray().size() == 0) {
             return error(id, "MALFORMED_REQUEST",
-                    "global_card_data needs a non-empty \"names\": [card name, ...]");
+                    "repository_card_data needs a non-empty \"names\": [card name, ...]");
         }
         List<CardResolution> resolutions = new ArrayList<CardResolution>();
         JsonArray failures = new JsonArray();
