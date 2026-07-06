@@ -1,256 +1,313 @@
-# xmage-cabt-bridge
+# mtg-rl-tools
 
-A CABT-style option-index bridge around [XMage](https://github.com/magefree/mage):
-decisions the engine asks a player for are surfaced as prompts of indexed
-options, selections come back as indices, and the bridge validates and applies
-them through the engine's own APIs. Built as the Java half of a Python
-training harness for Magic: The Gathering agents.
+[![python-mirror-tests](https://github.com/NMaass/mtg-rl-tools/actions/workflows/python-mirror-tests.yml/badge.svg)](https://github.com/NMaass/mtg-rl-tools/actions/workflows/python-mirror-tests.yml)
 
-## Status: what works today, what doesn't
+Tools for building reinforcement-learning and imitation-learning workflows around Magic: The Gathering.
 
-Implemented and tested against the real engine (`CabtRealGameSmokeTest` runs
-actual `GameImpl` games through the bridge):
+This project connects three pieces that are usually separate:
 
-- **Priority with playable actions**: PASS_PRIORITY plus one option per
-  ability from `Player.getPlayable` (play land, cast spell, activate ability,
-  special action), dispatched through `PlayerImpl.activateAbility` — the
-  engine's answer is recorded, not assumed (a declined activation traces as
-  REJECTED). A smoke game plays a land from hand and casts a creature through
-  the real mana payment and stack-resolution path. This is the current root
-  priority implementation, not its final form: `getPlayableOptions` /
-  `getPlayableObjects` remain future refinements for alternate-cost and
-  casting-option payloads.
-- **Callback prompts**: targets, yes/no, generic choice, pile, modes,
-  numbers/X/multi-amount, trigger ordering, replacement effects, mana
-  payment, attacker/blocker declarations, mulligan — each with unit +
-  callback-boundary tests; priority, targeting, mana payment and mulligan
-  also covered by the full-engine smoke games.
-- **Decision traces**: every surfaced decision is numbered and traced
-  PENDING → SELECTED → APPLIED — or REJECTED when the engine declines the
-  selected action, or FAILED (with the error) when selecting, validating, or
-  applying throws — with the selected options resolvable per trace.
-- **Smoke-run artifact bundle**: the smoke test writes
-  `target/cabt-smoke-run/` (manifest, decklists, `observations.jsonl`,
-  `transitions.jsonl` with object-id zone-move deltas, `timeline.html`,
-  `final-state.json`, `invariants.json`) and fails unless the files are
-  mutually consistent — e.g. the selected PLAY_LAND option's card id is the
-  id that moved HAND → BATTLEFIELD, and the cast spell's id resolves
-  STACK → BATTLEFIELD.
-- **Fail-closed policy, enforced**: audited callbacks that are not surfaced
-  throw `CabtUnhandledDecisionException` instead of letting the inherited
-  `ComputerPlayer` AI decide; a reflection audit
-  (`CabtBridgePlayerOverrideAuditTest`) fails the suite if a SURFACED or
-  FAIL_CLOSED callback loses its override. Prompts reaching the bridge from
-  simulation/playable-check games fail closed too.
-- **Data layer**: static card metadata export and a JSONL transition dataset
-  writer (Java), with `python/magic_cabt` parsers tested against
-  Java-regenerated fixtures. The Python package also includes a local
-  MTG Arena `Player.log` normalizer that writes raw events, normalized events,
-  game history (game states plus paired decision prompts and the client's
-  chosen actions), per-match deck info, and summary JSON artifacts for later
-  XMage validation — validated against real multi-match `Player.log` captures.
-- **Subprocess protocol server + Python live-game client** (the CABT
-  competition loop): `CabtProtocolServer` speaks newline-delimited JSON over
-  stdin/stdout — `ping`, `capabilities`, `game_start`, `game_select`,
-  `game_finish`, `all_card_data`, `visualize_data` — backed by
-  `CabtGameSession` running a real `GameImpl` on a game thread. Selections
-  are validated before the engine is touched: invalid ones return structured
-  errors (`OPTION_INDEX_OUT_OF_RANGE`, `INVALID_SELECTION_COUNT`,
-  `DUPLICATE_SELECTION`) and leave the pending decision answerable; unknown
-  or malformed commands fail closed. Deck input is name+count entries
-  resolved to real card classes (`CabtDeckFactory`), failing closed on
-  unknown names; `game_start` takes optional `seed`, `maxTurns`, and player
-  names. The Python client (`magic_cabt.CabtBridge`) is the
-  `battle_start`/`battle_select`/`battle_finish`/`visualize_data`
-  equivalent. Tested at three boundaries: `CabtGameSessionTest` (session
-  API), `CabtProtocolServerTest` (raw request lines, full game from
-  serialized observations only, hidden-hand checks per observation), and
-  `python/tests/test_protocol_live.py` (real subprocess from Python).
+1. **A real rules engine**: XMage owns legality, phases, priority, the stack, mana payment, combat, and hidden-information boundaries.
+2. **A Python-friendly agent API**: game decisions are exposed as indexed legal options, and agents answer with option indices.
+3. **Local gameplay data capture**: MTG Arena `Player.log` files can be followed, mirrored into XMage, and recorded as CABT-style decision datasets.
 
-Not implemented yet — do not rely on these:
+The long-term goal is to make Magic agent research more reproducible: legal action spaces should come from a rules engine, observations should be explicit and hidden-information-safe, and recorded games should use the same decision format as self-play.
 
-- **Search/lookahead API** (the CABT `search_begin`/`search_step`
-  equivalent): no cloned-game forward model is exposed to Python yet.
-- **Global `all_card_data`** — the protocol's `all_card_data` is
-  game-scoped (exports the active game's deduped deck pool only);
-  `capabilities()` reports this as `"cardDataScope":
-  "ACTIVE_GAME_DECK_POOL"`. A global static card-data export is future
-  work.
-- **Full card-name resolution** — `CabtDeckFactory` uses a class-name
-  heuristic that works for simple names (Forest, Grizzly Bears) but
-  fails closed for split cards, variant suffixes, and any card whose
-  XMage class name differs from the naive transform. Full repository
-  lookup is future work.
-- **Amount-distribution targeting** (`chooseTargetAmount`) fails closed by
-  design until a distribution payload is built.
-- **Player callbacks outside the audited surface** still fall back to
-  `ComputerPlayer`; the audited surface and its enforcement are documented
-  in `docs/cabt-decision-surface.md`.
+---
 
-## Layout
+## Project status
 
-This repo is an **overlay**, not a fork: it contains only new files, at the
-same paths they occupy inside an XMage checkout.
+This is an active research/tooling project. The core loop is usable today for smoke games, local protocol experiments, and Arena-log dataset capture. It is not yet a complete competitive Magic training platform.
 
+### Current capabilities
+
+| Area | Status |
+| --- | --- |
+| XMage option-index bridge | Implemented. Real XMage player decisions are surfaced as `observation.select.option[]`, and selections are validated before touching the engine. |
+| Python live-game client | Implemented. `magic_cabt.CabtBridge` speaks newline-delimited JSON to the Java protocol server. |
+| Full-engine smoke games | Implemented. Tests drive real `GameImpl` games through priority, land play, spell casting, mana payment, stack resolution, mulligan, and hidden-hand checks. |
+| Card/deck identity | Implemented. Repository-backed card resolution, deck validation, `resolve_card`, `validate_deck`, and by-name `repository_card_data` are available. |
+| MTG Arena mirror/recorder | Implemented. A local Arena `Player.log` follower records CABT-format decisions and can mirror/replay the board in an XMage window. |
+| Dataset artifacts | Implemented. Smoke games and Arena sessions write JSONL observations, decisions, transitions, summaries, and replayable state streams. |
+| Search/lookahead API | Not implemented yet. A cloned-game `search_begin` / `search_step` API is on the roadmap. |
+
+---
+
+## How it works
+
+### XMage bridge
+
+The Java bridge lives in a new XMage package, `mage.player.cabt`, and does not modify XMage core files. It extends XMage's `ComputerPlayer` path, but replaces silent AI choices with a fail-closed bridge controller.
+
+At each player decision:
+
+1. XMage reaches a real engine callback such as priority, target selection, mana payment, combat declaration, mode selection, or mulligan.
+2. The bridge builds a prompt with indexed legal options.
+3. The Python side chooses option indices.
+4. The bridge validates the selection and applies it through XMage's own APIs.
+5. The game continues until the next required decision or game result.
+
+The important invariant is that the bridge does not invent legality. Legal choices come from XMage state and callbacks.
+
+### Python protocol
+
+The protocol server is a newline-delimited JSON subprocess interface:
+
+```json
+{"command":"game_start","decks":[deck0,deck1],"options":{"seed":7,"maxTurns":20}}
+{"command":"game_select","select":[0]}
+{"command":"game_finish"}
 ```
+
+The Python client wraps this as:
+
+```python
+from magic_cabt import CabtBridge, load_decklist
+
+deck = load_decklist("examples/basic_deck.txt")
+
+with CabtBridge() as bridge:
+    response = bridge.game_start(deck, deck, seed=7, max_turns=20)
+    while not bridge.finished:
+        select = response["observation"]["select"]
+        # Agent policy goes here. For example, choose the first legal option.
+        response = bridge.game_select([0])
+    print(bridge.result)
+```
+
+### Arena mirror and recorder
+
+The Arena mirror is a separate local data-capture path:
+
+```text
+MTG Arena Player.log
+        -> log follower
+        -> GRE state tracker
+        -> hidden-info-safe board snapshots
+        -> CABT-format decision records
+        -> optional XMage visual replay
+```
+
+It records the local player's real Arena decisions as indexed options paired with the pre-decision board state. Opponent hidden cards are redacted to face-down placeholders in the default output.
+
+---
+
+## Repository layout
+
+This repository is an **overlay** for an XMage checkout, not a fork. Files are stored at the paths where they should be copied inside `magefree/mage`.
+
+```text
 Mage.Server.Plugins/Mage.Player.AI/
-  src/main/java/mage/player/cabt/   the bridge (player, prompts, appliers, data export,
-                                    game session + protocol server)
-  src/test/java/mage/player/cabt/   unit + callback-boundary + full-engine smoke tests
-  docs/                             decision-surface audit, verification guide
+  src/main/java/mage/player/cabt/      XMage bridge, prompts, protocol server,
+                                      card identity, dataset writers
+  src/test/java/mage/player/cabt/      unit, callback-boundary, protocol, and
+                                      full-engine smoke tests
+  docs/                               decision-surface and verification docs
+
 Mage.Client/
-  src/main/java/mage/client/cabtmirror/   XMage-client display for the live Arena
-                                          mirror (puppet game + GameView renderer)
-python/                             magic_cabt package (card data + dataset parsers,
-                                    live-game protocol client, arena_mirror live
-                                    follower/tracker/recorder/replay)
-examples/                           random legal agent, example deck, self-play runner
-Arena Mirror.bat                    double-click launcher for the follower GUI
-scripts/                            run-cabt-adapter-tests.sh,
-                                    setup-arena-mirror.ps1, arena-mirror.ps1,
-                                    arena-mirror-gui.ps1,
-                                    create-desktop-shortcut.ps1
-.github/workflows/                  python-mirror-tests.yml (Python CI gate)
+  src/main/java/mage/client/cabtmirror/ XMage client-side Arena mirror display
+
+python/
+  magic_cabt/                         Python client, parsers, Arena mirror,
+                                      replay and dataset utilities
+  tests/                              Python unit and protocol tests
+
+examples/                             basic deck, random legal agent, self-play
+scripts/                              setup, verification, and mirror launchers
+docs/                                user-facing run guides
+.github/workflows/                    Python mirror/package CI
 ```
 
-## Using it
+---
 
-Apply the overlay onto an XMage checkout and run the suite from there:
+## Quick start: run the XMage bridge tests
+
+Clone this repo and a fresh XMage checkout, then apply the overlay and run the verification suite.
 
 ```sh
+git clone https://github.com/NMaass/mtg-rl-tools.git
 git clone https://github.com/magefree/mage.git
-rsync -a --exclude .git --exclude README.md ./ mage/
-cd mage && scripts/run-cabt-adapter-tests.sh
+rsync -a --exclude .git --exclude README.md mtg-rl-tools/ mage/
+cd mage
+scripts/run-cabt-adapter-tests.sh
 ```
 
-No XMage core file is modified — the bridge player extends `ComputerPlayer`
-and everything lives in the new `mage.player.cabt` package. The code targets
-Java 8 (XMage's build level).
+The verification script runs:
 
-### Playing a live game from Python
+- Java unit tests for prompt builders, validators, serializers, card data, and dataset writing.
+- Callback-boundary tests for real XMage player callbacks.
+- Full-engine smoke games through `GameImpl`.
+- Python tests against Java-regenerated fixtures.
+- Python protocol smoke tests when the protocol server classpath is available.
 
-After the suite has run once (it writes the launch classpath to
-`Mage.Server.Plugins/Mage.Player.AI/target/cabt-classpath.full.txt`):
+More detail: [`Mage.Server.Plugins/Mage.Player.AI/docs/cabt-verification.md`](Mage.Server.Plugins/Mage.Player.AI/docs/cabt-verification.md)
+
+---
+
+## Quick start: run Python self-play
+
+After the verification script has built the protocol server classpath:
 
 ```sh
 export MAGIC_CABT_CLASSPATH="$(cat Mage.Server.Plugins/Mage.Player.AI/target/cabt-classpath.full.txt)"
 python3 examples/run_selfplay.py --seed 42 --max-turns 15
 ```
 
-runs two random legal agents through a real engine game and writes a replay
-to `target/cabt-selfplay/replay.jsonl`. The agent contract is the CABT one —
-observation dict in, option-index list out:
+This runs two simple legal-option agents through a real XMage game and writes:
+
+```text
+target/cabt-selfplay/replay.jsonl
+```
+
+The example agent is intentionally simple. It exists to prove the protocol, not to play well.
+
+---
+
+## Quick start: mirror MTG Arena games locally
+
+The Arena mirror currently targets Windows because MTG Arena and the provided launcher scripts are Windows-oriented.
+
+### 1. Prepare XMage and the mirror
+
+You need:
+
+- JDK 17
+- Maven 3.x
+- Python 3.9+
+- An XMage checkout
+- MTG Arena with **Detailed Logs (Plugin Support)** enabled
+
+Run the setup script from this repo:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup-arena-mirror.ps1 `
+  -XmageDir C:\path\to\mage
+```
+
+### 2. Start the GUI
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\arena-mirror-gui.ps1
+```
+
+Or double-click `Arena Mirror.bat` from the repository root.
+
+The GUI can:
+
+- locate the Arena `Player.log`,
+- start/stop live following,
+- open XMage when a live game appears,
+- record decisions and states,
+- list recorded bundles,
+- replay a bundle back into XMage.
+
+Step-by-step guide: [`docs/RUNNING.md`](docs/RUNNING.md)
+
+### Recorded files
+
+Each run writes a bundle such as:
+
+```text
+arena-mirror-runs/<timestamp>/
+  decisions.jsonl
+  mirror_states.jsonl
+  game_history.jsonl
+  summary.json
+  card_cache.json
+```
+
+`decisions.jsonl` is the main training-data artifact: one pre-decision observation, one indexed legal-option list, and the indices chosen by the Arena player.
+
+---
+
+## Card and deck identity
+
+The bridge includes a repository-backed card resolver so real decklists can be validated before a game starts.
+
+Protocol commands:
+
+| Command | Purpose |
+| --- | --- |
+| `resolve_card` | Resolve one requested card name and return diagnostics. |
+| `validate_deck` | Validate a full name/count decklist without starting a game. |
+| `repository_card_data` | Export static card metadata for a requested list of names. |
+| `all_card_data` | Export the active game's deduped deck-pool metadata. Requires an active game. |
+
+Resolution is fail-closed. Unknown cards return structured diagnostics rather than being omitted or replaced.
+
+Python example:
 
 ```python
-import random
-from magic_cabt import CabtBridge, load_decklist
+from magic_cabt import CabtBridge
 
-deck = load_decklist("examples/basic_deck.txt")   # "24 Forest" per line
 with CabtBridge() as bridge:
-    response = bridge.game_start(deck, deck, seed=7, max_turns=20)
-    while not bridge.finished:
-        select = response["observation"]["select"]
-        count = random.randint(select["minCount"], select["maxCount"])
-        picks = random.sample(range(len(select["option"])), count)
-        response = bridge.game_select(picks)
-    print(bridge.result["winner"])
+    print(bridge.resolve_card("Boseiju, Who Endures"))
+    validation = bridge.validate_deck("24 Forest\n4 Lightning Bolt")
+    if not validation["valid"]:
+        raise ValueError(validation["failures"])
+    cards = bridge.repository_card_data(["Forest", "Lightning Bolt"])
 ```
 
-Key docs:
+---
 
-- `Mage.Server.Plugins/Mage.Player.AI/docs/cabt-decision-surface.md` — the
-  audited decision surface and fail-closed policy.
-- `Mage.Server.Plugins/Mage.Player.AI/docs/cabt-verification.md` — test
-  layers and failure-to-feature mapping.
+## Roadmap
 
-### Live MTG Arena mirror (`magic_cabt.arena_mirror`)
+Near-term priorities:
 
-Follow a live MTG Arena game from its `Player.log`, mirror the board into an
-XMage window in real time, and record a CABT-format replay bundle — the same
-`observation.select` option-index shape the engine bridge emits, so Arena
-games and self-play games share one dataset schema.
+- **Cloned-game search/lookahead**: expose `search_begin`, `search_step`, and `search_release` so agents can evaluate candidate lines without mutating the live game.
+- **More real-card regression scenarios**: expand beyond the Forest/Bears smoke path into targeted spells, modal spells, triggers, replacement effects, X spells, and combat-heavy games.
+- **Amount-distribution targeting**: surface `chooseTargetAmount` as an explicit prompt instead of failing closed.
+- **Priority payload refinement**: improve option payloads for alternate costs, special casting paths, optional additional costs, activated abilities, and cast-from-non-hand zones.
+- **Dataset tooling**: add utilities for filtering, validating, joining, and sampling self-play and Arena-recorded JSONL data.
+- **Full overlay CI**: run the complete Java/XMage overlay suite in CI, not only the Python-only test gate.
 
-**→ Step-by-step run guide: [docs/RUNNING.md](docs/RUNNING.md)** (setup, the
-GUI, the Replays tab, the recorded files, troubleshooting).
+Longer-term goals:
 
-```
-Arena Player.log ──tail──▶ normalizer ──▶ GRE state tracker ──▶ snapshot
-                                    │                              │
-                            decision prompts + responses           ├─▶ XMage display (puppet game, GameView)
-                            (indexed option lists)                 └─▶ CABT bundle (decisions.jsonl, mirror_states.jsonl)
-```
+- trainable baseline agents,
+- benchmark environments,
+- stronger replay validation between Arena and XMage state,
+- pluggable evaluation harnesses for RL and imitation-learning experiments.
 
-One-time setup (needs JDK 17 + Maven; copies this overlay into an XMage
-checkout, builds it, and prewarms XMage's card database):
+---
 
-```powershell
-scripts\setup-arena-mirror.ps1 -XmageDir C:\path\to\xmage-checkout
-```
+## Contributing
 
-Then, with MTG Arena set to log detailed data (Options → Account → "Detailed
-Logs (Plugin Support)"), launch the mirror and play a match.
+Contributions should preserve the core safety and correctness invariants of the project.
 
-**Double-click launcher (easiest):** double-click **`Arena Mirror.bat`** in
-the repo root to open the follower GUI — no terminal needed. For a Desktop
-icon, run once:
+### Design rules
 
-```powershell
-scripts\create-desktop-shortcut.ps1        # adds an "Arena Mirror" Desktop icon
-```
+- **XMage owns legality.** Do not replace engine legality with a static action enum.
+- **Fail closed.** If a decision surface is not implemented, the bridge should throw a clear error instead of silently letting inherited AI choose.
+- **Preserve hidden information.** Observations and recorded datasets must not leak opponent private zones.
+- **Keep protocol shapes stable.** Python tests use Java-regenerated fixtures so format changes should be intentional and tested.
+- **Add prompt surfaces completely.** New decision surfaces need an audit entry, builder/applier code, bridge override, and tests.
 
-**Or from a terminal:**
+### Useful commands
 
-```powershell
-scripts\arena-mirror-gui.ps1               # window: Locate MTGA logs, live
-                                           # log + actions panes, Start/Stop
-scripts\arena-mirror.ps1 live              # CLI: follows the default Player.log
-scripts\arena-mirror.ps1 live --from-start # also process the current log first
-scripts\arena-mirror.ps1 replay <bundle>   # watch a recorded bundle back
+```sh
+# Full adapter verification from an overlaid XMage checkout
+scripts/run-cabt-adapter-tests.sh
+
+# Python-only tests
+cd python && python3 -m unittest discover -s tests -v
+
+# Run self-play once the classpath has been generated
+python3 examples/run_selfplay.py --seed 42 --max-turns 15
 ```
 
-The **GUI** has two tabs:
+### Where to start
 
-- **Follow** — a "Locate MTGA logs" button, the log/status feed, and the
-  recorded actions as they happen. With "Open XMage on live game" checked it
-  launches XMage automatically once a live game appears in the log, then
-  mirrors the current game while recording. The XMage window stays open across
-  Start/Stop until you close it (or close the GUI).
-- **Replays** — a table of every recorded bundle (with its game/decision/state
-  counts). Select one and click **Watch replay** (or double-click) to play it
-  back into XMage at the chosen speed.
+Good first contributions are usually:
 
-XMage's own audio is muted for the mirror window (the user's persisted XMage
-sound settings are left untouched). If XMage isn't built yet, the GUI still
-opens and records — it just can't show the board until `setup-arena-mirror.ps1`
-has been run.
+- adding a failing regression test for a specific card or prompt shape,
+- improving README/docs clarity,
+- adding Python dataset utilities,
+- expanding Arena mirror parsing coverage with sanitized sample logs,
+- adding a focused smoke scenario for one Magic mechanic.
 
-Each live run writes `arena-mirror-runs/<timestamp>/`:
+For prompt-surface work, start with [`Mage.Server.Plugins/Mage.Player.AI/docs/cabt-decision-surface.md`](Mage.Server.Plugins/Mage.Player.AI/docs/cabt-decision-surface.md).
 
-- `decisions.jsonl` — one CABT decision per line: the pre-decision board
-  observation, the indexed legal-option list, and the indices the Arena
-  player actually chose.
-- `mirror_states.jsonl` — every board snapshot streamed to the display; also
-  the replay playback stream.
-- `game_history.jsonl` (raw game-state payloads redacted), `summary.json`,
-  `card_cache.json`. `--raw-audit` (CLI) additionally writes an unredacted
-  `raw_audit.jsonl` for debugging.
+---
 
-Hidden information is enforced, not assumed: any hand not owned by the log's
-own seat (and every hand until the local seat is known) is redacted to
-face-down placeholders — no grpId, name, or type line — **even if Arena
-describes the card**. Enrichment refuses to resolve a name for a redacted
-card, and raw Arena game-state payloads are kept out of the default bundle.
-Card names for visible cards resolve from MTG Arena's own local card database.
+## License
 
-Verified against real multi-match captures: decision prompt↔response pairing
-is exact (respId == msgId) at 1145/1145 across four logs (17 games), a
-simulated live tail reproduces the batch parse byte-for-byte, and replaying a
-recorded bundle re-emits every state and decision in the original order
-(`python -m unittest tests.test_arena_mirror tests.test_arena_mirror_e2e`).
-
-## History note
-
-The initial commits import the code feature by feature in the order the
-features were built. Files are imported at their final state, so each commit
-reads as one feature, but intermediate commits are not individually
-buildable snapshots.
+No open-source license has been added yet. Until a license is chosen, treat the code as publicly visible but not formally licensed for reuse.
