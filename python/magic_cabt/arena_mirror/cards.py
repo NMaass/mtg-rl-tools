@@ -9,7 +9,13 @@ replays resolve cards on machines without MTGA installed.
 import glob
 import json
 import os
+import re
 import sqlite3
+
+# MTGA localization strings occasionally embed inline sprite markup, e.g.
+# ``<sprite="SpriteSheet_MiscIcons" name="arena_a">Cauldron Familiar`` for the
+# Alchemy "A" badge. Strip any such tags so a clean card name comes through.
+_SPRITE_TAG_RE = re.compile(r"<[^>]*>")
 
 __all__ = ["CardDatabase", "CardInfo", "default_mtga_card_db_path"]
 
@@ -33,11 +39,13 @@ class CardInfo(object):
     """One Arena card: the fields the mirror and recorder need."""
 
     __slots__ = ("grp_id", "name", "types", "subtypes", "supertypes",
-                 "power", "toughness", "is_token", "linked_face_grp_ids")
+                 "power", "toughness", "is_token", "linked_face_grp_ids",
+                 "colors", "color_identity", "is_rebalanced", "expansion")
 
     def __init__(self, grp_id, name, types=None, subtypes=None, supertypes=None,
                  power=None, toughness=None, is_token=False,
-                 linked_face_grp_ids=None):
+                 linked_face_grp_ids=None, colors="", color_identity="",
+                 is_rebalanced=False, expansion=None):
         self.grp_id = grp_id
         self.name = name
         self.types = types or []
@@ -47,6 +55,12 @@ class CardInfo(object):
         self.toughness = toughness
         self.is_token = is_token
         self.linked_face_grp_ids = linked_face_grp_ids or []
+        # WUBRG letters, e.g. "UB"; colors = the card's face color, while
+        # color_identity also counts mana symbols (so a dual land is colored).
+        self.colors = colors or ""
+        self.color_identity = color_identity or ""
+        self.is_rebalanced = bool(is_rebalanced)
+        self.expansion = expansion or None
 
     def to_dict(self):
         return {
@@ -59,6 +73,10 @@ class CardInfo(object):
             "toughness": self.toughness,
             "isToken": self.is_token,
             "linkedFaceGrpIds": self.linked_face_grp_ids,
+            "colors": self.colors,
+            "colorIdentity": self.color_identity,
+            "isRebalanced": self.is_rebalanced,
+            "expansion": self.expansion,
         }
 
     @classmethod
@@ -73,6 +91,10 @@ class CardInfo(object):
             toughness=data.get("toughness"),
             is_token=bool(data.get("isToken")),
             linked_face_grp_ids=data.get("linkedFaceGrpIds") or [],
+            colors=data.get("colors") or "",
+            color_identity=data.get("colorIdentity") or "",
+            is_rebalanced=bool(data.get("isRebalanced")),
+            expansion=data.get("expansion"),
         )
 
 
@@ -156,13 +178,15 @@ class CardDatabase(object):
     def _query(self, grp_id):
         row = self._connection.execute(
             "SELECT TitleId, Types, Subtypes, Supertypes, Power, Toughness,"
-            "       IsToken, LinkedFaceGrpIds"
+            "       IsToken, LinkedFaceGrpIds, Colors, ColorIdentity,"
+            "       IsRebalanced, ExpansionCode"
             "  FROM Cards WHERE GrpId = ?",
             (grp_id,),
         ).fetchone()
         if row is None:
             return None
-        title_id, types, subtypes, supertypes, power, toughness, is_token, faces = row
+        (title_id, types, subtypes, supertypes, power, toughness, is_token,
+         faces, colors, color_identity, is_rebalanced, expansion) = row
         name = self._localize(title_id)
         if name is None:
             return None
@@ -176,6 +200,10 @@ class CardDatabase(object):
             toughness=toughness if toughness not in ("", None) else None,
             is_token=bool(is_token),
             linked_face_grp_ids=_int_list(faces),
+            colors=_color_letters(colors),
+            color_identity=_color_letters(color_identity),
+            is_rebalanced=bool(is_rebalanced),
+            expansion=expansion or None,
         )
 
     def _localize(self, loc_id):
@@ -187,7 +215,10 @@ class CardDatabase(object):
             " ORDER BY Formatted LIMIT 1",
             (loc_id,),
         ).fetchone()
-        return row[0] if row else None
+        if not row or row[0] is None:
+            return None
+        cleaned = _SPRITE_TAG_RE.sub("", row[0]).strip()
+        return cleaned or None
 
     def _enum_names(self, enum_type, value):
         names = []
@@ -204,6 +235,17 @@ class CardDatabase(object):
                 self._enum_cache[key] = row[0] if row else str(raw)
             names.append(self._enum_cache[key])
         return names
+
+
+# MTGA color enum -> WUBRG letter (1=W, 2=U, 3=B, 4=R, 5=G).
+_COLOR_LETTERS = {1: "W", 2: "U", 3: "B", 4: "R", 5: "G"}
+
+
+def _color_letters(value):
+    """MTGA Colors/ColorIdentity ('3,2') -> WUBRG-ordered letters ('UB')."""
+    letters = [_COLOR_LETTERS[i] for i in sorted(set(_int_list(value)))
+               if i in _COLOR_LETTERS]
+    return "".join(letters)
 
 
 def _int_list(value):

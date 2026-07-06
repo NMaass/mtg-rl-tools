@@ -643,6 +643,186 @@ class ReplayDiscoveryTest(unittest.TestCase):
             shutil.rmtree(root, ignore_errors=True)
 
 
+class MetadataTest(unittest.TestCase):
+    """Match metadata: players, colors/archetype, event, result, title."""
+
+    def _fake_card_db(self, colors_by_id, expansion=None):
+        class FakeInfo(object):
+            def __init__(self, ci):
+                self.color_identity = ci
+                self.expansion = expansion
+                self.supertypes = []
+
+        class FakeDB(object):
+            def lookup(self, grp_id):
+                ci = colors_by_id.get(grp_id)
+                return FakeInfo(ci) if ci is not None else None
+
+        return FakeDB()
+
+    def test_guild_and_event_names(self):
+        from magic_cabt.arena_mirror.metadata import (
+            guild_name, pretty_event_name)
+        self.assertEqual("Dimir", guild_name("UB"))
+        self.assertEqual("Dimir", guild_name("BU"))  # order-independent
+        self.assertEqual("Mono-Red", guild_name("R"))
+        self.assertEqual("Jeskai", guild_name("URW"))
+        self.assertEqual("4-Color", guild_name("WUBR"))
+        # Limited names the set; Constructed names the format
+        self.assertEqual("Marvel's Spider-Man Traditional Draft",
+                         pretty_event_name("TradDraft_OM1_20250923"))
+        self.assertEqual("Bloomburrow Premier Draft",
+                         pretty_event_name("PremierDraft_BLB_20240730"))
+        self.assertEqual("Standard", pretty_event_name("Ladder"))
+        self.assertEqual("Standard", pretty_event_name("Play"))
+        self.assertEqual("Alchemy", pretty_event_name("Alchemy_Ladder"))
+        self.assertEqual("Historic (Bo3)",
+                         pretty_event_name("Traditional_Historic_Ladder"))
+        self.assertEqual("Standard (Bo3)",
+                         pretty_event_name("Traditional_Ladder"))
+        self.assertEqual("Explorer", pretty_event_name("Explorer_Play"))
+        # unknown set code falls back to the raw code, never lies
+        self.assertEqual("ZZZ Premier Draft",
+                         pretty_event_name("PremierDraft_ZZZ_20990101"))
+
+    def test_collector_builds_match_title(self):
+        from magic_cabt.arena_mirror.metadata import MatchMetadataCollector
+
+        match_id = "m-123"
+        collector = MatchMetadataCollector()
+        collector.observe({
+            "type": "ARENA_CONNECT_RESP", "timestamp": "2025-10-10T13:00:00",
+            "deckInfo": {"seatId": 1, "mainDeckArenaIds": [70228, 70228, 999]},
+        })
+        collector.observe({
+            "type": "ARENA_MATCH_STATE_CHANGED", "timestamp": "2025-10-10T13:00:01",
+            "matchId": match_id,
+            "payload": {"gameRoomInfo": {"gameRoomConfig": {
+                "matchId": match_id,
+                "reservedPlayers": [
+                    {"systemSeatId": 1, "teamId": 1, "playerName": "Nick#123",
+                     "eventId": "Ladder"},
+                    {"systemSeatId": 2, "teamId": 2, "playerName": "Opp"},
+                ]}}},
+        })
+        collector.observe({
+            "type": "ARENA_GAME_OVER", "timestamp": "2025-10-10T13:20:00",
+            "matchId": match_id,
+            "payload": {"resultList": [
+                {"scope": "MatchScope_Game", "winningTeamId": 2},
+                {"scope": "MatchScope_Game", "winningTeamId": 1},
+                {"scope": "MatchScope_Game", "winningTeamId": 1},
+                {"scope": "MatchScope_Match", "winningTeamId": 1},
+            ]},
+        })
+        # Cauldron Familiar (70228) is black; 999 unknown -> ignored.
+        out = collector.finalize(self._fake_card_db({70228: "B"}))
+        self.assertEqual(1, len(out["matches"]))
+        match = out["matches"][0]
+        self.assertEqual("Nick", match["you"]["name"])
+        self.assertEqual("Opp", match["opponent"]["name"])
+        self.assertEqual("Mono-Black", match["you"]["archetype"])
+        self.assertEqual("Standard", match["eventName"])  # bare Ladder = Standard
+        self.assertEqual("win", match["result"])
+        self.assertEqual("2-1", match["gameRecord"])
+        self.assertIn("Mono-Black vs Opp", match["title"])
+        self.assertIn("Win (2-1)", match["title"])
+        self.assertIn("Standard", match["title"])
+        # headline fields promoted to the top level for the replay list
+        self.assertEqual(match["title"], out["title"])
+        self.assertEqual("win", out["result"])
+
+    def test_opponent_colors_from_public_board(self):
+        from magic_cabt.arena_mirror.metadata import MatchMetadataCollector
+
+        collector = MatchMetadataCollector()
+        collector.observe({
+            "type": "ARENA_MATCH_STATE_CHANGED", "matchId": "m",
+            "timestamp": "2025-10-10T13:00:00",
+            "payload": {"gameRoomInfo": {"gameRoomConfig": {
+                "matchId": "m",
+                "reservedPlayers": [
+                    {"systemSeatId": 1, "teamId": 1, "playerName": "Me"},
+                    {"systemSeatId": 2, "teamId": 2, "playerName": "You"},
+                ]}}},
+        })
+        collector.note_snapshot({
+            "matchId": "m", "localSeat": 1,
+            "timestamp": "2025-10-10T13:05:00",
+            "players": [{"seat": 1, "name": "Me"}, {"seat": 2, "name": "You"}],
+            "zones": {"battlefield": [
+                {"controllerSeat": 2, "colors": "U"},
+                {"controllerSeat": 2, "colors": "R"},
+                {"controllerSeat": 1, "colors": "G"},
+            ]},
+        })
+        out = collector.finalize(card_db=None)
+        match = out["matches"][0]
+        self.assertEqual("Izzet", match["opponent"]["archetype"])
+
+
+class ReplayControlTest(unittest.TestCase):
+    """Decision classification + seek/jump logic for the interactive viewer."""
+
+    def _decision(self, seq, opt_type, chosen):
+        return {
+            "sequence": seq, "matchId": "m",
+            "observation": {
+                "current": {"gameInstance": 1, "seq": seq},
+                "select": {"type": "ACTIONSAVAILABLEREQ", "option": [
+                    {"index": 0, "type": "PLAY", "label": "Play a land"},
+                    {"index": 1, "type": "PASS", "label": "PASS"},
+                ]},
+            },
+            "select": chosen,
+        }
+
+    def test_decision_is_pass(self):
+        from magic_cabt.arena_mirror.replay import decision_is_pass
+        self.assertTrue(decision_is_pass(self._decision(2, "PASS", [1])))
+        self.assertFalse(decision_is_pass(self._decision(3, "PLAY", [0])))
+        # empty answer to "actions available" is an auto-pass
+        self.assertTrue(decision_is_pass(self._decision(4, None, [])))
+
+    def _write_bundle(self, directory):
+        def state(seq, turn):
+            return {"gameInstance": 1, "seq": seq, "matchId": "m",
+                    "turnNumber": turn, "phase": "Phase_Main1",
+                    "timestamp": "2025-10-10T13:00:%02d" % seq,
+                    "players": [{"seat": 1, "name": "Me"},
+                                {"seat": 2, "name": "You"}],
+                    "localSeat": 1}
+        with open(os.path.join(directory, "mirror_states.jsonl"), "w") as fh:
+            for seq in (1, 2, 3):
+                fh.write(json.dumps(state(seq, 1)) + "\n")
+        with open(os.path.join(directory, "decisions.jsonl"), "w") as fh:
+            fh.write(json.dumps(self._decision(2, "PASS", [1])) + "\n")
+            fh.write(json.dumps(self._decision(3, "PLAY", [0])) + "\n")
+
+    def test_jump_to_next_and_next_meaningful(self):
+        from magic_cabt.arena_mirror.replay import ReplayController
+        directory = tempfile.mkdtemp()
+        try:
+            self._write_bundle(directory)
+            reports = []
+            controller = ReplayController(
+                directory, display=None,
+                on_progress=lambda info: reports.append(info))
+            self.assertEqual(3, controller.total)
+            controller._render(0)
+            # next decision (any) is the pass at state index 1
+            controller._jump(meaningful=False)
+            self.assertEqual(1, controller._index)
+            # from the start, the next *non-pass* action is at index 2
+            controller._render(0)
+            controller._jump(meaningful=True)
+            self.assertEqual(2, controller._index)
+            # progress reports carry turn + phase for the readout
+            self.assertTrue(any(r.get("phase") == "Main1" for r in reports))
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
 class LauncherTest(unittest.TestCase):
     """The Python launcher must target the real Java class + package."""
 

@@ -20,6 +20,8 @@ crash loses nothing already seen):
 import json
 import os
 
+from .metadata import MatchMetadataCollector
+
 __all__ = ["MirrorRecorder"]
 
 # History event types that carry raw Arena game-state payloads (players,
@@ -51,6 +53,7 @@ class MirrorRecorder(object):
                 os.path.join(output_dir, "raw_audit.jsonl"), "a",
                 encoding="utf-8")
         self._grp_ids = set()
+        self._meta = MatchMetadataCollector()
         self.counts = {
             "decisions": 0,
             "decisionsMatched": 0,
@@ -81,8 +84,12 @@ class MirrorRecorder(object):
         self._write(self._states, entry)
         self.counts["mirrorStates"] += 1
         self._collect_grp_ids(snapshot)
+        self._meta.note_snapshot(entry)
 
     def record_history_event(self, event):
+        # learn match metadata (players, event, result) from the full event
+        # before any redaction strips fields
+        self._meta.observe(event)
         # the full, unredacted event only ever reaches the opt-in audit file
         if self._audit is not None:
             self._write(self._audit, event)
@@ -106,8 +113,12 @@ class MirrorRecorder(object):
             if handle is not None:
                 handle.flush()
         summary = dict(self.counts)
-        summary["schemaVersion"] = 1
+        summary["schemaVersion"] = 2
         summary["format"] = "cabt-arena-mirror"
+        try:
+            summary.update(self._meta.finalize(self.card_db))
+        except Exception:
+            pass  # metadata is best-effort; never lose the counts summary
         with open(os.path.join(self.output_dir, "summary.json"), "w",
                   encoding="utf-8") as handle:
             json.dump(summary, handle, indent=2, sort_keys=True)
