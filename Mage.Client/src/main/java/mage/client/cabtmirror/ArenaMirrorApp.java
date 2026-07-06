@@ -88,8 +88,10 @@ public final class ArenaMirrorApp {
             return;
         }
 
-        // the real XMage client startup (splash, look&feel, card db, plugins)
-        MageFrame.main(new String[]{});
+        // the real XMage client startup (splash, look&feel, card db, plugins).
+        // "-gray" drops XMage's decorative desktop art for a plain backdrop, so
+        // the empty area around a sparse mirrored board isn't a distraction.
+        MageFrame.main(new String[]{"-gray"});
         waitForMageFrame();
         muteClientAudio();
         tuneBoardForViewing();
@@ -337,6 +339,12 @@ public final class ArenaMirrorApp {
             // apply the tuned card sizes and strip the interactive-only chrome
             mage.client.util.GUISizeHelper.refreshGUIAndCards(false);
             trimBoardControls();
+            // GamePanel restores its split-pane dividers on a queued
+            // invokeLater chain; widen the board once that has settled
+            javax.swing.Timer arrange = new javax.swing.Timer(
+                    400, e -> widenBoard());
+            arrange.setRepeats(false);
+            arrange.start();
         });
         pushView();
         return ok().toString();
@@ -442,19 +450,53 @@ public final class ArenaMirrorApp {
         }
     }
 
+    /**
+     * Reclaim the board width XMage reserves for a live player. The game area
+     * shares the window with an (empty) chat/log column and a big-card preview
+     * column; in a passive mirror those swallow ~35% of the width and leave the
+     * battlefield squeezed into the left. Collapse the chat column entirely and
+     * shrink the preview so the battlefield gets the room. Uses XMage's own
+     * "hide right" idiom (min-size 0 + divider at 1.0) on {@code
+     * splitBattlefieldAndChats}. Best-effort via reflection.
+     */
+    private void widenBoard() {
+        GamePanel panel = MageFrame.getGame(gameId);
+        if (panel == null) {
+            return;
+        }
+        Object battlefieldChats = getField(panel, "splitBattlefieldAndChats");
+        if (battlefieldChats instanceof javax.swing.JSplitPane) {
+            javax.swing.JSplitPane split = (javax.swing.JSplitPane) battlefieldChats;
+            java.awt.Component chat = split.getRightComponent();
+            if (chat != null) {
+                chat.setMinimumSize(new java.awt.Dimension());
+                chat.setVisible(false);
+            }
+            split.setDividerSize(0);
+            split.setResizeWeight(1.0d);   // give the battlefield all resizes
+            split.setDividerLocation(1.0d);
+            split.revalidate();
+        }
+    }
+
     private static void hideComponent(Object owner, String fieldName) {
+        Object value = getField(owner, fieldName);
+        if (value instanceof java.awt.Component) {
+            ((java.awt.Component) value).setVisible(false);
+        }
+    }
+
+    private static Object getField(Object owner, String fieldName) {
         try {
             Field field = findField(owner.getClass(), fieldName);
             if (field == null) {
-                return;
+                return null;
             }
             field.setAccessible(true);
-            Object value = field.get(owner);
-            if (value instanceof java.awt.Component) {
-                ((java.awt.Component) value).setVisible(false);
-            }
+            return field.get(owner);
         } catch (ReflectiveOperationException | RuntimeException e) {
-            logger.debug("mirror: could not hide " + fieldName);
+            logger.debug("mirror: could not read " + fieldName);
+            return null;
         }
     }
 
