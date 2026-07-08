@@ -6,10 +6,10 @@
         --out annotations.jsonl \
         --top-k 5
 
-Reads any decision-record stream ``magic_cabt.training.records`` understands
-(Java transition dataset, self-play / human replay frames, Arena bundles),
-scores every option of each decision with the chosen policy, and writes one
-annotation per decision::
+Reads any decision-record stream ``magic_cabt.training`` understands (Java
+transition dataset, self-play / human replay frames, Arena bundles), scores
+every option of each decision with the chosen policy, and writes one annotation
+per decision::
 
     {"gameId": ..., "sequenceNumber": 123, "policy": "first",
      "topK": [{"index": 2, "score": 1.0, "label": "Play Mountain"}],
@@ -28,15 +28,12 @@ import sys
 
 from magic_cabt.agents import make_agent, options_of, select_block
 
-# Primary dependency: Agent 1's canonical DecisionRecord reader. It may not be
-# merged yet (issue #12 develops in parallel with #10), so we import it
-# defensively and fall back to a local minimal reader -- the "temporary local
-# helper that is easy to replace" the issue calls for. When the canonical API
-# lands this import simply starts winning and the fallback goes unused.
+# Primary dependency: the canonical DecisionRecord reader. Keep the defensive
+# fallback only for older mixed checkouts, but prefer the public training
+# package surface so annotation gets the no-post-yield-mutation iterator.
 try:
-    from magic_cabt.training.records import iter_decision_records \
-        as _canonical_iter_records
-except Exception:  # pragma: no cover - only when Agent 1's API is absent
+    from magic_cabt.training import iter_decision_records as _canonical_iter_records
+except Exception:  # pragma: no cover - only for older partial checkouts
     _canonical_iter_records = None
 
 __all__ = [
@@ -123,13 +120,12 @@ def _iter_input_records(input_path, source_hint=None):
 
 
 def _local_iter_records(path_or_file):
-    """Dependency-free stand-in for Agent 1's ``iter_decision_records``.
+    """Dependency-free stand-in for older checkouts.
 
     Handles the self-play / human replay frames this package writes and
-    canonical / Java transition records, enough for annotation to run before
-    the canonical reader is available. The trailing ``{result}`` self-play
-    line carries no decision and is skipped. Replace with the canonical API
-    once it lands (see the guarded import at the top of this module).
+    canonical / Java transition records, enough for annotation to run when the
+    canonical reader is absent. The trailing ``{result}`` self-play line carries
+    no decision and is skipped.
     """
     own_handle = not hasattr(path_or_file, "read")
     handle = open(path_or_file, "r", encoding="utf-8") if own_handle \

@@ -9,7 +9,8 @@ a summary and exits nonzero when invalid records were found.
 import argparse
 import sys
 
-from .records import iter_decision_records, validate_records
+from .io import iter_decision_records
+from .records import validate_records
 
 __all__ = ["main"]
 
