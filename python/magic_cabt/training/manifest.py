@@ -10,7 +10,8 @@ schema drift before training starts.
 import json
 
 from .causal import FACTOR_NAMES, causal_variables
-from .records import iter_decision_records, validate_record
+from .io import iter_decision_records
+from .records import validate_record
 
 __all__ = [
     "build_manifest",

@@ -59,16 +59,17 @@ def causal_variables(record, use_next=False):
     acting = _player_by_index(players, player_index)
     opponent = _first_other_player(players, player_index)
 
-    battlefield = current.get("battlefield") or []
-    if not isinstance(battlefield, list):
-        battlefield = []
-    stack = current.get("stack") or []
-    if not isinstance(stack, list):
-        stack = []
+    battlefield = _arena_battlefield(current)
+    stack = _arena_stack(current)
 
     active_player_id = current.get("activePlayerId")
+    if active_player_id is None:
+        active_player_id = current.get("activeSeat")
     priority_player_id = current.get("priorityPlayerId")
-    acting_player_id = acting.get("playerId") if isinstance(acting, dict) else None
+    if priority_player_id is None:
+        priority_player_id = current.get("prioritySeat")
+    acting_player_id = _player_id(acting)
+    opponent_player_id = _player_id(opponent) if isinstance(opponent, dict) else None
 
     values = {
         "life_total": _num(acting, "life"),
@@ -77,22 +78,25 @@ def causal_variables(record, use_next=False):
         "hand_diff": _diff(_num(acting, "handCount"), _num(opponent, "handCount")),
         "library_count": _num(acting, "libraryCount"),
         "library_diff": _diff(_num(acting, "libraryCount"), _num(opponent, "libraryCount")),
-        "graveyard_count": _num(acting, "graveyardCount"),
-        "graveyard_diff": _diff(_num(acting, "graveyardCount"), _num(opponent, "graveyardCount")),
+        "graveyard_count": _arena_graveyard_count(current, acting) or _num(acting, "graveyardCount"),
+        "graveyard_diff": _diff(
+            _arena_graveyard_count(current, acting) or _num(acting, "graveyardCount"),
+            _arena_graveyard_count(current, opponent) or _num(opponent, "graveyardCount"),
+        ),
         "battlefield_count": _controlled_count(battlefield, acting_player_id),
         "battlefield_diff": _diff(
             _controlled_count(battlefield, acting_player_id),
-            _controlled_count(battlefield, opponent.get("playerId") if isinstance(opponent, dict) else None),
+            _controlled_count(battlefield, opponent_player_id),
         ),
         "creature_count": _controlled_type_count(battlefield, acting_player_id, "CREATURE"),
         "creature_diff": _diff(
             _controlled_type_count(battlefield, acting_player_id, "CREATURE"),
-            _controlled_type_count(battlefield, opponent.get("playerId") if isinstance(opponent, dict) else None, "CREATURE"),
+            _controlled_type_count(battlefield, opponent_player_id, "CREATURE"),
         ),
         "land_count": _controlled_type_count(battlefield, acting_player_id, "LAND"),
         "land_diff": _diff(
             _controlled_type_count(battlefield, acting_player_id, "LAND"),
-            _controlled_type_count(battlefield, opponent.get("playerId") if isinstance(opponent, dict) else None, "LAND"),
+            _controlled_type_count(battlefield, opponent_player_id, "LAND"),
         ),
         "stack_count": len(stack) if stack is not None else None,
         "turn_number": _coerce_number(current.get("turnNumber")),
@@ -141,16 +145,32 @@ def factor_credit_trace(record):
 
 def _player_by_index(players, index):
     for player in players:
-        if player.get("playerIndex") == index:
+        if _player_seat(player) == index:
             return player
     return {}
 
 
 def _first_other_player(players, index):
     for player in players:
-        if player.get("playerIndex") != index:
+        if _player_seat(player) != index:
             return player
     return {}
+
+
+def _player_seat(player):
+    if not isinstance(player, dict):
+        return None
+    seat = player.get("playerIndex")
+    if seat is None:
+        seat = player.get("seat")
+    return seat
+
+
+def _player_id(player):
+    if not isinstance(player, dict):
+        return None
+    return player.get("playerId") if player.get("playerId") is not None \
+        else player.get("seat")
 
 
 def _num(player, key):
@@ -207,7 +227,53 @@ def _controlled_type_count(objects, controller_id, type_name):
 def _controller_id(obj):
     if obj.get("controllerId") is not None:
         return obj.get("controllerId")
+    if obj.get("controllerSeat") is not None:
+        return obj.get("controllerSeat")
     ref = obj.get("ref")
     if isinstance(ref, dict):
-        return ref.get("controllerId")
+        return ref.get("controllerId") or ref.get("controllerSeat")
     return None
+
+
+def _arena_battlefield(current):
+    if not isinstance(current, dict):
+        return []
+    battlefield = current.get("battlefield")
+    if battlefield is None:
+        zones = current.get("zones")
+        if isinstance(zones, dict):
+            battlefield = zones.get("battlefield")
+    if not isinstance(battlefield, list):
+        return []
+    return battlefield
+
+
+def _arena_stack(current):
+    if not isinstance(current, dict):
+        return []
+    stack = current.get("stack")
+    if stack is None:
+        zones = current.get("zones")
+        if isinstance(zones, dict):
+            stack = zones.get("stack")
+    if not isinstance(stack, list):
+        return []
+    return stack
+
+
+def _arena_graveyard_count(current, player):
+    if not isinstance(current, dict) or not isinstance(player, dict):
+        return None
+    zones = current.get("zones")
+    if not isinstance(zones, dict):
+        return None
+    graveyards = zones.get("graveyards")
+    if not isinstance(graveyards, dict):
+        return None
+    seat = _player_seat(player)
+    if seat is None:
+        return None
+    zone = graveyards.get(str(seat))
+    if not isinstance(zone, list):
+        return None
+    return len(zone)

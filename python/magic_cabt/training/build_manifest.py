@@ -12,8 +12,8 @@ import argparse
 import json
 import sys
 
+from .io import iter_decision_records
 from .manifest import build_manifest, write_manifest
-from .records import iter_decision_records
 
 __all__ = ["main"]
 

@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
 
 from magic_cabt.training.build_manifest import main as build_manifest_main
 from magic_cabt.training.causal import causal_variables, factor_credit_trace
+from magic_cabt.training.io import iter_decision_records
 from magic_cabt.training.manifest import build_manifest
 
 
@@ -76,7 +77,7 @@ class CausalFeatureTest(unittest.TestCase):
         self.assertEqual(6, values["life_diff"])
         self.assertEqual(4, values["hand_count"])
         self.assertEqual(2, values["hand_diff"])
-        self.assertEqual(2, values["battlefield_diff"])
+        self.assertEqual(1, values["battlefield_diff"])
         self.assertEqual(1, values["creature_count"])
         self.assertEqual(0, values["creature_diff"])
         self.assertEqual(1, values["land_count"])
@@ -115,6 +116,125 @@ class CausalFeatureTest(unittest.TestCase):
                 manifest = json.load(handle)
             self.assertEqual("fixture", manifest["name"])
             self.assertEqual(1, manifest["records"])
+
+
+def arena_record():
+    """Arena-mirror snapshot shape: ``seat``/``zones``/``controllerSeat`` field names."""
+    current = {
+        "turnNumber": 4,
+        "activeSeat": 0,
+        "prioritySeat": 0,
+        "players": [
+            {"seat": 0, "name": "P0", "life": 18, "handCount": 4, "libraryCount": 31},
+            {"seat": 1, "name": "P1", "life": 12, "handCount": 2, "libraryCount": 29},
+        ],
+        "zones": {
+            "battlefield": [
+                {"controllerSeat": 0, "cardTypes": ["LAND"]},
+                {"controllerSeat": 0, "cardTypes": ["CREATURE"]},
+                {"controllerSeat": 1, "cardTypes": ["CREATURE"]},
+            ],
+            "stack": [],
+            "graveyards": {"0": [{"instanceId": 1}, {"instanceId": 2}], "1": [{"instanceId": 3}]},
+        },
+    }
+    return {
+        "schemaVersion": 1,
+        "source": "arena_human",
+        "gameId": "g1",
+        "sequenceNumber": 3,
+        "playerIndex": 0,
+        "observation": {
+            "current": current,
+            "select": {
+                "type": "PRIORITY",
+                "minCount": 1,
+                "maxCount": 1,
+                "option": OPTIONS,
+            },
+        },
+        "select": {
+            "type": "PRIORITY",
+            "minCount": 1,
+            "maxCount": 1,
+            "option": OPTIONS,
+        },
+        "selectedIndices": [1],
+        "nextObservation": None,
+        "terminal": False,
+        "reward": None,
+        "result": None,
+        "metadata": {"captureConfidence": "mirror"},
+    }
+
+
+class ArenaCausalFeatureTest(unittest.TestCase):
+
+    def test_arena_snapshot_extracts_factors_via_field_fallbacks(self):
+        values = causal_variables(arena_record())
+        self.assertEqual(18, values["life_total"])
+        self.assertEqual(6, values["life_diff"])
+        self.assertEqual(4, values["hand_count"])
+        self.assertEqual(2, values["hand_diff"])
+        self.assertEqual(2, values["battlefield_count"])
+        self.assertEqual(1, values["battlefield_diff"])
+        self.assertEqual(1, values["creature_count"])
+        self.assertEqual(0, values["creature_diff"])
+        self.assertEqual(1, values["land_count"])
+        self.assertEqual(1, values["land_diff"])
+        self.assertEqual(0, values["stack_count"])
+        self.assertEqual(2, values["graveyard_count"])
+        self.assertEqual(1, values["graveyard_diff"])
+        self.assertEqual(4, values["turn_number"])
+        self.assertEqual(1, values["is_active_player"])
+        self.assertEqual(1, values["has_priority"])
+
+    def test_arena_manifest_summarizes_factors(self):
+        manifest = build_manifest([arena_record()], name="arena-fixture")
+        self.assertEqual("arena-fixture", manifest["name"])
+        self.assertEqual(1, manifest["records"])
+        self.assertEqual(1, manifest["validRecords"])
+        self.assertEqual({"arena_human": 1}, manifest["sources"])
+        self.assertEqual(18, manifest["causalFactors"]["life_total"]["min"])
+        self.assertEqual(2, manifest["causalFactors"]["battlefield_count"]["max"])
+        self.assertEqual(2, manifest["causalFactors"]["graveyard_count"]["max"])
+
+
+class ManifestTerminalCountTest(unittest.TestCase):
+
+    def test_self_play_manifest_counts_terminal_record(self):
+        """Streaming manifest builder must see terminal=True on the last record."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "selfplay.jsonl")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "sequence": 1, "player": 0,
+                    "observation": {
+                        "current": {
+                            "turnNumber": 1,
+                            "players": [
+                                {"playerIndex": 0, "playerId": "p0", "life": 20},
+                                {"playerIndex": 1, "playerId": "p1", "life": 20},
+                            ],
+                        },
+                        "select": {
+                            "type": "PRIORITY", "minCount": 1, "maxCount": 1,
+                            "playerIndex": 0,
+                            "option": [
+                                {"index": 0, "type": "PASS_PRIORITY"},
+                            ],
+                        },
+                    },
+                    "selected": [0],
+                }) + "\n")
+                handle.write(json.dumps({"result": {"winner": 0}}) + "\n")
+            records = list(iter_decision_records(source))
+            self.assertTrue(records[0]["terminal"])
+            manifest = build_manifest(iter_decision_records(source), name="sp")
+            self.assertEqual(1, manifest["records"])
+            self.assertEqual(1, manifest["terminalRecords"])
+            self.assertEqual(1, manifest["rewardRecords"])
+            self.assertEqual(1, manifest["resultRecords"])
 
 
 if __name__ == "__main__":
