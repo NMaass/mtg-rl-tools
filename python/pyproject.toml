@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magic-cabt"
+version = "0.1.0"
+description = "Python tooling for CABT-style Magic: The Gathering RL and imitation-learning workflows."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+  { name = "NMaass" }
+]
+keywords = [
+  "magic-the-gathering",
+  "reinforcement-learning",
+  "imitation-learning",
+  "xmage",
+  "mtg-arena"
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = []
+arena = []
+
+[project.scripts]
+magic-cabt-validate = "magic_cabt.training.validate_dataset:main"
+magic-cabt-compile-il = "magic_cabt.training.compile_il:main"
+magic-cabt-eval-play = "magic_cabt.eval.play:main"
+magic-cabt-replay-annotate = "magic_cabt.replay.annotate:main"
+magic-cabt-arena-mirror = "magic_cabt.arena_mirror.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["magic_cabt*"]
+
+[tool.setuptools]
+include-package-data = true
