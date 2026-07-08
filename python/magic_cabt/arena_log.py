@@ -16,6 +16,11 @@ __all__ = ["ArenaLogNormalizer", "normalize_arena_log", "iter_log_entries"]
 
 SCHEMA_VERSION = 2
 
+# Parse-error snippets are bounded so summaries never embed whole raw chunks;
+# the live recorder reuses this bound so batch and streaming retain the same
+# shape (docs/decisions/006-arena-log-retention.md).
+PARSE_ERROR_SNIPPET_CHARS = 240
+
 LOG_START_RE = re.compile(
     r"^\[(?P<channel>UnityCrossThreadLogger|Client GRE)\](?P<time>\d[\d:/ .T-]*(?:AM|PM)?)?"
 )
@@ -215,7 +220,7 @@ class ArenaLogNormalizer:
                     "timestamp": entry["timestamp"],
                     "rawTime": entry["rawTime"],
                     "error": str(exc),
-                    "snippet": text[:240],
+                    "snippet": text[:PARSE_ERROR_SNIPPET_CHARS],
                 }
             )
             return None

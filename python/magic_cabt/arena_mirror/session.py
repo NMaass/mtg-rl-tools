@@ -83,7 +83,12 @@ class MirrorSession(object):
         self.flush()
 
     def feed_entry(self, entry):
-        raw_events, events = self.normalizer.feed(entry)
+        raw_events, events, parse_errors = self.normalizer.feed(entry)
+        for error in parse_errors:
+            if self.recorder is not None:
+                self.recorder.record_parse_error(error, raw_text=entry["text"])
+            self._say("log chunk failed to parse (snippet recorded): %s"
+                      % (error.get("error"),))
         for event in events:
             if self.recorder is not None:
                 self.recorder.record_history_event(event)

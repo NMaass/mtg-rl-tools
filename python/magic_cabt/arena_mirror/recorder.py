@@ -12,14 +12,20 @@ crash loses nothing already seen):
                          raw game-state payloads redacted (training-safe)
     summary.json         counts, matches, games; rewritten on each flush
     card_cache.json      grpId -> card info for replay on other machines
-    raw_audit.jsonl      full unredacted normalized events (ONLY when the
-                         recorder is created with raw_audit=True — a debug
-                         artifact that may contain raw Arena payloads)
+    parse_errors.jsonl   bounded snippets of log chunks that failed to parse,
+                         same shape as the batch normalizer's parseErrors
+                         (created only when a parse error occurs) — these are
+                         exactly the chunks needed to debug parser gaps
+    raw_audit.jsonl      full unredacted normalized events and full raw text
+                         of unparseable chunks (ONLY when the recorder is
+                         created with raw_audit=True — a debug artifact that
+                         may contain raw Arena payloads)
 """
 
 import json
 import os
 
+from ..arena_log import PARSE_ERROR_SNIPPET_CHARS
 from .metadata import MatchMetadataCollector
 
 __all__ = ["MirrorRecorder"]
@@ -52,6 +58,7 @@ class MirrorRecorder(object):
             self._audit = open(
                 os.path.join(output_dir, "raw_audit.jsonl"), "a",
                 encoding="utf-8")
+        self._parse_errors = None  # opened on the first parse error
         self._grp_ids = set()
         self._meta = MatchMetadataCollector()
         self.counts = {
@@ -59,6 +66,7 @@ class MirrorRecorder(object):
             "decisionsMatched": 0,
             "mirrorStates": 0,
             "historyEvents": 0,
+            "parseErrors": 0,
             "games": [],
             "matchIds": [],
         }
@@ -100,6 +108,33 @@ class MirrorRecorder(object):
         if match_id and match_id not in self.counts["matchIds"]:
             self.counts["matchIds"].append(match_id)
 
+    def record_parse_error(self, record, raw_text=None):
+        """Persist a bounded parse-error snippet; full chunk only under audit.
+
+        ``record`` is a batch-shaped parseErrors entry (timestamp, rawTime,
+        error, snippet). The snippet is (re-)truncated here so nothing larger
+        than the batch bound ever lands in the default bundle; ``raw_text``,
+        the complete unparsed chunk, reaches only the opt-in audit file.
+        """
+        entry = dict(record)
+        snippet = entry.get("snippet")
+        if isinstance(snippet, str):
+            entry["snippet"] = snippet[:PARSE_ERROR_SNIPPET_CHARS]
+        if self._parse_errors is None:
+            self._parse_errors = open(
+                os.path.join(self.output_dir, "parse_errors.jsonl"), "a",
+                encoding="utf-8")
+        self._write(self._parse_errors, entry)
+        self.counts["parseErrors"] += 1
+        if self._audit is not None and raw_text is not None:
+            self._write(self._audit, {
+                "type": "ARENA_PARSE_ERROR",
+                "timestamp": record.get("timestamp"),
+                "rawTime": record.get("rawTime"),
+                "error": record.get("error"),
+                "rawChunk": raw_text,
+            })
+
     def record_game(self, match_id, game_number):
         game = {"matchId": match_id, "gameNumber": game_number}
         if game not in self.counts["games"]:
@@ -109,7 +144,7 @@ class MirrorRecorder(object):
 
     def flush(self):
         for handle in (self._decisions, self._states, self._history,
-                       self._audit):
+                       self._audit, self._parse_errors):
             if handle is not None:
                 handle.flush()
         summary = dict(self.counts)
@@ -134,7 +169,7 @@ class MirrorRecorder(object):
     def close(self):
         self.flush()
         for handle in (self._decisions, self._states, self._history,
-                       self._audit):
+                       self._audit, self._parse_errors):
             if handle is not None:
                 handle.close()
 
