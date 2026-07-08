@@ -1,0 +1,47 @@
+# magic-cabt
+
+Python tooling for CABT-style Magic: The Gathering reinforcement-learning,
+imitation-learning, Arena-log recording, replay annotation, and local agent
+experiments.
+
+This package is the Python layer of `mtg-rl-tools`. The live XMage bridge still
+requires the Java overlay to be copied into and built inside an XMage checkout;
+see the repository root README for the full bridge setup.
+
+## Editable install
+
+From the repository root:
+
+```sh
+cd python
+python -m pip install -e .
+```
+
+Then the import surface is available from any working directory:
+
+```python
+from magic_cabt import CabtBridge, load_decklist
+```
+
+## Console commands
+
+The package exposes the common research/data commands as console scripts:
+
+```sh
+magic-cabt-validate <records.jsonl>
+magic-cabt-compile-il --input <records.jsonl> --out <single_choice.jsonl>
+magic-cabt-eval-play --deck0 ../examples/basic_deck.txt --deck1 ../examples/basic_deck.txt
+magic-cabt-replay-annotate --input <records-or-bundle> --policy first
+magic-cabt-arena-mirror live --no-display
+```
+
+`magic-cabt-eval-play`, `CabtBridge`, and display-backed Arena mirror commands
+need `MAGIC_CABT_CLASSPATH` or `--classpath` pointing at a built XMage+CABT
+classpath.
+
+## Tests
+
+```sh
+cd python
+python -m unittest discover -s tests -v
+```
