@@ -1,4 +1,4 @@
-"""Compile normalized DecisionRecord JSONL into single-choice IL examples.
+"""Compile DecisionRecord JSONL into single-choice IL examples.
 
 Command:
 
@@ -6,6 +6,12 @@ Command:
       --input decisions.jsonl \
       --out target/il/single_choice.jsonl \
       --single-choice-only
+
+Input may be any source format understood by
+``magic_cabt.training.iter_decision_records``: canonical DecisionRecord JSONL,
+Java transition JSONL, self-play replay frames, or Arena mirror
+``decisions.jsonl``. The compiler normalizes first so downstream code always
+sees canonical ``select`` and ``selectedIndices`` fields.
 
 Output is one JSON object per supported decision with the stable contract:
 ``schemaVersion``, ``gameId``, ``sequenceNumber``, ``playerIndex``,
@@ -18,8 +24,8 @@ import json
 import os
 import sys
 
-from magic_cabt.dataset import read_dataset
 from magic_cabt.training import features
+from magic_cabt.training.io import iter_decision_records
 
 SCHEMA_VERSION = 1
 
@@ -34,7 +40,7 @@ __all__ = [
 
 def is_single_choice(record):
     select = _select(record)
-    selected = record.get("selectedIndices")
+    selected = record.get("selectedIndices") if isinstance(record, dict) else None
     return (
         select.get("minCount") == 1
         and select.get("maxCount") == 1
@@ -102,6 +108,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--source", default=None,
+                        help="canonical source label override "
+                             "(arena_human, engine_selfplay, engine_human, search)")
     parser.add_argument("--single-choice-only", dest="single_choice_only",
                         action="store_true", default=True,
                         help="keep only single-choice decisions (default)")
@@ -112,7 +121,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     examples, stats = compile_records(
-        read_dataset(args.input),
+        iter_decision_records(args.input, source_hint=args.source),
         single_choice_only=args.single_choice_only,
     )
     out_dir = os.path.dirname(args.out)
@@ -136,9 +145,15 @@ def main(argv=None):
 
 
 def _select(record):
-    return record.get("select") or (record.get("observation") or {}).get("select") or {}
+    if not isinstance(record, dict):
+        return {}
+    top = record.get("select")
+    if isinstance(top, dict):
+        return top
+    observation = record.get("observation") or {}
+    nested = observation.get("select") if isinstance(observation, dict) else None
+    return nested if isinstance(nested, dict) else {}
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
