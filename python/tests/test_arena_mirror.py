@@ -329,7 +329,7 @@ class PipelineTest(unittest.TestCase):
                                         recorder.record_decision(record)),
         )
         for entry in iter_log_entries(text.splitlines(True)):
-            raws, events = normalizer.feed(entry)
+            raws, events, _ = normalizer.feed(entry)
             for event in events:
                 recorder.record_history_event(event)
                 tracker.handle_event(event)
@@ -474,6 +474,80 @@ class HiddenInfoTest(unittest.TestCase):
                 self.assertNotIn("55555", handle.read())
         finally:
             shutil.rmtree(directory, ignore_errors=True)
+
+
+def _malformed_line():
+    """A log entry whose JSON payload is truncated mid-string (>240 chars).
+
+    The raw newline inside the unterminated string guarantees a decode error,
+    and the padding makes the chunk longer than the snippet bound so the test
+    can prove truncation actually happened.
+    """
+    return ("[UnityCrossThreadLogger]2025-10-10 1:00:02 PM: Match to X: "
+            "GreToClientEvent\n"
+            '{"greToClientEvent": "' + "x" * 400 + "\n")
+
+
+class ParseErrorRetentionTest(unittest.TestCase):
+    """Live recording must retain bounded snippets of unparseable chunks.
+
+    Silently dropping them removes exactly the data needed to debug parser
+    gaps (docs/decisions/006-arena-log-retention.md). Full raw chunks stay
+    behind the raw_audit opt-in.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _run_session(self, raw_audit=False):
+        from magic_cabt.arena_log import iter_log_entries
+        from magic_cabt.arena_mirror.session import MirrorSession
+
+        recorder = MirrorRecorder(self.dir, raw_audit=raw_audit)
+        session = MirrorSession(recorder=recorder, verbose=False)
+        text = _gre_line(GAME_STATE_FULL) + _malformed_line()
+        session.feed_entries(iter_log_entries(text.splitlines(True)))
+        recorder.close()
+
+    def test_streaming_recorder_retains_bounded_snippet(self):
+        self._run_session()
+
+        path = os.path.join(self.dir, "parse_errors.jsonl")
+        self.assertTrue(os.path.exists(path),
+                        "parse error was dropped instead of recorded")
+        with open(path, encoding="utf-8") as handle:
+            errors = [json.loads(line) for line in handle]
+        self.assertEqual(1, len(errors))
+        error = errors[0]
+        self.assertTrue(error["error"])
+        # same bound as the batch path: at most 240 chars of the raw chunk
+        self.assertEqual(240, len(error["snippet"]))
+        self.assertIn('{"greToClientEvent"', error["snippet"])
+        self.assertNotIn("x" * 400, error["snippet"])
+
+        with open(os.path.join(self.dir, "summary.json"),
+                  encoding="utf-8") as handle:
+            summary = json.load(handle)
+        self.assertEqual(1, summary["parseErrors"])
+        # the well-formed entry still recorded normally
+        self.assertGreater(summary["historyEvents"], 0)
+        # full raw chunks require the raw_audit opt-in
+        self.assertFalse(
+            os.path.exists(os.path.join(self.dir, "raw_audit.jsonl")))
+
+    def test_raw_audit_captures_full_unparseable_chunk(self):
+        self._run_session(raw_audit=True)
+
+        with open(os.path.join(self.dir, "raw_audit.jsonl"),
+                  encoding="utf-8") as handle:
+            audit = [json.loads(line) for line in handle]
+        chunks = [record for record in audit
+                  if record.get("type") == "ARENA_PARSE_ERROR"]
+        self.assertEqual(1, len(chunks))
+        self.assertIn("x" * 400, chunks[0]["rawChunk"])
 
 
 class SessionAutoOpenTest(unittest.TestCase):

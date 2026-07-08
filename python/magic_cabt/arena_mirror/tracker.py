@@ -38,10 +38,14 @@ class StreamingNormalizer(object):
         return self._normalizer.decks
 
     def feed(self, entry):
-        """Process one log entry; returns (raw_events, events) drained lists.
+        """Process one log entry; returns (raw_events, events, parse_errors).
 
-        Each normalized event dict gains an ``"inHistory"`` flag matching the
-        batch normalizer's game_history selection.
+        All three are drained lists. Each normalized event dict gains an
+        ``"inHistory"`` flag matching the batch normalizer's game_history
+        selection. Parse errors carry the batch normalizer's bounded-snippet
+        shape; draining them here (instead of letting summary["parseErrors"]
+        grow) keeps hours-long sessions bounded and lets the caller persist
+        them.
         """
         self._normalizer._handle_entry(entry)
         records = self._normalizer.records
@@ -54,7 +58,9 @@ class StreamingNormalizer(object):
             event["inHistory"] = id(event) in history_ids
             events.append(event)
         del records["normalized_events"][:]
-        return raw_events, events
+        parse_errors = self._normalizer.summary["parseErrors"][:]
+        del self._normalizer.summary["parseErrors"][:]
+        return raw_events, events, parse_errors
 
 
 class GameStateTracker(object):
