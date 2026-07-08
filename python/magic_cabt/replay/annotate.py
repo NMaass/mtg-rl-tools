@@ -2,7 +2,7 @@
 
     python -m magic_cabt.replay.annotate \
         --input <decision-records-or-bundle> \
-        --policy heuristic \
+        --policy first \
         --out annotations.jsonl \
         --top-k 5
 
@@ -11,7 +11,7 @@ Reads any decision-record stream ``magic_cabt.training.records`` understands
 scores every option of each decision with the chosen policy, and writes one
 annotation per decision::
 
-    {"gameId": ..., "sequenceNumber": 123, "policy": "heuristic",
+    {"gameId": ..., "sequenceNumber": 123, "policy": "first",
      "topK": [{"index": 2, "score": 1.0, "label": "Play Mountain"}],
      "chosenRank": 1, "chosenScore": 1.0}
 
@@ -192,8 +192,8 @@ def build_parser():
     )
     parser.add_argument("--input", required=True,
                         help="decision-record JSONL file or directory of them")
-    parser.add_argument("--policy", default="heuristic",
-                        help="scoring policy (random|first|heuristic)")
+    parser.add_argument("--policy", default="first",
+                        help="scoring policy (random|first)")
     parser.add_argument("--out", default=None,
                         help="output annotations.jsonl (default: stdout)")
     parser.add_argument("--top-k", type=int, default=5)

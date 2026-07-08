@@ -3,7 +3,7 @@
 No XMage needed: the agents operate purely on observation dicts, so these
 tests build representative prompts by hand and check the contract every agent
 must honour -- never an illegal index, count inside ``[minCount, maxCount]``,
-distinct entries -- plus the heuristic's documented ordering.
+distinct entries -- plus the legal-selection envelope.
 """
 
 import os
@@ -13,7 +13,6 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
 
 from magic_cabt.agents import (  # noqa: E402
-    HeuristicAgent,
     RandomAgent,
     FirstAgent,
     available_agents,
@@ -76,7 +75,7 @@ ALL_PROMPTS = [PRIORITY, MULLIGAN, PAY_MANA, ATTACKERS, BLOCKERS, YES_NO,
 
 class LegalityTest(unittest.TestCase):
     def test_every_agent_returns_legal_selections(self):
-        for spec in ("random", "first", "heuristic"):
+        for spec in ("random", "first"):
             for trial in range(20):  # random agent gets many draws
                 agent = make_agent(spec, seed=trial)
                 for prompt in ALL_PROMPTS:
@@ -87,40 +86,9 @@ class LegalityTest(unittest.TestCase):
                         % (spec, selection, prompt["select"]["type"]))
 
     def test_agents_never_touch_empty_option_prompt(self):
-        for spec in ("random", "first", "heuristic"):
+        for spec in ("random", "first"):
             agent = make_agent(spec, seed=0)
             self.assertEqual(agent.select(EMPTY), [])
-
-
-class HeuristicOrderingTest(unittest.TestCase):
-    def setUp(self):
-        self.agent = HeuristicAgent()
-
-    def test_plays_land_over_cast_and_pass(self):
-        self.assertEqual(self.agent.select(PRIORITY), [1])
-
-    def test_keeps_rather_than_mulligans(self):
-        self.assertEqual(self.agent.select(MULLIGAN), [0])
-
-    def test_pays_with_mana_source_over_cancel(self):
-        self.assertEqual(self.agent.select(PAY_MANA), [1])
-
-    def test_attacks_with_everything(self):
-        self.assertEqual(self.agent.select(ATTACKERS), [0, 1])
-
-    def test_declines_to_block(self):
-        self.assertEqual(self.agent.select(BLOCKERS), [])
-
-    def test_multi_select_returns_required_count(self):
-        selection = self.agent.select(MULTI)
-        self.assertEqual(len(selection), 2)
-        self.assertTrue(is_legal_selection(selection, MULTI["select"]))
-
-    def test_score_top_matches_selected_option(self):
-        scores = self.agent.score(PRIORITY)
-        self.assertEqual(len(scores), 3)
-        top_index = max(range(len(scores)), key=lambda i: scores[i])
-        self.assertEqual(top_index, 1)  # PLAY_LAND, same as select()
 
 
 class FirstAgentTest(unittest.TestCase):
@@ -170,7 +138,7 @@ class HelpersTest(unittest.TestCase):
             make_agent("nonesuch")
 
     def test_available_agents_lists_builtins(self):
-        self.assertEqual(available_agents(), ["first", "heuristic", "random"])
+        self.assertEqual(available_agents(), ["first", "random"])
 
 
 if __name__ == "__main__":

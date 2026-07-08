@@ -146,7 +146,7 @@ def register_agent(name, factory):
 
 
 def make_agent(spec, seed=None):
-    """Build an agent by name (``"random"`` / ``"first"`` / ``"heuristic"``).
+    """Build an agent by name (``"random"`` / ``"first"``).
 
     ``seed`` seeds any stochastic agent so tournaments and annotations are
     reproducible; deterministic agents ignore it.

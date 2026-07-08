@@ -2,7 +2,7 @@
 
     python examples/run_selfplay.py [--seed N] [--max-turns N] \
         [--deck0 FILE] [--deck1 FILE] [--out DIR] \
-        [--agent0 random|first|heuristic] [--agent1 ...]
+        [--agent0 random|first] [--agent1 ...]
 
 Thin wrapper over ``magic_cabt.eval.play``: it delegates game orchestration to
 ``run_tournament`` (one game) rather than duplicating the decision loop, and

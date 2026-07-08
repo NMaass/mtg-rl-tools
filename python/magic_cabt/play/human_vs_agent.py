@@ -1,7 +1,7 @@
 """Terminal human-vs-agent play.
 
     python -m magic_cabt.play.human_vs_agent \
-        --human-seat 0 --agent1 heuristic \
+        --human-seat 0 --agent1 first \
         --deck0 examples/basic_deck.txt --deck1 examples/basic_deck.txt
 
 A human takes one seat; the other seat is a configured agent. Each turn the
@@ -137,9 +137,9 @@ def build_parser():
         description="Play a local terminal game as a human against an agent.",
     )
     parser.add_argument("--human-seat", type=int, choices=(0, 1), default=0)
-    parser.add_argument("--agent0", default="heuristic",
+    parser.add_argument("--agent0", default="first",
                         help="seat 0 agent when the human is seat 1")
-    parser.add_argument("--agent1", default="heuristic",
+    parser.add_argument("--agent1", default="first",
                         help="seat 1 agent when the human is seat 0")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--max-turns", type=int, default=None)

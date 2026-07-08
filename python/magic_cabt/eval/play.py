@@ -1,10 +1,10 @@
 """Local agent-vs-agent tournament runner.
 
     python -m magic_cabt.eval.play \
-        --agent0 random --agent1 heuristic \
+        --agent0 random --agent1 first \
         --games 20 --seed 1 \
         --deck0 examples/basic_deck.txt --deck1 examples/basic_deck.txt \
-        --out target/eval/random-vs-heuristic
+        --out target/eval/random-vs-first
 
 Starts real XMage games through ``CabtBridge``, routes each decision to the
 acting seat's agent, writes a per-game replay (the same self-play JSONL frames
@@ -186,9 +186,9 @@ def run_tournament(agent_specs, deck0, deck1, games=1, seed=None, max_turns=None
                    fail_fast=False, player_names=DEFAULT_PLAYER_NAMES, log=None):
     """Run ``games`` games between the two agent specs; return the summary.
 
-    ``agent_specs`` is a 2-tuple of agent names (``"random"`` / ``"first"`` /
-    ``"heuristic"``). Fresh agents are built per game with a per-game seed so
-    results are reproducible and stochastic agents don't share state.
+    ``agent_specs`` is a 2-tuple of agent names (``"random"`` / ``"first"``).
+    Fresh agents are built per game with a per-game seed so results are
+    reproducible and stochastic agents don't share state.
 
     Supply either an already-open ``bridge`` (kept open across games; used by
     tests with a mock) or a ``bridge_factory`` callable that opens one
@@ -291,9 +291,9 @@ def build_parser():
         description="Run local agent-vs-agent XMage games and summarize them.",
     )
     parser.add_argument("--agent0", default="random",
-                        help="seat 0 agent (random|first|heuristic)")
-    parser.add_argument("--agent1", default="heuristic",
-                        help="seat 1 agent (random|first|heuristic)")
+                        help="seat 0 agent (random|first)")
+    parser.add_argument("--agent1", default="first",
+                        help="seat 1 agent (random|first)")
     parser.add_argument("--games", type=int, default=1)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--max-turns", type=int, default=None)

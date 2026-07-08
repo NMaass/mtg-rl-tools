@@ -91,15 +91,15 @@ class PlayGameTest(unittest.TestCase):
             priority_obs(0, ["PASS_PRIORITY"]),
         ]
         bridge = ScriptedBridge(observations)
-        agents = (make_agent("heuristic"), make_agent("first"))
+        agents = (make_agent("first"), make_agent("first"))
         outcome = play_game(bridge, agents, [], [])
 
         self.assertTrue(outcome["completed"])
         self.assertEqual(outcome["decisions"], 3)
         self.assertEqual(outcome["winnerSeat"], 0)
         self.assertEqual(outcome["invalidSelections"], 0)
-        # seat 0 = heuristic plays the land (index 1); seat 1 = first passes (0)
-        self.assertEqual(bridge.selections, [[1], [0], [0]])
+        # both seats take the lowest-index option (PASS_PRIORITY, index 0)
+        self.assertEqual(bridge.selections, [[0], [0], [0]])
 
     def test_winner_seat_maps_seat_one(self):
         bridge = ScriptedBridge([priority_obs(0, ["PASS_PRIORITY"])],
@@ -140,7 +140,7 @@ class PlayGameTest(unittest.TestCase):
             def write_frame(self, frame):
                 frames.append(frame)
 
-        play_game(bridge, (make_agent("heuristic"), make_agent("heuristic")),
+        play_game(bridge, (make_agent("first"), make_agent("first")),
                   [], [], record_writer=Writer())
         # one frame per decision + a trailing result frame
         self.assertEqual(len(frames), 3)
@@ -156,13 +156,13 @@ class RunTournamentTest(unittest.TestCase):
         bridge = ScriptedBridge(observations)
         out_dir = tempfile.mkdtemp()
         summary = run_tournament(
-            ("heuristic", "first"), [], [], games=3, seed=1,
+            ("first", "random"), [], [], games=3, seed=1,
             bridge=bridge, out_dir=out_dir)
 
         self.assertEqual(summary["gamesAttempted"], 3)
         self.assertEqual(summary["gamesCompleted"], 3)
-        self.assertEqual(summary["agents"], {"seat0": "heuristic",
-                                             "seat1": "first"})
+        self.assertEqual(summary["agents"], {"seat0": "first",
+                                             "seat1": "random"})
         self.assertTrue(os.path.exists(os.path.join(out_dir, "summary.json")))
         self.assertTrue(os.path.exists(os.path.join(out_dir, "game-0000.jsonl")))
         # replay is readable as self-play frames
@@ -184,7 +184,7 @@ class SummarizeTest(unittest.TestCase):
              "invalidBySeat": [0, 0], "failClosed": True,
              "error": "boom"},
         ]
-        summary = summarize(outcomes, ("random", "heuristic"))
+        summary = summarize(outcomes, ("random", "first"))
         self.assertEqual(summary["gamesAttempted"], 4)
         self.assertEqual(summary["gamesCompleted"], 3)
         self.assertEqual(summary["crashes"], 1)
@@ -202,12 +202,12 @@ class SummarizeTest(unittest.TestCase):
 class ArgParsingTest(unittest.TestCase):
     def test_parses_agent_specs_and_options(self):
         args = build_parser().parse_args([
-            "--agent0", "random", "--agent1", "heuristic",
+            "--agent0", "random", "--agent1", "first",
             "--games", "20", "--seed", "1",
             "--deck0", "a.txt", "--deck1", "b.txt",
             "--out", "target/eval/x", "--fail-fast"])
         self.assertEqual(args.agent0, "random")
-        self.assertEqual(args.agent1, "heuristic")
+        self.assertEqual(args.agent1, "first")
         self.assertEqual(args.games, 20)
         self.assertEqual(args.seed, 1)
         self.assertTrue(args.fail_fast)
@@ -283,26 +283,26 @@ class AnnotateTest(unittest.TestCase):
         }
 
     def test_topk_and_chosen_rank(self):
-        scorer = make_agent("heuristic")
+        scorer = make_agent("first")
         annotation = annotate_record(self._record([1]), scorer, top_k=2)
         self.assertEqual(annotation["gameId"], "game-1")
         self.assertEqual(annotation["sequenceNumber"], 42)
-        self.assertEqual(annotation["policy"], "heuristic")
+        self.assertEqual(annotation["policy"], "first")
         self.assertEqual(len(annotation["topK"]), 2)
-        # heuristic ranks PLAY_LAND first -> chosen index 1 has rank 1
-        self.assertEqual(annotation["topK"][0]["index"], 1)
-        self.assertEqual(annotation["topK"][0]["label"], "Play Mountain")
-        self.assertEqual(annotation["chosenRank"], 1)
-        self.assertEqual(annotation["chosenScore"], annotation["topK"][0]["score"])
+        # first ranks option 0 first; chosen index 1 lands at rank 2
+        self.assertEqual(annotation["topK"][0]["index"], 0)
+        self.assertEqual(annotation["topK"][0]["label"], "Pass priority")
+        self.assertEqual(annotation["chosenRank"], 2)
+        self.assertEqual(annotation["chosenScore"], annotation["topK"][1]["score"])
 
-    def test_chosen_rank_reflects_non_top_choice(self):
-        scorer = make_agent("heuristic")
+    def test_chosen_rank_reflects_top_choice(self):
+        scorer = make_agent("first")
         annotation = annotate_record(self._record([0]), scorer, top_k=5)
-        # PASS_PRIORITY is least preferred -> rank 3 of 3
-        self.assertEqual(annotation["chosenRank"], 3)
+        # first option (index 0) ranks first
+        self.assertEqual(annotation["chosenRank"], 1)
 
     def test_missing_choice_yields_null_rank(self):
-        scorer = make_agent("heuristic")
+        scorer = make_agent("first")
         annotation = annotate_record(self._record([]), scorer)
         self.assertIsNone(annotation["chosenRank"])
         self.assertIsNone(annotation["chosenScore"])
