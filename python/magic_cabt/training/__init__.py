@@ -26,10 +26,10 @@ from .records import (
     CANONICAL_SOURCES,
     DEFAULT_SOURCE,
     normalize_record,
-    iter_decision_records,
     validate_record,
     validate_records,
 )
+from .io import iter_decision_records
 
 __all__ = [
     "SCHEMA_VERSION",
