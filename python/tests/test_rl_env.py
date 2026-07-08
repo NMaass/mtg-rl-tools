@@ -107,5 +107,60 @@ class MaskedRlEnvTest(unittest.TestCase):
         self.assertEqual(0.0, terminal_reward({"winner": None}, 0, ("P0", "P1")))
 
 
+class PassSlotTest(unittest.TestCase):
+
+    def test_action_mask_includes_pass_slot_for_min_count_zero(self):
+        obs = observation(min_count=0, max_count=2)
+        mask = action_mask(obs)
+        self.assertEqual([True, True, True], mask)
+
+    def test_action_mask_padded_with_pass_slot(self):
+        obs = observation(min_count=0, max_count=2)
+        mask = action_mask(obs, max_actions=5)
+        self.assertEqual([True, True, True, False, False], mask)
+
+    def test_action_mask_no_pass_slot_for_min_count_one(self):
+        obs = observation(min_count=1, max_count=1)
+        mask = action_mask(obs)
+        self.assertEqual([True, True], mask)
+
+    def test_step_pass_slot_action_produces_empty_selection(self):
+        bridge = FakeBridge(finish_on_select=False)
+        env = MagicCabtEnv([], [], bridge=bridge,
+                           illegal_action_mode="repair")
+        env.reset()
+        obs = observation(min_count=0, max_count=2, player=0)
+        env._response = {"observation": obs}
+        pass_index = len(obs["select"]["option"])
+        env.step(pass_index)
+        self.assertEqual([], bridge.selections[-1])
+
+
+class ActorAttributionTest(unittest.TestCase):
+
+    def test_step_preserves_acting_player_and_exposes_next(self):
+        bridge = FakeBridge(finish_on_select=False)
+        env = MagicCabtEnv([], [], bridge=bridge)
+        env.reset()
+        obs, reward, terminated, truncated, info = env.step(0)
+        self.assertEqual(0, info["actingPlayerIndex"])
+        self.assertEqual(1, info["nextActingPlayerIndex"])
+
+
+class ResetActiveGameTest(unittest.TestCase):
+
+    def test_reset_finishes_active_game_before_start(self):
+        finish_calls = []
+        bridge = FakeBridge(finish_on_select=False)
+        bridge.game_finish = lambda: finish_calls.append(True)
+        env = MagicCabtEnv([], [], bridge=bridge)
+        env.reset()
+        env.step(0)
+        self.assertFalse(bridge.finished)
+        env.reset()
+        self.assertEqual(1, len(finish_calls))
+        self.assertTrue(bridge.started)
+
+
 if __name__ == "__main__":
     unittest.main()

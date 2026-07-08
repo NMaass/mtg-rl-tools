@@ -105,8 +105,15 @@ class MagicCabtEnv(object):
         )
 
     def reset(self, seed=None):
-        """Start a new game and return ``(observation, info)``."""
+        """Start a new game and return ``(observation, info)``.
+
+        If a previous game is still active (e.g. after a strict
+        ``InvalidActionError`` that aborted before ``game_select``), the
+        bridge is asked to finish that game first so ``game_start`` is not
+        rejected with ``GAME_ALREADY_ACTIVE``.
+        """
         self._ensure_bridge()
+        self._finish_active_game()
         self._decisions = 0
         game_seed = self.seed if seed is None else seed
         self._response = self._bridge.game_start(
@@ -134,7 +141,9 @@ class MagicCabtEnv(object):
         observation = self._response["observation"]
         select = observation["select"]
         acting_seat = select.get("playerIndex")
-        raw_selection = _selection_from_action(action)
+        option_count = len(select.get("option") or [])
+        has_pass = _has_empty_selection(select)
+        raw_selection = _selection_from_action(action, option_count, has_pass)
         selection = raw_selection
         repaired = False
         if not is_legal_selection(selection, select):
@@ -173,7 +182,9 @@ class MagicCabtEnv(object):
             return next_observation, reward, terminated, truncated, info
 
         next_observation = self._response["observation"]
-        info.update(self._info(next_observation))
+        next_info = self._info(next_observation)
+        info["nextActingPlayerIndex"] = next_info.pop("actingPlayerIndex", None)
+        info.update(next_info)
         return next_observation, 0.0, False, False, info
 
     def render(self):
@@ -191,6 +202,15 @@ class MagicCabtEnv(object):
             self._owns_bridge = True
             self._closed = False
 
+    def _finish_active_game(self):
+        if self._bridge is None or self._bridge.finished or self._response is None:
+            return
+        try:
+            self._bridge.game_finish()
+        except Exception:
+            pass
+        self._response = None
+
     def _info(self, observation):
         mask = action_mask(observation, max_actions=self.max_action_count)
         if self.max_action_count is not None and self.action_space.n != self.max_action_count:
@@ -203,22 +223,35 @@ class MagicCabtEnv(object):
         return {
             "action_mask": mask,
             "legalActionCount": len(select.get("option") or []),
+            "hasEmptySelection": _has_empty_selection(select),
             "selectType": select.get("type"),
             "actingPlayerIndex": select.get("playerIndex"),
         }
 
 
 def action_mask(observation_or_select, max_actions=None):
-    """Return a boolean legal-action mask for a CABT observation or select block."""
+    """Return a boolean legal-action mask for a CABT observation or select block.
+
+    For prompts with ``minCount == 0`` (attackers/blockers), an extra ``True``
+    entry is appended after the concrete options, representing the legal
+    "choose none" / empty selection. A masked policy can use this slot to
+    decline all options instead of being forced to select one.
+
+    The pass slot index equals ``len(options)``. When ``max_actions`` is set,
+    it must account for this extra slot.
+    """
     select = _select_of(observation_or_select)
     options = select.get("option") if isinstance(select, dict) else None
     count = len(options or [])
+    has_pass = _has_empty_selection(select)
+    total = count + (1 if has_pass else 0)
     if max_actions is not None:
-        if count > max_actions:
-            raise ValueError("%d legal options exceeds max_action_count=%d" %
-                             (count, max_actions))
-        return [True] * count + [False] * (max_actions - count)
-    return [True] * count
+        if total > max_actions:
+            raise ValueError("%d legal actions (incl. pass) exceeds "
+                             "max_action_count=%d" % (total, max_actions))
+        mask = [True] * total + [False] * (max_actions - total)
+        return mask
+    return [True] * total
 
 
 def terminal_reward(result, player_index, player_names=("P0", "P1")):
@@ -236,14 +269,26 @@ def _rewards_by_seat(result, player_names):
     }
 
 
-def _selection_from_action(action):
+def _has_empty_selection(select):
+    if not isinstance(select, dict):
+        return False
+    min_count = select.get("minCount")
+    return isinstance(min_count, int) and min_count == 0
+
+
+def _selection_from_action(action, option_count=0, has_pass=False):
     if isinstance(action, bool):
         raise InvalidActionError("boolean actions are not valid indices")
+    pass_index = option_count if has_pass else None
     if isinstance(action, int):
+        if has_pass and action == pass_index:
+            return []
         return [action]
     if isinstance(action, tuple):
         action = list(action)
     if isinstance(action, list):
+        if has_pass and len(action) == 1 and action[0] == pass_index:
+            return []
         return list(action)
     raise InvalidActionError("action must be an int or list of ints")
 
