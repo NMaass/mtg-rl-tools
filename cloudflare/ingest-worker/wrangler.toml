@@ -4,8 +4,8 @@ compatibility_date = "2026-07-09"
 
 # Bind these in Cloudflare before deployment:
 # - UPLOAD_BUCKET: R2 bucket for accepted upload envelopes
-# - UPLOAD_KV: KV namespace for accepted upload metadata / dedupe keys
-# - API_TOKEN: secret bearer token, optional but recommended
+# - UPLOAD_KV: KV namespace for dedupe metadata
+# - UPLOAD_TOKEN: optional bearer-token secret
 
 [[r2_buckets]]
 binding = "UPLOAD_BUCKET"
