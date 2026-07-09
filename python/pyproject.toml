@@ -43,6 +43,7 @@ magic-cabt-replay-annotate = "magic_cabt.replay.annotate:main"
 magic-cabt-arena-mirror = "magic_cabt.arena_mirror.__main__:main"
 magic-cabt-build-manifest = "magic_cabt.training.build_manifest:main"
 magic-cabt-upload = "magic_cabt.upload.cli:main"
+magic-cabt-agent-service = "magic_cabt.server.agent_service:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
