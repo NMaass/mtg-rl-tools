@@ -42,6 +42,7 @@ magic-cabt-eval-play = "magic_cabt.eval.play:main"
 magic-cabt-replay-annotate = "magic_cabt.replay.annotate:main"
 magic-cabt-arena-mirror = "magic_cabt.arena_mirror.__main__:main"
 magic-cabt-build-manifest = "magic_cabt.training.build_manifest:main"
+magic-cabt-analyze-actions = "magic_cabt.training.analyze_actions:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
