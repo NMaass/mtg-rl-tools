@@ -38,6 +38,7 @@ arena = []
 [project.scripts]
 magic-cabt-validate = "magic_cabt.training.validate_dataset:main"
 magic-cabt-compile-il = "magic_cabt.training.compile_il:main"
+magic-cabt-train-bc = "magic_cabt.training.train_bc:main"
 magic-cabt-eval-play = "magic_cabt.eval.play:main"
 magic-cabt-replay-annotate = "magic_cabt.replay.annotate:main"
 magic-cabt-arena-mirror = "magic_cabt.arena_mirror.__main__:main"
