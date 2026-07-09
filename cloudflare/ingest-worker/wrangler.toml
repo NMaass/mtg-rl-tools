@@ -1,0 +1,16 @@
+name = "magic-cabt-ingest"
+main = "src/index.js"
+compatibility_date = "2026-07-09"
+
+# Bind these in Cloudflare before deployment:
+# - UPLOAD_BUCKET: R2 bucket for accepted upload envelopes
+# - UPLOAD_KV: KV namespace for accepted upload metadata / dedupe keys
+# - API_TOKEN: secret bearer token, optional but recommended
+
+[[r2_buckets]]
+binding = "UPLOAD_BUCKET"
+bucket_name = "magic-cabt-uploads"
+
+[[kv_namespaces]]
+binding = "UPLOAD_KV"
+id = "replace-with-kv-namespace-id"
