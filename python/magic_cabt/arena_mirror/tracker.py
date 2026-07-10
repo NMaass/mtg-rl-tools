@@ -7,6 +7,8 @@ board state; ``ArenaMatchTracker`` ties both together with decision
 prompt/response pairing and produces JSON-ready mirror snapshots.
 """
 
+import json
+
 from ..arena_log import ArenaLogNormalizer
 from . import options as options_mod
 
@@ -378,6 +380,42 @@ class GameStateTracker(object):
                 view[key] = obj[key]
         return view
 
+    def canonical_object_key(self, instance_id):
+        """Strategic fingerprint of a game object, excluding instance identity.
+
+        Two objects with equal keys are fungible as targets: same card
+        identity, controller, stats, tapped/attack state, counters, damage,
+        and attachments. Returns ``None`` for unknown or face-down objects --
+        fungibility must be proven, never assumed (hidden objects may differ
+        in ways this perspective cannot see).
+        """
+        obj = self.objects.get(instance_id)
+        if not obj:
+            return None
+        grp_id = obj.get("grpId") or obj.get("overlayGrpId")
+        if not grp_id or obj.get("faceDownFlag"):
+            return None
+        attachments = sorted(
+            str(other.get("grpId") or other.get("overlayGrpId") or "?")
+            for other in self.objects.values()
+            if other.get("attachedTo") == instance_id)
+        fingerprint = {
+            "grpId": grp_id,
+            "controller": obj.get("controllerSeat", obj.get("ownerSeat")),
+            "owner": obj.get("ownerSeat"),
+            "tapped": bool(obj.get("tapped")),
+            "power": obj.get("power"),
+            "toughness": obj.get("toughness"),
+            "damage": obj.get("damage"),
+            "counters": obj.get("counters") or {},
+            "attacking": instance_id in self.attacking,
+            "blocking": instance_id in self.blocking,
+            "cardTypes": obj.get("cardTypes") or [],
+            "subtypes": obj.get("subtypes") or [],
+            "attachments": attachments,
+        }
+        return json.dumps(fingerprint, sort_keys=True, separators=(",", ":"))
+
     def _zone_count(self, zone_name, seat_id):
         for zone in self.zones.values():
             if zone["name"] == zone_name and zone.get("ownerSeat") == seat_id:
@@ -479,11 +517,34 @@ class ArenaMatchTracker(object):
         prompt = options_mod.build_prompt(event)
         if prompt is not None:
             prompt["snapshot"] = self._stamp(self.state.snapshot())
+            self._fingerprint_target_options(prompt)
             self._pending_prompts.append(prompt)
             # Arena occasionally abandons prompts (auto-pass); keep the
             # queue short so stale prompts don't mis-pair later responses.
             if len(self._pending_prompts) > 8:
                 self._pending_prompts.pop(0)
+
+    def _fingerprint_target_options(self, prompt):
+        """Stamp target options with a canonical fungibility key.
+
+        Must run at prompt time (the tracker state matches what the player
+        saw); ``options.build_prompt`` cannot do it because it only sees the
+        raw GRE event. Options whose object has no provable fingerprint are
+        left unstamped and downstream dedup treats them as distinct.
+        """
+        select = prompt.get("select") or {}
+        for option in select.get("option") or []:
+            if not isinstance(option, dict):
+                continue
+            payload = option.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            instance_id = payload.get("targetInstanceId")
+            if instance_id is None:
+                continue
+            key = self.state.canonical_object_key(instance_id)
+            if key:
+                payload["canonicalKey"] = key
 
     def _handle_client_decision(self, event):
         match = options_mod.match_response(self._pending_prompts, event)

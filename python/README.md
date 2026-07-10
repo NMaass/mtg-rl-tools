@@ -30,7 +30,12 @@ The package exposes the common research/data commands as console scripts:
 ```sh
 magic-cabt-validate <records.jsonl>
 magic-cabt-compile-il --input <records.jsonl> --out <single_choice.jsonl>
+magic-cabt-build-manifest --input <records.jsonl> --out <manifest.json>
+magic-cabt-train-bc --input <single_choice.jsonl> --out runs/bc
+magic-cabt-eval-bc --input <single_choice.jsonl> --policy first
+magic-cabt-analyze-actions --input <records.jsonl>
 magic-cabt-eval-play --deck0 ../examples/basic_deck.txt --deck1 ../examples/basic_deck.txt
+magic-cabt-play --deck0 ../examples/basic_deck.txt --deck1 ../examples/basic_deck.txt --agent1 random
 magic-cabt-replay-annotate --input <records-or-bundle> --policy first
 magic-cabt-arena-mirror live --no-display
 ```

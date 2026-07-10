@@ -138,7 +138,7 @@ class HelpersTest(unittest.TestCase):
             make_agent("nonesuch")
 
     def test_available_agents_lists_builtins(self):
-        self.assertEqual(available_agents(), ["first", "random"])
+        self.assertEqual(available_agents(), ["bc", "first", "random"])
 
 
 if __name__ == "__main__":

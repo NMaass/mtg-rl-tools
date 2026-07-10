@@ -25,7 +25,7 @@ import os
 import sys
 
 from magic_cabt.agents import (
-    clamp_selection,
+    IllegalSelectionError,
     is_legal_selection,
     make_agent,
 )
@@ -47,8 +47,10 @@ def play_game(bridge, agents, deck0, deck1, seed=None, max_turns=None,
     """Play one game to completion on an already-open ``bridge``.
 
     ``agents`` is a 2-tuple indexed by seat. Each pending decision is routed
-    to ``agents[select.playerIndex]``. An illegal agent selection is counted
-    and repaired (via ``clamp_selection``) rather than crashing the game.
+    to ``agents[select.playerIndex]``. An illegal agent selection aborts the
+    game with ``IllegalSelectionError`` carrying the raw output -- it is never
+    repaired, so no laundered selection can reach the replay frames that feed
+    training.
 
     ``record_writer``, if given, is called once per decision with a self-play
     replay frame and once at game end with the trailing ``{result}`` frame.
@@ -60,7 +62,6 @@ def play_game(bridge, agents, deck0, deck1, seed=None, max_turns=None,
         seed=seed, max_turns=max_turns,
     )
     decisions = 0
-    invalid_by_seat = [0, 0]
     game_id = _game_id_of(record_writer)
 
     while not bridge.finished:
@@ -69,9 +70,7 @@ def play_game(bridge, agents, deck0, deck1, seed=None, max_turns=None,
         seat = select["playerIndex"]
         selection = agents[seat].select(observation)
         if not is_legal_selection(selection, select):
-            if 0 <= seat < 2:
-                invalid_by_seat[seat] += 1
-            selection = clamp_selection(selection, select)
+            raise IllegalSelectionError(seat, selection, select)
         if record_writer is not None:
             record_writer.write_frame({
                 "gameId": game_id,
@@ -91,8 +90,8 @@ def play_game(bridge, agents, deck0, deck1, seed=None, max_turns=None,
         "completed": True,
         "winnerSeat": _winner_seat(result, player_names),
         "decisions": decisions,
-        "invalidBySeat": invalid_by_seat,
-        "invalidSelections": invalid_by_seat[0] + invalid_by_seat[1],
+        "invalidBySeat": [0, 0],
+        "invalidSelections": 0,
         "failClosed": False,
         "error": None,
         "result": result,
@@ -245,6 +244,23 @@ def _play_one(bridge, agents, deck0, deck1, game_index, game_seed, max_turns,
                 % (game_id, outcome.get("winnerSeat"),
                    outcome.get("decisions", 0),
                    outcome.get("invalidSelections", 0)))
+        return outcome
+    except IllegalSelectionError as error:
+        # Agent produced an illegal selection: the game is aborted and the
+        # RAW output is preserved in the outcome -- never repaired/recorded.
+        if log:
+            log("%s: ILLEGAL SELECTION %s" % (game_id, error))
+        _recover_bridge(bridge)
+        outcome = _failed_outcome(str(error), fail_closed=False)
+        if error.seat in (0, 1):
+            outcome["invalidBySeat"][error.seat] = 1
+            outcome["invalidSelections"] = 1
+        outcome["illegalSelection"] = {
+            "seat": error.seat,
+            "rawSelection": error.selection,
+            "promptType": error.select_type,
+            "optionCount": error.option_count,
+        }
         return outcome
     except CabtGameError as error:
         # Engine fail-closed (bad decision, engine error): tally and move on.
