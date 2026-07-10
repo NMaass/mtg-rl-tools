@@ -21,6 +21,8 @@ magic-cabt-upload \
 
 The uploader builds a redacted envelope from `decisions.jsonl` and `summary.json`; it does not upload raw MTGA logs by default.
 
+Consent is granular: `--yes` grants training consent only (`consent.allowTraining = true`). Public aggregate stats require the separate `--allow-aggregate-stats` flag (`consent.allowPublicAggregateStats`, default `false`). Raw research access (`consent.allowRawResearchAccess`) is always `false` in default bundles.
+
 ## Worker deployment sketch
 
 ```sh
@@ -38,7 +40,7 @@ Update `wrangler.toml` with the created KV namespace id before deployment.
 - bearer token support through `UPLOAD_TOKEN`;
 - 5 MB body limit;
 - required `kind = magic_cabt_upload_bundle`;
-- required `consent.allowTraining = true`;
+- required `consent.allowTraining = true` (`consent.allowPublicAggregateStats` is optional and granular — never required, validated as a boolean when present);
 - required manifest;
 - required decision array of 1..20,000 records;
 - required decision prompt plus selected indices;

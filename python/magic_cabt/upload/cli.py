@@ -29,7 +29,10 @@ def main(argv=None):
     parser.add_argument("--print-envelope", action="store_true",
                         help="print the full redacted envelope JSON")
     parser.add_argument("--yes", action="store_true",
-                        help="confirm opt-in training consent")
+                        help="confirm opt-in training consent (allowTraining only)")
+    parser.add_argument("--allow-aggregate-stats", action="store_true",
+                        help="additionally consent to public aggregate stats "
+                             "(allowPublicAggregateStats; off by default)")
     args = parser.parse_args(argv)
 
     if not args.yes:
@@ -40,6 +43,7 @@ def main(argv=None):
             args.bundle,
             contributor_id=args.contributor_id,
             consent=True,
+            allow_aggregate_stats=args.allow_aggregate_stats,
             max_records=args.max_records,
         )
     except BundleValidationError as exc:

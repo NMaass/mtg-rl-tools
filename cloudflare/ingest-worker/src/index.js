@@ -73,6 +73,12 @@ function validateEnvelope(envelope) {
   if (!envelope || typeof envelope !== "object") return fail("BAD_ENVELOPE");
   if (envelope.kind !== REQUIRED_KIND) return fail("BAD_KIND");
   if (!envelope.consent || envelope.consent.allowTraining !== true) return fail("NO_TRAINING_CONSENT");
+  // Aggregate-stats consent is granular and optional (client default: false).
+  // It is never required, but if present it must be an explicit boolean.
+  if ("allowPublicAggregateStats" in envelope.consent
+      && typeof envelope.consent.allowPublicAggregateStats !== "boolean") {
+    return fail("BAD_CONSENT");
+  }
   if (!Array.isArray(envelope.decisions)) return fail("NO_DECISIONS");
   if (envelope.decisions.length < 1 || envelope.decisions.length > MAX_RECORDS) return fail("BAD_RECORD_COUNT");
   if (!envelope.manifest || typeof envelope.manifest !== "object") return fail("NO_MANIFEST");

@@ -49,8 +49,14 @@ def validate_bundle_dir(bundle_dir):
 
 
 def build_upload_envelope(bundle_dir, contributor_id=None, consent=True,
+                          allow_aggregate_stats=False,
                           max_records=MAX_DEFAULT_RECORDS):
-    """Build a redacted JSON upload envelope from a local bundle directory."""
+    """Build a redacted JSON upload envelope from a local bundle directory.
+
+    ``consent`` covers training use only (the CLI's ``--yes``).
+    ``allow_aggregate_stats`` must be opted into separately (the CLI's
+    ``--allow-aggregate-stats``) and defaults to False.
+    """
     if not consent:
         raise BundleValidationError("upload requires explicit consent")
     files = validate_bundle_dir(bundle_dir)
@@ -71,7 +77,7 @@ def build_upload_envelope(bundle_dir, contributor_id=None, consent=True,
         "consent": {
             "consentVersion": CONSENT_VERSION,
             "allowTraining": True,
-            "allowPublicAggregateStats": True,
+            "allowPublicAggregateStats": bool(allow_aggregate_stats),
             "allowRawResearchAccess": False,
         },
         "source": {
