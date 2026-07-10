@@ -34,6 +34,7 @@ dependencies = []
 [project.optional-dependencies]
 dev = []
 arena = []
+torch = ["torch>=2.2", "numpy"]
 
 [project.scripts]
 magic-cabt-validate = "magic_cabt.training.validate_dataset:main"
@@ -48,6 +49,8 @@ magic-cabt-eval-bc = "magic_cabt.training.eval_bc:main"
 magic-cabt-play = "magic_cabt.play.human_vs_agent:main"
 magic-cabt-upload = "magic_cabt.upload.cli:main"
 magic-cabt-agent-service = "magic_cabt.server.agent_service:main"
+magic-cabt-train-ranker = "magic_cabt.training.train_ranker:main"
+magic-cabt-build-transitions = "magic_cabt.training.build_transitions:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
