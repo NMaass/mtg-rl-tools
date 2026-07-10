@@ -50,27 +50,34 @@ def seat_of(value):
 
 
 def iter_zone_objects(state):
+    """Hidden zones may be bare counts (``libraries: {seat: 53}``); skip those."""
     zones = state.get("zones")
     if isinstance(zones, dict):
         for raw_name, contents in zones.items():
             zone = normalize_zone(raw_name)
             if isinstance(contents, dict):
                 for seat, objects in contents.items():
-                    for obj in objects or []:
-                        yield zone, obj, seat
-            else:
-                for obj in contents or []:
+                    if isinstance(objects, (list, tuple)):
+                        for obj in objects:
+                            yield zone, obj, seat
+            elif isinstance(contents, (list, tuple)):
+                for obj in contents:
                     yield zone, obj, seat_of(obj)
         return
     for key in ("battlefield", "stack", "exile", "command", "library",
                 "sideboard", "graveyard", "hand"):
-        for obj in state.get(key) or []:
-            yield key, obj, seat_of(obj)
+        contents = state.get(key)
+        if isinstance(contents, (list, tuple)):
+            for obj in contents:
+                yield key, obj, seat_of(obj)
     for key, zone in (("hands", "hand"), ("graveyards", "graveyard"),
                       ("libraries", "library")):
-        for seat, objects in (state.get(key) or {}).items():
-            for obj in objects or []:
-                yield zone, obj, seat
+        contents = state.get(key)
+        if isinstance(contents, dict):
+            for seat, objects in contents.items():
+                if isinstance(objects, (list, tuple)):
+                    for obj in objects:
+                        yield zone, obj, seat
 
 
 def normalize_zone(name):
@@ -127,6 +134,7 @@ def zone_items(state, zone):
     if isinstance(raw, dict):
         result = []
         for values in raw.values():
-            result.extend(values or [])
+            if isinstance(values, (list, tuple)):
+                result.extend(values)
         return result
-    return raw or []
+    return raw if isinstance(raw, (list, tuple)) else []

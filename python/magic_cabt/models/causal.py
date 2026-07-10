@@ -73,7 +73,10 @@ def _hand(state, seat, player):
     if player.get("handCount") is not None:
         return number(player.get("handCount"))
     hands = (state.get("zones") or {}).get("hands") or state.get("hands") or {}
-    return len(hands.get(str(seat), hands.get(seat, [])) or []) if isinstance(hands, dict) else 0
+    if not isinstance(hands, dict):
+        return 0
+    value = hands.get(str(seat), hands.get(seat))
+    return len(value) if isinstance(value, (list, tuple)) else number(value)
 
 
 def _power(state):

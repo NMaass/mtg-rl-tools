@@ -98,6 +98,7 @@ class LocalEvolver:
 
     def _train_once(self, bundle_dir):
         self.ensure_checkpoint()
+        self._prune_candidates()
         bundles = self._recent_bundles(bundle_dir)
         if not bundles:
             self._say("local training skipped: no replay bundles")
@@ -141,12 +142,23 @@ class LocalEvolver:
         shutil.copy2(candidate, temporary)
         os.replace(temporary, self.checkpoint_path)
         metrics = _read_json(os.path.join(staging, "metrics.json")) or {}
+        shutil.rmtree(staging, ignore_errors=True)
         self._write_status({
             "state": "ready", "finishedAt": _now(),
             "checkpoint": self.checkpoint_path,
-            "bundles": snapshots, "metrics": metrics})
+            "bundles": bundles, "metrics": metrics})
         self._say("checkpoint updated; it will load before the next game")
         return self.checkpoint_path
+
+    def _prune_candidates(self, keep=3):
+        """Failed candidate directories stay for debugging; bound their number."""
+        stale = sorted(
+            entry for entry in os.listdir(self.model_dir)
+            if entry.startswith("candidate-") and
+            os.path.isdir(os.path.join(self.model_dir, entry)))[:-keep or None]
+        for entry in stale:
+            shutil.rmtree(os.path.join(self.model_dir, entry),
+                          ignore_errors=True)
 
     def _snapshot_bundles(self, bundles, staging):
         """Copy append-only inputs so training never reads a partial line."""
