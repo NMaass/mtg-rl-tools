@@ -5,3 +5,5 @@ __pycache__/
 
 # local recording/replay output
 arena-mirror-runs/
+
+python/magic_cabt.egg-info/
