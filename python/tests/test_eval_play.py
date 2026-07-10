@@ -15,6 +15,9 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
 
 from magic_cabt.eval.play import (  # noqa: E402
+    ILLEGAL_ACTION_FAIL,
+    ILLEGAL_ACTION_REPAIR,
+    InvalidAgentSelectionError,
     build_parser,
     play_game,
     run_tournament,
@@ -83,6 +86,13 @@ class ScriptedBridge(object):
         pass
 
 
+class BadAgent(object):
+    name = "bad"
+
+    def select(self, observation):
+        return [99]
+
+
 class PlayGameTest(unittest.TestCase):
     def test_routes_to_acting_seat_and_counts_decisions(self):
         observations = [
@@ -98,7 +108,6 @@ class PlayGameTest(unittest.TestCase):
         self.assertEqual(outcome["decisions"], 3)
         self.assertEqual(outcome["winnerSeat"], 0)
         self.assertEqual(outcome["invalidSelections"], 0)
-        # both seats take the lowest-index option (PASS_PRIORITY, index 0)
         self.assertEqual(bridge.selections, [[0], [0], [0]])
 
     def test_winner_seat_maps_seat_one(self):
@@ -114,18 +123,20 @@ class PlayGameTest(unittest.TestCase):
                             [], [])
         self.assertIsNone(outcome["winnerSeat"])
 
-    def test_illegal_agent_selection_is_counted_and_repaired(self):
-        class BadAgent(object):
-            name = "bad"
-
-            def select(self, observation):
-                return [99]  # out of range
-
+    def test_illegal_agent_selection_fails_by_default(self):
         bridge = ScriptedBridge([priority_obs(0, ["PASS_PRIORITY", "PLAY_LAND"])])
-        outcome = play_game(bridge, (BadAgent(), BadAgent()), [], [])
+        with self.assertRaises(InvalidAgentSelectionError) as raised:
+            play_game(bridge, (BadAgent(), BadAgent()), [], [])
+        self.assertEqual(raised.exception.invalid_by_seat, [1, 0])
+        self.assertEqual(bridge.selections, [])
+
+    def test_illegal_agent_selection_can_be_repaired_explicitly(self):
+        bridge = ScriptedBridge([priority_obs(0, ["PASS_PRIORITY", "PLAY_LAND"])])
+        outcome = play_game(
+            bridge, (BadAgent(), BadAgent()), [], [],
+            illegal_action_mode=ILLEGAL_ACTION_REPAIR)
         self.assertEqual(outcome["invalidSelections"], 1)
         self.assertEqual(outcome["invalidBySeat"][0], 1)
-        # repaired to a legal selection, so the game still advanced
         self.assertTrue(bridge.selections[0])
 
     def test_writes_replay_frames(self):
@@ -142,7 +153,6 @@ class PlayGameTest(unittest.TestCase):
 
         play_game(bridge, (make_agent("first"), make_agent("first")),
                   [], [], record_writer=Writer())
-        # one frame per decision + a trailing result frame
         self.assertEqual(len(frames), 3)
         self.assertIn("selected", frames[0])
         self.assertEqual(frames[0]["gameId"], "game-0000")
@@ -165,10 +175,26 @@ class RunTournamentTest(unittest.TestCase):
                                              "seat1": "random"})
         self.assertTrue(os.path.exists(os.path.join(out_dir, "summary.json")))
         self.assertTrue(os.path.exists(os.path.join(out_dir, "game-0000.jsonl")))
-        # replay is readable as self-play frames
         with open(os.path.join(out_dir, "game-0000.jsonl")) as handle:
             lines = [json.loads(line) for line in handle if line.strip()]
         self.assertIn("result", lines[-1])
+
+    def test_strict_tournament_counts_illegal_action_as_failed_game(self):
+        bridge = ScriptedBridge([priority_obs(0, ["PASS_PRIORITY"])])
+        original_make_agent = __import__(
+            "magic_cabt.eval.play", fromlist=["make_agent"]).make_agent
+        import magic_cabt.eval.play as play_module
+        try:
+            play_module.make_agent = lambda spec, seed=None: BadAgent()
+            summary = run_tournament(
+                ("bad", "bad"), [], [], games=1, bridge=bridge,
+                illegal_action_mode=ILLEGAL_ACTION_FAIL)
+        finally:
+            play_module.make_agent = original_make_agent
+        self.assertEqual(summary["gamesCompleted"], 0)
+        self.assertEqual(summary["crashes"], 1)
+        self.assertEqual(summary["invalidSelections"]["total"], 1)
+        self.assertTrue(summary["errors"])
 
 
 class SummarizeTest(unittest.TestCase):
@@ -211,6 +237,14 @@ class ArgParsingTest(unittest.TestCase):
         self.assertEqual(args.games, 20)
         self.assertEqual(args.seed, 1)
         self.assertTrue(args.fail_fast)
+        self.assertEqual(args.illegal_action_mode, ILLEGAL_ACTION_FAIL)
+
+    def test_repair_mode_is_explicit(self):
+        args = build_parser().parse_args([
+            "--agent0", "random", "--agent1", "first",
+            "--deck0", "a.txt", "--deck1", "b.txt",
+            "--illegal-action-mode", "repair"])
+        self.assertEqual(args.illegal_action_mode, ILLEGAL_ACTION_REPAIR)
 
 
 class HumanInputTest(unittest.TestCase):
@@ -257,7 +291,6 @@ class HumanInputTest(unittest.TestCase):
                            output_fn=outputs.append)
         observation = priority_obs(0, ["PASS_PRIORITY", "PLAY_LAND"])
         self.assertEqual(agent.select(observation), [1])
-        # rendered the prompt once, complained about the two bad inputs
         self.assertTrue(any("invalid input" in str(o) for o in outputs))
 
     def test_render_prompt_lists_options(self):
@@ -289,7 +322,6 @@ class AnnotateTest(unittest.TestCase):
         self.assertEqual(annotation["sequenceNumber"], 42)
         self.assertEqual(annotation["policy"], "first")
         self.assertEqual(len(annotation["topK"]), 2)
-        # first ranks option 0 first; chosen index 1 lands at rank 2
         self.assertEqual(annotation["topK"][0]["index"], 0)
         self.assertEqual(annotation["topK"][0]["label"], "Pass priority")
         self.assertEqual(annotation["chosenRank"], 2)
@@ -298,7 +330,6 @@ class AnnotateTest(unittest.TestCase):
     def test_chosen_rank_reflects_top_choice(self):
         scorer = make_agent("first")
         annotation = annotate_record(self._record([0]), scorer, top_k=5)
-        # first option (index 0) ranks first
         self.assertEqual(annotation["chosenRank"], 1)
 
     def test_missing_choice_yields_null_rank(self):
