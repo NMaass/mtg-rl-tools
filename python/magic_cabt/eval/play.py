@@ -14,6 +14,9 @@ them unchanged), and writes a ``summary.json``.
 Individual game failures are caught and tallied so a crash on game 7 does not
 lose games 8..N -- unless ``--fail-fast`` is given.
 
+Benchmark runs fail on illegal agent selections by default. Repair mode exists
+only as an explicit smoke/debug option via ``--illegal-action-mode repair``.
+
 The module splits cleanly into pure logic (``play_game`` / ``summarize``) and
 IO (``run_tournament`` / ``main``) so the aggregation and routing can be
 unit-tested against a mock bridge without launching Java.
@@ -32,6 +35,9 @@ from magic_cabt.agents import (
 from magic_cabt.protocol import CabtBridge, CabtGameError, load_decklist
 
 __all__ = [
+    "ILLEGAL_ACTION_FAIL",
+    "ILLEGAL_ACTION_REPAIR",
+    "InvalidAgentSelectionError",
     "play_game",
     "run_tournament",
     "summarize",
@@ -40,21 +46,43 @@ __all__ = [
 ]
 
 DEFAULT_PLAYER_NAMES = ("P0", "P1")
+ILLEGAL_ACTION_FAIL = "fail"
+ILLEGAL_ACTION_REPAIR = "repair"
+_ILLEGAL_ACTION_MODES = (ILLEGAL_ACTION_FAIL, ILLEGAL_ACTION_REPAIR)
+
+
+class InvalidAgentSelectionError(ValueError):
+    """Raised when an agent emits an illegal option-index selection."""
+
+    def __init__(self, seat, selection, select, invalid_by_seat):
+        self.seat = seat
+        self.selection = list(selection) if isinstance(selection, list) else selection
+        self.select_type = select.get("type") if isinstance(select, dict) else None
+        self.invalid_by_seat = list(invalid_by_seat)
+        super(InvalidAgentSelectionError, self).__init__(
+            "illegal selection %r from seat %r for prompt %r" %
+            (self.selection, seat, self.select_type))
 
 
 def play_game(bridge, agents, deck0, deck1, seed=None, max_turns=None,
-              player_names=DEFAULT_PLAYER_NAMES, record_writer=None):
+              player_names=DEFAULT_PLAYER_NAMES, record_writer=None,
+              illegal_action_mode=ILLEGAL_ACTION_FAIL):
     """Play one game to completion on an already-open ``bridge``.
 
     ``agents`` is a 2-tuple indexed by seat. Each pending decision is routed
-    to ``agents[select.playerIndex]``. An illegal agent selection is counted
-    and repaired (via ``clamp_selection``) rather than crashing the game.
+    to ``agents[select.playerIndex]``. An illegal agent selection fails the
+    game by default so benchmark metrics cannot hide broken policies. Pass
+    ``illegal_action_mode="repair"`` only for smoke/debug runs that should keep
+    advancing after a bad policy output.
 
     ``record_writer``, if given, is called once per decision with a self-play
     replay frame and once at game end with the trailing ``{result}`` frame.
 
     Returns an outcome dict (see ``summarize`` for the fields it consumes).
     """
+    if illegal_action_mode not in _ILLEGAL_ACTION_MODES:
+        raise ValueError("unknown illegal_action_mode: %r" %
+                         (illegal_action_mode,))
     response = bridge.game_start(
         deck0, deck1, player_names=list(player_names),
         seed=seed, max_turns=max_turns,
@@ -71,7 +99,13 @@ def play_game(bridge, agents, deck0, deck1, seed=None, max_turns=None,
         if not is_legal_selection(selection, select):
             if 0 <= seat < 2:
                 invalid_by_seat[seat] += 1
+            if illegal_action_mode == ILLEGAL_ACTION_FAIL:
+                raise InvalidAgentSelectionError(
+                    seat, selection, select, invalid_by_seat)
             selection = clamp_selection(selection, select)
+            if not is_legal_selection(selection, select):
+                raise InvalidAgentSelectionError(
+                    seat, selection, select, invalid_by_seat)
         if record_writer is not None:
             record_writer.write_frame({
                 "gameId": game_id,
@@ -183,7 +217,8 @@ class _GameRecordWriter(object):
 
 def run_tournament(agent_specs, deck0, deck1, games=1, seed=None, max_turns=None,
                    bridge=None, bridge_factory=None, out_dir=None,
-                   fail_fast=False, player_names=DEFAULT_PLAYER_NAMES, log=None):
+                   fail_fast=False, player_names=DEFAULT_PLAYER_NAMES, log=None,
+                   illegal_action_mode=ILLEGAL_ACTION_FAIL):
     """Run ``games`` games between the two agent specs; return the summary.
 
     ``agent_specs`` is a 2-tuple of agent names (``"random"`` / ``"first"``).
@@ -195,6 +230,9 @@ def run_tournament(agent_specs, deck0, deck1, games=1, seed=None, max_turns=None
     (closed when done). ``out_dir``, if set, receives ``game-NNNN.jsonl``
     replays and ``summary.json``.
     """
+    if illegal_action_mode not in _ILLEGAL_ACTION_MODES:
+        raise ValueError("unknown illegal_action_mode: %r" %
+                         (illegal_action_mode,))
     if bridge is None and bridge_factory is None:
         raise ValueError("run_tournament needs a bridge or a bridge_factory")
     if out_dir:
@@ -211,7 +249,7 @@ def run_tournament(agent_specs, deck0, deck1, games=1, seed=None, max_turns=None
                           None if game_seed is None else game_seed + 1)))
             outcome = _play_one(
                 active_bridge, agents, deck0, deck1, game_index, game_seed,
-                max_turns, player_names, out_dir, log)
+                max_turns, player_names, out_dir, log, illegal_action_mode)
             outcomes.append(outcome)
             if not outcome.get("completed") and fail_fast:
                 if log:
@@ -229,7 +267,7 @@ def run_tournament(agent_specs, deck0, deck1, games=1, seed=None, max_turns=None
 
 
 def _play_one(bridge, agents, deck0, deck1, game_index, game_seed, max_turns,
-              player_names, out_dir, log):
+              player_names, out_dir, log, illegal_action_mode):
     game_id = "game-%04d" % game_index
     handle = None
     writer = None
@@ -239,13 +277,20 @@ def _play_one(bridge, agents, deck0, deck1, game_index, game_seed, max_turns,
     try:
         outcome = play_game(
             bridge, agents, deck0, deck1, seed=game_seed, max_turns=max_turns,
-            player_names=player_names, record_writer=writer)
+            player_names=player_names, record_writer=writer,
+            illegal_action_mode=illegal_action_mode)
         if log:
             log("%s: winner seat=%s decisions=%d invalid=%d"
                 % (game_id, outcome.get("winnerSeat"),
                    outcome.get("decisions", 0),
                    outcome.get("invalidSelections", 0)))
         return outcome
+    except InvalidAgentSelectionError as error:
+        if log:
+            log("%s: ILLEGAL-ACTION %s" % (game_id, error))
+        _recover_bridge(bridge)
+        return _failed_outcome(
+            str(error), fail_closed=False, invalid_by_seat=error.invalid_by_seat)
     except CabtGameError as error:
         # Engine fail-closed (bad decision, engine error): tally and move on.
         if log:
@@ -270,13 +315,15 @@ def _recover_bridge(bridge):
         pass
 
 
-def _failed_outcome(message, fail_closed):
+def _failed_outcome(message, fail_closed, invalid_by_seat=None):
+    if invalid_by_seat is None:
+        invalid_by_seat = [0, 0]
     return {
         "completed": False,
         "winnerSeat": None,
         "decisions": 0,
-        "invalidBySeat": [0, 0],
-        "invalidSelections": 0,
+        "invalidBySeat": list(invalid_by_seat),
+        "invalidSelections": invalid_by_seat[0] + invalid_by_seat[1],
         "failClosed": fail_closed,
         "error": message,
         "result": None,
@@ -284,7 +331,6 @@ def _failed_outcome(message, fail_closed):
 
 
 # --- CLI --------------------------------------------------------------------
-
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="magic_cabt.eval.play",
@@ -305,6 +351,10 @@ def build_parser():
                         help="Java classpath (default: $MAGIC_CABT_CLASSPATH)")
     parser.add_argument("--fail-fast", action="store_true",
                         help="stop at the first game that crashes")
+    parser.add_argument("--illegal-action-mode", default=ILLEGAL_ACTION_FAIL,
+                        choices=_ILLEGAL_ACTION_MODES,
+                        help="fail benchmark games on illegal agent output by "
+                             "default; use repair only for smoke/debug runs")
     return parser
 
 
@@ -317,6 +367,7 @@ def main(argv=None):
         games=args.games, seed=args.seed, max_turns=args.max_turns,
         bridge_factory=lambda: CabtBridge(classpath=args.classpath),
         out_dir=args.out, fail_fast=args.fail_fast, log=_stderr_log,
+        illegal_action_mode=args.illegal_action_mode,
     )
     json.dump(summary, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
