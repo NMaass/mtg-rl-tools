@@ -15,14 +15,25 @@ def state(seq, match_id="m1", game=1):
             "seq": seq, "zones": {"battlefield": []}}
 
 
-def decision(seq, match_id="m1", game=1, selected=None):
+def decision(seq, match_id="m1", game=1, selected=None, life=20):
     return {
         "matchId": match_id,
         "gameNumber": game,
         "selectedIndices": selected if selected is not None else [0],
-        "select": {"type": "PRIORITY",
-                   "option": [{"index": 0, "type": "PASS_PRIORITY"}]},
-        "observation": {"current": {"gameInstance": 1, "seq": seq}},
+        "select": {"type": "TARGET_SELECT",
+                   "option": [
+                       {"index": 0, "type": "TARGET", "label": "target Angel",
+                        "payload": {"targetInstanceId": 101,
+                                    "canonicalKey": "angel"}},
+                       {"index": 1, "type": "TARGET", "label": "target Goblin",
+                        "payload": {"targetInstanceId": 102,
+                                    "canonicalKey": "goblin"}},
+                   ]},
+        "observation": {"current": {
+            "gameInstance": 1, "seq": seq,
+            "players": [{"seat": 1, "life": life},
+                        {"seat": 2, "life": 20}],
+        }},
     }
 
 
@@ -49,8 +60,34 @@ class TransitionsFromDecisionsTest(unittest.TestCase):
             [decision(1), decision(2)]))
         self.assertEqual(1, len(transitions))
         self.assertEqual([0], transitions[0]["action"]["selectedIndices"])
-        self.assertEqual("PRIORITY", transitions[0]["action"]["promptType"])
-        self.assertEqual(1, transitions[0]["action"]["optionCount"])
+        self.assertEqual("TARGET_SELECT",
+                         transitions[0]["action"]["promptType"])
+        self.assertEqual(2, transitions[0]["action"]["optionCount"])
+
+    def test_action_carries_selected_option_semantics_not_just_index(self):
+        transitions = list(transitions_from_decisions(
+            [decision(1, selected=[1]), decision(2)]))
+        selected = transitions[0]["action"]["selectedOptions"]
+        self.assertEqual(1, len(selected))
+        # the full option dict travels with the transition, so the
+        # predictor conditions on WHAT was chosen (canonicalKey, target),
+        # never on the positional index
+        self.assertEqual("goblin", selected[0]["payload"]["canonicalKey"])
+        self.assertEqual("target Goblin", selected[0]["label"])
+
+    def test_out_of_range_selected_index_yields_no_option(self):
+        transitions = list(transitions_from_decisions(
+            [decision(1, selected=[9]), decision(2)]))
+        self.assertEqual([], transitions[0]["action"]["selectedOptions"])
+        self.assertEqual([9], transitions[0]["action"]["selectedIndices"])
+
+    def test_deltas_carry_life_change_and_terminal_flag(self):
+        transitions = list(transitions_from_decisions(
+            [decision(1, life=20), decision(2, life=17)]))
+        deltas = transitions[0]["deltas"]
+        self.assertEqual(-3, deltas["lifeDelta"]["1"])
+        self.assertEqual(0, deltas["lifeDelta"]["2"])
+        self.assertFalse(deltas["gameOver"])
 
 
 class CliTest(unittest.TestCase):

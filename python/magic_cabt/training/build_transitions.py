@@ -7,11 +7,20 @@ Consumes either Arena mirror run directories (pairs consecutive
 (pairs consecutive decision observations within one game, keeping the action
 taken between them). Emits one JSON object per line:
 
-    {"source", "matchId", "gameNumber", "prev", "next", "action" | null}
+    {"source", "matchId", "gameNumber", "prev", "next",
+     "action" | null, "deltas"}
 
-``action`` (DecisionRecord inputs only) is ``{promptType, selectedIndices,
-optionCount}`` -- enough for an action-conditioned predictor without
-re-serializing the whole option list.
+``action`` (DecisionRecord inputs only) carries the SEMANTICS of the choice,
+not just its position: ``selectedOptions`` holds the full selected option
+dicts (type, label, payload with ``canonicalKey`` and target references),
+because a bare index has no stable meaning across states -- an
+action-conditioned predictor must condition on what was chosen, not on where
+it sat in the list. ``selectedIndices``/``optionCount`` are retained for
+provenance only.
+
+``deltas`` holds exact engine-derived transition labels that are cheap to
+compute here (per-player life change, terminal flag) for auxiliary
+supervision heads.
 
 World-model pretraining needs trajectories, not human choices, so self-play
 replays and mirror states both count; every recorded game contributes
@@ -40,6 +49,28 @@ def _game_key(entry):
             entry.get("gameInstance"))
 
 
+def _life_by_player(state):
+    result = {}
+    for player in (state or {}).get("players") or []:
+        if not isinstance(player, dict):
+            continue
+        key = player.get("seat", player.get("playerIndex"))
+        if key is not None and isinstance(player.get("life"), int):
+            result[str(key)] = player["life"]
+    return result
+
+
+def _transition_deltas(prev_state, next_state):
+    """Exact engine-derived labels for auxiliary supervision heads."""
+    prev_life = _life_by_player(prev_state)
+    next_life = _life_by_player(next_state)
+    return {
+        "lifeDelta": {key: next_life[key] - prev_life[key]
+                      for key in next_life if key in prev_life},
+        "gameOver": bool((next_state or {}).get("gameOver")),
+    }
+
+
 def transitions_from_states(states, source="mirror_states"):
     """Pair consecutive snapshots within one game (no action attribution)."""
     previous = None
@@ -54,6 +85,7 @@ def transitions_from_states(states, source="mirror_states"):
                 "prev": previous,
                 "next": state,
                 "action": None,
+                "deltas": _transition_deltas(previous, state),
             }
         previous = state
 
@@ -67,6 +99,8 @@ def transitions_from_decisions(records, source="decisions"):
         if not isinstance(current, dict):
             continue
         select = record.get("select") or {}
+        options = select.get("option") or []
+        selected = record.get("selectedIndices") or []
         entry = {
             "matchId": record.get("matchId") or record.get("gameId"),
             "gameNumber": record.get("gameNumber"),
@@ -74,8 +108,15 @@ def transitions_from_decisions(records, source="decisions"):
             "state": current,
             "action": {
                 "promptType": select.get("type"),
-                "selectedIndices": record.get("selectedIndices") or [],
-                "optionCount": len(select.get("option") or []),
+                # the semantics of the choice: full option dicts, whose
+                # payloads carry canonicalKey and target references
+                "selectedOptions": [
+                    options[index] for index in selected
+                    if isinstance(index, int) and 0 <= index < len(options)
+                ],
+                # provenance only -- indices are not stable across states
+                "selectedIndices": selected,
+                "optionCount": len(options),
             },
         }
         if previous is not None and _game_key(previous) == _game_key(entry):
@@ -86,6 +127,8 @@ def transitions_from_decisions(records, source="decisions"):
                 "prev": previous["state"],
                 "next": entry["state"],
                 "action": previous["action"],
+                "deltas": _transition_deltas(previous["state"],
+                                             entry["state"]),
             }
         previous = entry
 

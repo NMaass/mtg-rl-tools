@@ -22,6 +22,19 @@ Data sources, cheapest first:
 `transitions.jsonl` (consecutive states within a game, with the acting
 choice attached when the source is DecisionRecords).
 
+Two caveats keep this honest:
+
+- **Actions are recorded semantically, never positionally.** A transition's
+  `action.selectedOptions` holds the full chosen option dicts (payloads with
+  `canonicalKey` and target references); indices are provenance only. An
+  option index has no stable meaning across states, so an action-conditioned
+  predictor must never condition on it.
+- **Random self-play teaches rules, not strategy.** It supplies legality,
+  zone/stack/life dynamics, and transition volume — not sequencing, card
+  importance, or lethal recognition. The trajectory curriculum should climb:
+  random → heuristic/first → option ranker → BC agents → self-play against
+  checkpoints → counterfactual branching once clone-based search exists.
+
 ## Target size: 10–30M parameters
 
 Sized for the local machine (RTX 3070 Ti Laptop, 8 GB VRAM) and realistic
@@ -34,16 +47,36 @@ data volume, not for maximum capacity:
 | Card identity | frozen text-embedding of card text + learned adapter | ~1M learned |
 | **Total learned** | | **~10–20M** |
 
+The first structured JEPA should sit at the bottom of that range —
+**10–16M learned params** (5-layer width-256 set transformer, 2-layer action
+encoder, 3-layer predictor, small heads) — and grow toward 20–30M only with
+event history, belief tokens, or millions of diverse transitions in hand.
+
 Notes:
 
-- A learned embedding table over ~25k Arena card ids would cost ~6.4M params
-  alone and generalize poorly to unseen cards; encoding card *text* with a
-  frozen pretrained encoder is cheaper and compositional.
+- Card identity is a composite, not a choice: frozen text embedding (for
+  transfer to unseen cards) + exact structured fields (types, P/T, mana
+  cost, modes — a language encoder cannot be trusted to preserve "any
+  target" vs "target creature" or damage vs destroy) + a **small** learned
+  identity embedding (32–64d over ~25k cards is under 2M params and lets the
+  model memorize strategically load-bearing facts). What to avoid is only
+  making a *large* ID table the primary representation.
 - 20M params ≈ 320 MB with AdamW state; a board is <100 objects, so batches
   of 128–256 in bf16 fit comfortably in 8 GB. Wall-clock is hours per run.
 - EMA target encoder (BYOL/I-JEPA style) to avoid collapse; predict masked
   future latents at k ∈ {1, 4, 16} steps to cover priority-pass noise vs
   turn-scale dynamics.
+- **The predictor must be stochastic.** A deterministic squared-error
+  predictor averages over draws, hidden opponent hands, and opponent
+  responses — exactly where Magic is most interesting. Use discrete latent
+  codes, a mixture head, or particle-conditioned predictions; keep a
+  deterministic branch only for public rules-driven consequences.
+- **Anchor the latent with exact auxiliary heads.** The engine provides
+  exact per-transition labels for free (per-player life delta, terminal
+  flag, zone changes, counters/damage marked). Supervising small heads on
+  these forces the representation to carry the concepts that matter instead
+  of hoping a generic latent loss discovers them. `build_transitions`
+  already emits `deltas` (life, terminal) for this.
 
 ## Data thresholds
 
