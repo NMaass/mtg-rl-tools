@@ -310,4 +310,6 @@ For prompt-surface work, start with [`Mage.Server.Plugins/Mage.Player.AI/docs/ca
 
 ## License
 
-No open-source license has been added yet. Until a license is chosen, treat the code as publicly visible but not formally licensed for reuse.
+MIT — see [LICENSE](LICENSE). Note that XMage itself (the `Mage.Client` /
+`Mage.Server.Plugins` overlay targets) is a separate project under its own
+license.
