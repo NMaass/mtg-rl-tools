@@ -150,5 +150,71 @@ class AnalysisWorkerTest(unittest.TestCase):
         self.assertIn("boom", errors[0])
 
 
+def _legacy_arena_record(chosen=0, instance=101):
+    """Raw recorder shape: selected-indices list at top-level select."""
+    return {
+        "gameId": "game-1",
+        "sequenceNumber": 4,
+        "selectedIndices": [chosen],
+        "select": [chosen],
+        "timestamp": "2026-07-10T00:00:00Z",
+        "observation": {
+            "current": {"turnNumber": 2, "localSeat": 1,
+                        "players": [{"seat": 1, "life": 20}]},
+            "select": {"type": "TARGET", "minCount": 1, "maxCount": 1,
+                       "option": [
+                           {"index": 0, "type": "TARGET", "label": "Pass",
+                            "payload": {}},
+                           {"index": 1, "type": "TARGET",
+                            "label": "target token",
+                            "payload": {"targetInstanceId": instance,
+                                        "canonicalKey": "tok"}},
+                       ]},
+        },
+    }
+
+
+@unittest.skipUnless(
+    __import__("magic_cabt.models.torch_ranker", fromlist=["TORCH_AVAILABLE"]).TORCH_AVAILABLE,
+    "requires PyTorch")
+class RankerScorerTest(unittest.TestCase):
+    def _checkpoint(self, tmp):
+        from magic_cabt.models.configs import get_model_config
+        from magic_cabt.models.torch_ranker import OptionRanker
+
+        config = get_model_config("small")
+        model = OptionRanker(config)
+        path = os.path.join(tmp, "ranker.pt")
+        model.save_checkpoint(path)
+        return path
+
+    def test_scores_legacy_arena_record_with_list_select(self):
+        from magic_cabt.analysis.scorer import RankerScorer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            scorer = RankerScorer(self._checkpoint(tmp), device="cpu")
+            scores = scorer.score(_legacy_arena_record(chosen=0))
+            self.assertEqual(2, len(scores))
+            for value in scores:
+                self.assertTrue(isinstance(value, float))
+
+    def test_scores_training_record_with_dict_select(self):
+        from magic_cabt.analysis.scorer import RankerScorer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            scorer = RankerScorer(self._checkpoint(tmp), device="cpu")
+            training_record = {
+                "select": {"type": "TARGET_SELECT", "option": [
+                    {"index": 0, "label": "Pass", "type": "TARGET",
+                     "payload": {}},
+                    {"index": 1, "label": "Attack", "type": "TARGET",
+                     "payload": {"canonicalKey": "attacker"}},
+                ]},
+                "observation": {"current": {"turnNumber": 3, "players": []}},
+            }
+            scores = scorer.score(training_record)
+            self.assertEqual(2, len(scores))
+
+
 if __name__ == "__main__":
     unittest.main()

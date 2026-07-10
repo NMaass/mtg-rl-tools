@@ -117,9 +117,11 @@ class RankerScorer:
         options = select.get("option") or []
         if not options:
             return []
+        normalized = dict(record)
+        normalized["select"] = select
         config = self.model.config
         state = self._hash_features(
-            "%s | %s" % (prompt_type(record), state_text(record)),
+            "%s | %s" % (prompt_type(normalized), state_text(normalized)),
             int(config["stateFeatureDim"]))
         option_vectors = [self._hash_features(
             option_text(option), int(config["optionFeatureDim"]))
