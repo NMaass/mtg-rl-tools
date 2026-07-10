@@ -35,6 +35,8 @@ dependencies = []
 dev = []
 arena = []
 torch = ["torch>=2.2", "numpy"]
+jepa = ["torch>=2.2", "numpy"]
+semantic = ["torch>=2.2", "numpy", "sentence-transformers"]
 
 [project.scripts]
 magic-cabt-validate = "magic_cabt.training.validate_dataset:main"
@@ -51,6 +53,9 @@ magic-cabt-upload = "magic_cabt.upload.cli:main"
 magic-cabt-agent-service = "magic_cabt.server.agent_service:main"
 magic-cabt-train-ranker = "magic_cabt.training.train_ranker:main"
 magic-cabt-build-transitions = "magic_cabt.training.build_transitions:main"
+magic-cabt-train-jepa = "magic_cabt.training.train_jepa:main"
+magic-cabt-local-evolve = "magic_cabt.training.local_evolve:main"
+magic-cabt-local-model = "magic_cabt.local_model:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
