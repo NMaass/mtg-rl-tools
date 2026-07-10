@@ -55,9 +55,12 @@ def annotate_record(record, scorer, top_k=5):
     select = select_block(record)
     options = options_of(select)
     scores = scorer.score(select)
-    # Defensive: keep score/option lists aligned even if a scorer misbehaves.
+    # A misaligned score vector is a scorer bug; padding it would silently
+    # hide degenerate model output, so fail instead.
     if len(scores) != len(options):
-        scores = (list(scores) + [0.0] * len(options))[:len(options)]
+        raise ValueError(
+            "scorer %r returned %d scores for %d options"
+            % (getattr(scorer, "name", scorer), len(scores), len(options)))
 
     ranking = sorted(range(len(options)),
                      key=lambda index: (-scores[index], index))

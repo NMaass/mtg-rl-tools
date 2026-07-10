@@ -8,6 +8,7 @@ annotation. Built-in agents are registered here and constructed by name via
 
 from .base import (
     Agent,
+    IllegalSelectionError,
     available_agents,
     clamp_selection,
     is_legal_selection,
@@ -25,6 +26,7 @@ register_agent("bc", lambda seed=None: BCAgent())
 
 __all__ = [
     "Agent",
+    "IllegalSelectionError",
     "RandomAgent",
     "FirstAgent",
     "BCAgent",

@@ -26,7 +26,7 @@ from magic_cabt.play.human_vs_agent import (  # noqa: E402
     render_prompt,
 )
 from magic_cabt.replay.annotate import annotate_record, annotate_stream  # noqa: E402
-from magic_cabt.agents import make_agent  # noqa: E402
+from magic_cabt.agents import IllegalSelectionError, make_agent  # noqa: E402
 
 
 def priority_obs(player_index, option_types):
@@ -114,7 +114,7 @@ class PlayGameTest(unittest.TestCase):
                             [], [])
         self.assertIsNone(outcome["winnerSeat"])
 
-    def test_illegal_agent_selection_is_counted_and_repaired(self):
+    def test_illegal_agent_selection_fails_fast_with_raw_output(self):
         class BadAgent(object):
             name = "bad"
 
@@ -122,11 +122,23 @@ class PlayGameTest(unittest.TestCase):
                 return [99]  # out of range
 
         bridge = ScriptedBridge([priority_obs(0, ["PASS_PRIORITY", "PLAY_LAND"])])
-        outcome = play_game(bridge, (BadAgent(), BadAgent()), [], [])
-        self.assertEqual(outcome["invalidSelections"], 1)
-        self.assertEqual(outcome["invalidBySeat"][0], 1)
-        # repaired to a legal selection, so the game still advanced
-        self.assertTrue(bridge.selections[0])
+        frames = []
+
+        class Writer(object):
+            game_id = "game-0000"
+
+            def write_frame(self, frame):
+                frames.append(frame)
+
+        with self.assertRaises(IllegalSelectionError) as caught:
+            play_game(bridge, (BadAgent(), BadAgent()), [], [],
+                      record_writer=Writer())
+        # the raw model output is preserved on the error...
+        self.assertEqual(caught.exception.selection, [99])
+        self.assertEqual(caught.exception.seat, 0)
+        # ...and nothing laundered reached the engine or the replay frames
+        self.assertEqual(bridge.selections, [])
+        self.assertEqual(frames, [])
 
     def test_writes_replay_frames(self):
         observations = [priority_obs(0, ["PASS_PRIORITY", "PLAY_LAND"]),
@@ -306,6 +318,16 @@ class AnnotateTest(unittest.TestCase):
         annotation = annotate_record(self._record([]), scorer)
         self.assertIsNone(annotation["chosenRank"])
         self.assertIsNone(annotation["chosenScore"])
+
+    def test_misaligned_scorer_output_raises(self):
+        class ShortScorer(object):
+            name = "short"
+
+            def score(self, observation):
+                return [1.0]  # one score for a two-option prompt
+
+        with self.assertRaises(ValueError):
+            annotate_record(self._record([1]), ShortScorer())
 
     def test_annotate_stream_skips_optionless_records(self):
         scorer = make_agent("first")

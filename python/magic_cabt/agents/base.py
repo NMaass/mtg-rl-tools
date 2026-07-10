@@ -18,6 +18,7 @@ enforce the count/range/uniqueness envelope, never Magic rules.
 
 __all__ = [
     "Agent",
+    "IllegalSelectionError",
     "select_block",
     "options_of",
     "is_legal_selection",
@@ -26,6 +27,24 @@ __all__ = [
     "make_agent",
     "available_agents",
 ]
+
+
+class IllegalSelectionError(ValueError):
+    """An agent produced a selection that violates the select envelope.
+
+    Carries the raw model/agent output so callers can persist the actual
+    error instead of a silently repaired stand-in.
+    """
+
+    def __init__(self, seat, selection, select):
+        self.seat = seat
+        self.selection = selection
+        self.select_type = (select or {}).get("type")
+        self.option_count = len(options_of(select))
+        super(IllegalSelectionError, self).__init__(
+            "seat %s produced illegal selection %r for %s prompt "
+            "(%d options)" % (seat, selection, self.select_type,
+                              self.option_count))
 
 
 def select_block(observation):
