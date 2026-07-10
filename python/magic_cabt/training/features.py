@@ -4,14 +4,43 @@ The first behavior-cloning path intentionally uses plain text fields rather
 than tensors. Records from Arena mirrors and XMage engine runs do not expose
 identical state detail, so every extractor here treats optional fields as
 best-effort context.
+
+Feature text is canonical with respect to per-game object identity: instance
+ids (Arena ``instance=<n>``, XMage UUIDs) are stripped so two strategically
+identical objects produce identical feature text, while board presence is
+kept as explicit multiplicity (``Token x2``) in zone summaries. Card identity
+(names, ``grpId``) is preserved -- it is stable across games.
 """
 
+import re
+
 __all__ = [
+    "canonical_text",
     "state_text",
     "option_text",
     "option_type",
     "prompt_type",
 ]
+
+# Per-game identifiers that must not become model features: key=value forms
+# for instance ids, and bare UUID literals (XMage object ids).
+_INSTANCE_NOISE_RE = re.compile(
+    r"\b(?:instance|instanceId|targetInstanceId|objectId|sourceId|id)=\S+"
+    r"|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+    r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def canonical_text(text):
+    """Strip per-game object identifiers from feature text.
+
+    Two options that differ only by which concrete instance they point at
+    come out identical; the option index still disambiguates for execution.
+    """
+    if text is None:
+        return ""
+    cleaned = _INSTANCE_NOISE_RE.sub("", str(text))
+    return _WHITESPACE_RE.sub(" ", cleaned).strip()
 
 
 def prompt_type(record):
@@ -65,7 +94,11 @@ def state_text(record):
 
 
 def option_text(option):
-    """Return text for one legal option, including type, label, and source."""
+    """Return text for one legal option, including type, label, and source.
+
+    The assembled text is canonicalized: instance ids never reach the model,
+    so identical game objects yield identical option features.
+    """
     option = option or {}
     parts = []
     _append(parts, "type", option.get("type"))
@@ -75,7 +108,8 @@ def option_text(option):
         _append(parts, "source", _name_from(payload.get("source")))
         _append(parts, "card", _name_from(payload.get("card")))
         _append(parts, "name", payload.get("name"))
-    return " | ".join(parts) if parts else "option"
+    text = canonical_text(" | ".join(parts))
+    return text if text else "option"
 
 
 def _select(record):
@@ -125,16 +159,50 @@ def _player_label(current, player_id):
 
 
 def _zone_summary(objects):
+    """Summarize a zone as canonical object descriptions with multiplicity.
+
+    Identical objects collapse to one entry with an explicit count
+    (``2/2 Token x2``) so board presence survives even though instance
+    identity does not.
+    """
     if not objects:
         return "empty"
-    names = []
-    for item in objects[:8]:
-        name = _name_from(item)
-        if name:
-            names.append(name)
-    if not names:
+    counts = {}
+    order = []
+    unnamed = 0
+    for item in objects:
+        desc = _object_desc(item)
+        if not desc:
+            unnamed += 1
+            continue
+        if desc not in counts:
+            counts[desc] = 0
+            order.append(desc)
+        counts[desc] += 1
+    if not order:
         return "count=%d" % len(objects)
-    if len(objects) > len(names):
-        names.append("count=%d" % len(objects))
-    return ", ".join(names)
+    parts = []
+    for desc in order[:8]:
+        count = counts[desc]
+        parts.append("%s x%d" % (desc, count) if count > 1 else desc)
+    if len(order) > 8 or unnamed:
+        parts.append("count=%d" % len(objects))
+    return ", ".join(parts)
+
+
+def _object_desc(item):
+    """Canonical description of one zone object: name, P/T, tapped state."""
+    name = canonical_text(_name_from(item))
+    if not name:
+        return ""
+    if not isinstance(item, dict):
+        return name
+    bits = [name]
+    power = item.get("power")
+    toughness = item.get("toughness")
+    if power is not None and toughness is not None:
+        bits.append("%s/%s" % (power, toughness))
+    if item.get("tapped"):
+        bits.append("tapped")
+    return " ".join(bits)
 
