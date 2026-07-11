@@ -26,6 +26,7 @@ import tkinter.font as tkfont
 from tkinter import filedialog, scrolledtext, ttk
 
 from .cards import CardDatabase
+from .draft_advisor import DraftAdvisor
 from .mirror import CLASSPATH_ENV_VAR, MirrorDisplay
 from .recorder import MirrorRecorder
 from .replay import ReplayController
@@ -180,13 +181,16 @@ class ArenaMirrorApp(object):
         notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=(10, 12))
 
         follow_tab = ttk.Frame(notebook, padding=16)
+        draft_tab = ttk.Frame(notebook, padding=16)
         replays_tab = ttk.Frame(notebook, padding=16)
         notebook.add(follow_tab, text="Follow")
+        notebook.add(draft_tab, text="Draft")
         notebook.add(replays_tab, text="Replays")
         self._notebook = notebook
         notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self._build_follow_tab(follow_tab)
+        self._build_draft_tab(draft_tab)
         self._build_replays_tab(replays_tab)
 
     def _build_follow_tab(self, frm):
@@ -245,6 +249,78 @@ class ArenaMirrorApp(object):
         view.pack(fill=tk.BOTH, expand=True, padx=2, pady=(0, 4))
         panes.add(wrap, stretch="always", minsize=260)
         return view
+
+    def _build_draft_tab(self, frm):
+        header = ttk.Frame(frm)
+        header.pack(fill=tk.X)
+        ttk.Label(header, text="Live draft", style="H1.TLabel").pack(
+            side=tk.LEFT)
+        self.draft_status_var = tk.StringVar(
+            value="No draft seen yet — start following on the Follow tab.")
+        ttk.Label(frm, textvariable=self.draft_status_var,
+                  style="Muted.TLabel").pack(anchor="w", pady=(2, 14))
+
+        panes = tk.PanedWindow(frm, orient=tk.HORIZONTAL, sashwidth=8,
+                               bg=Palette.BG, bd=0)
+        panes.pack(fill=tk.BOTH, expand=True)
+
+        pack_wrap = ttk.Frame(panes, style="Card.TFrame")
+        ttk.Label(pack_wrap, text="Current pack", style="Card.TLabel",
+                  font=self.font_h2).pack(fill=tk.X, padx=10, pady=(8, 4))
+        self.draft_pack_table = ttk.Treeview(
+            pack_wrap, columns=("rank", "card", "score"), show="headings",
+            height=15)
+        for column, heading, width, anchor, stretch in (
+                ("rank", "#", 36, tk.CENTER, False),
+                ("card", "Card", 260, tk.W, True),
+                ("score", "Score", 70, tk.CENTER, False)):
+            self.draft_pack_table.heading(column, text=heading)
+            self.draft_pack_table.column(column, width=width, anchor=anchor,
+                                         stretch=stretch)
+        self.draft_pack_table.tag_configure("odd", background=Palette.PANEL)
+        self.draft_pack_table.tag_configure("even",
+                                            background=Palette.PANEL_ALT)
+        self.draft_pack_table.tag_configure("best",
+                                            foreground=Palette.SUCCESS)
+        self.draft_pack_table.pack(fill=tk.BOTH, expand=True, padx=2,
+                                   pady=(0, 4))
+        panes.add(pack_wrap, stretch="always", minsize=280)
+
+        self.draft_outlook_view = self._log_pane(panes, "Deck outlook")
+
+    def _update_draft_pane(self, payload):
+        kind = payload.get("kind")
+        draft = payload.get("draft") or {}
+        pool_size = len(draft.get("pool") or [])
+        if kind == "deck_submit":
+            self.draft_status_var.set(
+                "Deck submitted for %s." % (payload.get("eventName"),))
+        else:
+            self.draft_status_var.set(
+                "Pack %s, pick %s — pool %d cards%s" % (
+                    draft.get("packNumber"), draft.get("pickNumber"),
+                    pool_size,
+                    "" if payload.get("scored") else
+                    " (no draft model — showing names only)"))
+        self.draft_pack_table.delete(
+            *self.draft_pack_table.get_children())
+        for index, entry in enumerate(payload.get("pack") or []):
+            score = entry.get("score")
+            tags = ["odd" if index % 2 else "even"]
+            if index == 0 and payload.get("scored"):
+                tags.append("best")
+            self.draft_pack_table.insert(
+                "", tk.END, tags=tags,
+                values=(index + 1, entry.get("name"),
+                        "%.2f" % score if score is not None else "—"))
+        if payload.get("error"):
+            self.draft_status_var.set(
+                self.draft_status_var.get() +
+                " — advisor error: %s" % payload["error"])
+        outlook = payload.get("outlook")
+        if outlook is not None:
+            self.draft_outlook_view.delete("1.0", tk.END)
+            self._append(self.draft_outlook_view, _outlook_text(outlook))
 
     def _build_replays_tab(self, frm):
         header = ttk.Frame(frm)
@@ -686,6 +762,8 @@ class ArenaMirrorApp(object):
 
         recorder = MirrorRecorder(out_dir, card_db=card_db)
         display_factory = self._get_display if self.display_var.get() else None
+        advisor = DraftAdvisor.maybe_load(
+            card_db, log=lambda text: self._post(("log", text)))
 
         session = MirrorSession(
             recorder=recorder, display_factory=display_factory,
@@ -693,7 +771,10 @@ class ArenaMirrorApp(object):
             on_status=lambda text: self._post(("log", text)),
             on_action=lambda line, record: self._post(("action", line)),
             on_game=lambda kind, match_id, game: self._post(
-                ("log", "• %s (match=%s game=%s)" % (kind, match_id, game))))
+                ("log", "• %s (match=%s game=%s)" % (kind, match_id, game))),
+            on_draft=lambda kind, draft, event: self._post(
+                ("draft", self._draft_payload(advisor, card_db, kind,
+                                              draft, event))))
         self._session = session
         self._post(("log", "Recording to %s" % os.path.abspath(out_dir)))
         try:
@@ -780,6 +861,38 @@ class ArenaMirrorApp(object):
         base = os.path.join(DEFAULT_XMAGE_DIR, "Mage.Client")
         return base if os.path.isdir(base) else None
 
+    @staticmethod
+    def _draft_payload(advisor, card_db, kind, draft, event):
+        """Build the draft-pane update on the session thread, so model
+        scoring never runs on (or blocks) the Tk event loop."""
+        payload = {"kind": kind, "draft": draft, "scored": False}
+        if kind == "deck_submit":
+            payload["eventName"] = event.get("eventName")
+
+        def name_for(grp_id):
+            if advisor is not None:
+                return advisor.name_for(grp_id)
+            if card_db is not None:
+                try:
+                    return card_db.name_for(grp_id) or str(grp_id)
+                except Exception:
+                    return str(grp_id)
+            return str(grp_id)
+
+        pack = draft.get("packCards") or []
+        payload["pack"] = [{"grpId": grp_id, "name": name_for(grp_id),
+                            "score": None} for grp_id in pack]
+        if advisor is not None:
+            try:
+                if pack:
+                    payload["pack"] = advisor.score_pack(draft)
+                    payload["scored"] = True
+                if kind in ("pick", "deck_submit") and draft.get("pool"):
+                    payload["outlook"] = advisor.outlook(draft["pool"])
+            except Exception as error:
+                payload["error"] = str(error)
+        return payload
+
     # ------------------------------------------------------------- Tk queue
     def _post(self, item):
         self._queue.put(item)
@@ -798,6 +911,8 @@ class ArenaMirrorApp(object):
             self._log(payload)
         elif kind == "action":
             self._append(self.action_view, payload)
+        elif kind == "draft":
+            self._update_draft_pane(payload)
         elif kind == "done":
             self.start_btn.config(state=tk.NORMAL)
             self.stop_btn.config(state=tk.DISABLED)
@@ -1089,6 +1204,32 @@ def _side_text(side):
     if archetype and name:
         return "%s (%s)" % (archetype, name)
     return archetype or name or "?"
+
+
+def _outlook_text(outlook):
+    """Render a deck-outlook dict (analysis.draft_outlook) as pane text."""
+    lines = ["Auto-built deck (%d of %d spells, pool %d):" % (
+        len(outlook.get("deck") or []), outlook.get("spellTarget") or 0,
+        outlook.get("poolSize") or 0)]
+    for index, entry in enumerate(outlook.get("deck") or []):
+        lines.append("%2d. %s" % (index + 1,
+                                  entry.get("name") or entry.get("grpId")))
+    colors = outlook.get("colors") or {}
+    if colors:
+        lines.append("")
+        lines.append("Colors: " + "  ".join(
+            "%s×%d" % (letter, count) for letter, count in colors.items()))
+    curve = outlook.get("curve") or {}
+    if curve:
+        lines.append("Curve:  " + "  ".join(
+            "%s:%d" % (cost, count) for cost, count in curve.items()))
+    cuts = outlook.get("cuts") or []
+    if cuts:
+        lines.append("")
+        lines.append("Cuts: " + ", ".join(
+            str(entry.get("name") or entry.get("grpId"))
+            for entry in cuts[:12]))
+    return "\n".join(lines)
 
 
 def main(argv=None):

@@ -82,6 +82,18 @@ patched to a different label.
 - Scale options: keep feeding personal logs, and/or pretrain the
   `draftPick` mode on public 17Lands data (same example shape) before
   fine-tuning on personal picks.
-- Live integration (draft mirror pane, outlook during a running draft via
-  `StreamingNormalizer`) is a follow-up; the tracker already routes the new
-  event types without breaking gameplay mirroring.
+## Live draft in the mirror
+
+The mirror GUI (`magic-cabt-arena-mirror gui` / `magic-cabt-local-model gui`)
+has a **Draft** tab. While following `Player.log`, `ArenaMatchTracker`
+accumulates the draft state (draftId, pool, current pack) and fires an
+`on_draft` callback; the GUI renders the pack ranked by the model and, after
+every pick, a fresh deck outlook (auto-built deck, colors, curve, cuts).
+Draft events are recorded into the live bundle's `game_history.jsonl`
+automatically.
+
+`DraftAdvisor` loads the checkpoint from `MAGIC_CABT_DRAFT_CHECKPOINT` or
+`~/.magic-cabt/draft-model/checkpoint.pt`; without torch or a checkpoint the
+tab still shows pack contents by name. Scoring runs on the session thread —
+never on the Tk event loop — and an advisor failure degrades to names-only
+with the error shown, so the gameplay mirror is never at risk.
