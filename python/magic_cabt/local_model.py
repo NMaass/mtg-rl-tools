@@ -98,63 +98,20 @@ def _configure_environment(args, auto_train):
 
 
 def _analyze_bundle(args):
-    """Backfill ``analysis.jsonl`` for a recorded bundle, offline.
+    """Backfill ``analysis.jsonl`` for a recorded bundle, offline."""
+    from magic_cabt.analysis import backfill_bundle
 
-    Every decision is scored with the checkpoint and cached under its
-    decision fingerprint + checkpoint id — the exact identity the replay
-    overlays look up — so already-analyzed decisions are free and a new
-    checkpoint re-analyzes cleanly alongside the old records.
-    """
-    import time
-
-    from magic_cabt.analysis import (AnalysisCache, analysis_cache_key,
-                                     load_checkpoint_scorer,
-                                     make_analysis_record)
-
-    bundle = os.path.abspath(os.path.expanduser(args.bundle))
-    decisions_path = os.path.join(bundle, "decisions.jsonl")
-    if not os.path.isfile(decisions_path):
-        sys.stderr.write("no decisions.jsonl in %s\n" % bundle)
-        return 2
     checkpoint = args.checkpoint or _make_evolver(args).ensure_checkpoint()
-    card_cache = os.path.join(bundle, "card_cache.json")
-    scorer = load_checkpoint_scorer(
-        checkpoint, device=args.device or None,
-        card_cache=card_cache if os.path.isfile(card_cache) else None)
-    cache = AnalysisCache(os.path.join(bundle, "analysis.jsonl"))
-
-    # Read the decisions raw, exactly as the replay overlay does: the cache
-    # is looked up by the fingerprint of the *recorded* decision, so any
-    # normalization here would orphan the records we are writing.
-    scored, cached = 0, 0
-    for record in _iter_raw_jsonl(decisions_path):
-        key = analysis_cache_key(record, scorer.model_info)
-        if cache.get(key) is not None:
-            cached += 1
-            continue
-        started = time.perf_counter()
-        scores = scorer.score(record)
-        latency = int((time.perf_counter() - started) * 1000)
-        value_method = getattr(scorer, "state_value", None)
-        cache.add(make_analysis_record(
-            record, scores, scorer.model_info, top_k=args.top_k,
-            latency_ms=latency,
-            value=value_method(record) if value_method else None,
-            source="backfill"), persist=True)
-        scored += 1
-    summary = {"bundle": bundle, "checkpoint": checkpoint,
-               "scored": scored, "alreadyCached": cached,
-               "model": scorer.model_info}
+    try:
+        summary = backfill_bundle(
+            args.bundle, checkpoint, device=args.device, top_k=args.top_k,
+            progress=lambda done, total: sys.stderr.write(
+                "analyzed %d/%d decisions\n" % (done, total)))
+    except IOError as error:
+        sys.stderr.write("%s\n" % error)
+        return 2
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
-
-
-def _iter_raw_jsonl(path):
-    with open(path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if line:
-                yield json.loads(line)
 
 
 def main(argv=None):

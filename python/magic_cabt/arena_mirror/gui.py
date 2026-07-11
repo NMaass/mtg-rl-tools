@@ -36,6 +36,10 @@ from .session import MirrorSession
 DEFAULT_LOG_PATH = os.path.expanduser(
     r"~\AppData\LocalLow\Wizards Of The Coast\MTGA\Player.log")
 DEFAULT_RUNS_DIR = "arena-mirror-runs"
+# Paths and speed the user picked last time; the window should reopen on
+# their library, not on whatever directory the process happened to start in.
+SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".magic-cabt",
+                             "gui-settings.json")
 # Where setup-arena-mirror.ps1 builds XMage; used to auto-find the classpath
 # and the java runtime when the GUI wasn't launched through that script.
 DEFAULT_XMAGE_DIR = r"C:\Users\nicho\Code\xmage-goldflush"
@@ -72,9 +76,12 @@ class ArenaMirrorApp(object):
         self._init_fonts()
         self._init_style()
 
-        self.log_var = tk.StringVar(value=DEFAULT_LOG_PATH)
-        self.out_var = tk.StringVar(value=os.path.join(
-            DEFAULT_RUNS_DIR, "session"))
+        self._settings = _load_settings()
+        self.log_var = tk.StringVar(
+            value=self._settings.get("logPath") or DEFAULT_LOG_PATH)
+        self.out_var = tk.StringVar(
+            value=self._settings.get("outDir") or os.path.join(
+                DEFAULT_RUNS_DIR, "session"))
         self.display_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Idle")
 
@@ -98,6 +105,12 @@ class ArenaMirrorApp(object):
         self._replay_namer = None
 
         self._build_layout()
+        # Keyboard transport for stepping through a loaded replay. Handlers
+        # no-op unless the Replays tab is showing and focus is not in a
+        # text field, so typing a path never drives the board.
+        for sequence in ("<space>", "<Left>", "<Right>", "<n>", "<m>",
+                         "<Home>", "<End>"):
+            self.root.bind(sequence, self._on_replay_key)
         self.root.after(100, self._drain_queue)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -135,16 +148,23 @@ class ArenaMirrorApp(object):
         # buttons
         style.configure("TButton", background=p.PANEL_ALT, foreground=p.TEXT,
                         borderwidth=0, focuscolor=p.PANEL_ALT, padding=(12, 6))
+        # every button needs visible pressed feedback, or clicks feel dead
         style.map("TButton",
-                  background=[("active", p.BORDER), ("disabled", p.PANEL)],
+                  background=[("pressed", p.SELECT), ("active", p.BORDER),
+                              ("disabled", p.PANEL)],
                   foreground=[("disabled", p.MUTED)])
         style.configure("Accent.TButton", background=p.ACCENT,
                         foreground="#ffffff", padding=(14, 7))
         style.map("Accent.TButton",
-                  background=[("active", p.ACCENT_DK), ("disabled", p.PANEL)],
+                  background=[("pressed", "#4b63c4"), ("active", p.ACCENT_DK),
+                              ("disabled", p.PANEL)],
                   foreground=[("disabled", p.MUTED)])
         style.configure("Transport.TButton", padding=(10, 6),
                         font=self.font_h2)
+        style.map("Transport.TButton",
+                  background=[("pressed", p.ACCENT), ("active", p.BORDER),
+                              ("disabled", p.PANEL)],
+                  foreground=[("pressed", "#ffffff"), ("disabled", p.MUTED)])
 
         # entries / checkbuttons
         style.configure("TEntry", fieldbackground=p.PANEL, foreground=p.TEXT,
@@ -194,6 +214,7 @@ class ArenaMirrorApp(object):
         notebook.add(draft_tab, text="Draft")
         notebook.add(replays_tab, text="Replays")
         self._notebook = notebook
+        self._replays_tab = replays_tab
         notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self._build_follow_tab(follow_tab)
@@ -370,7 +391,7 @@ class ArenaMirrorApp(object):
         self._build_matchup_strip(frm)
         self._build_transport(frm)
 
-        self._runs_dir = DEFAULT_RUNS_DIR
+        self._runs_dir = self._settings.get("runsDir") or DEFAULT_RUNS_DIR
         self._replay_paths = {}
         self._replay_meta = {}
         self._refresh_replays()
@@ -411,7 +432,7 @@ class ArenaMirrorApp(object):
         # start / stop the whole replay session
         self.watch_btn = ttk.Button(inner, text="▶  Watch",
                                     style="Accent.TButton",
-                                    command=self.watch_replay)
+                                    command=self.watch_replay, takefocus=0)
         self.watch_btn.pack(side=tk.LEFT, padx=(0, 12))
 
         # the transport controls, enabled only while a replay is loaded
@@ -435,11 +456,15 @@ class ArenaMirrorApp(object):
 
         ttk.Label(inner, text="Speed", style="CardMuted.TLabel").pack(
             side=tk.LEFT, padx=(16, 6))
-        self.replay_speed = 4.0
+        try:
+            self.replay_speed = float(
+                self._settings.get("replaySpeed") or 4.0)
+        except (TypeError, ValueError):
+            self.replay_speed = 4.0
         self._speed_buttons = {}
         for value in (1, 2, 4, 8, 16):
             button = ttk.Button(inner, text="%d×" % value, width=3,
-                                style="Transport.TButton",
+                                style="Transport.TButton", takefocus=0,
                                 command=lambda v=value: self._set_speed(v))
             button.pack(side=tk.LEFT, padx=(0, 4))
             self._speed_buttons[value] = button
@@ -457,8 +482,10 @@ class ArenaMirrorApp(object):
         self._highlight_speed(self.replay_speed)
 
     def _transport_button(self, parent, text, tip, command, width=None):
+        # takefocus=0 keeps keyboard focus off the buttons, so the space
+        # bar always means play/pause instead of re-invoking the last click
         button = ttk.Button(parent, text=text, style="Transport.TButton",
-                            command=command, state=tk.DISABLED)
+                            command=command, state=tk.DISABLED, takefocus=0)
         if width is not None:
             button.configure(width=width)
         button.pack(side=tk.LEFT, padx=(0, 8))
@@ -488,6 +515,7 @@ class ArenaMirrorApp(object):
             title="Folder containing recorded replays")
         if path:
             self._runs_dir = path
+            self._save_settings()
             self._refresh_replays()
 
     def _refresh_replays(self):
@@ -506,8 +534,19 @@ class ArenaMirrorApp(object):
                                             tags=tags)
             self._replay_paths[item] = path
             self._replay_meta[item] = summary
+        if not rows:
+            self.replay_status_var.set(
+                "No replays in %s — click Browse folder… to point at your "
+                "library, or record a game on the Follow tab."
+                % os.path.abspath(self._runs_dir))
+            return
+        # Pre-select the newest match so ▶ Watch works immediately.
+        first = self.replay_table.get_children()[0]
+        self.replay_table.selection_set(first)
+        self.replay_table.focus(first)
         self.replay_status_var.set(
-            "%d replay(s) in %s" % (len(rows), self._runs_dir))
+            "%d replay(s) in %s — select one and press ▶ Watch."
+            % (len(rows), os.path.abspath(self._runs_dir)))
 
     def _row_for(self, path, summary, index):
         title = summary.get("title")
@@ -640,6 +679,8 @@ class ArenaMirrorApp(object):
             controller.toggle()
         elif action == "step":
             controller.step(arg)
+        elif action == "seek":
+            controller.seek(arg)
         elif action == "jump":
             controller.next_decision(meaningful=arg)
         elif action == "stop":
@@ -652,11 +693,55 @@ class ArenaMirrorApp(object):
         self._highlight_speed(value)
         if self._replay_controller is not None:
             self._replay_controller.set_speed(float(value))
+        self._save_settings()
+
+    def _save_settings(self):
+        log_var = getattr(self, "log_var", None)
+        if log_var is None:
+            return  # window closed before the vars were built
+        try:
+            os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+            with open(SETTINGS_PATH, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "logPath": log_var.get(),
+                    "outDir": self.out_var.get(),
+                    "runsDir": getattr(self, "_runs_dir", None),
+                    "replaySpeed": getattr(self, "replay_speed", 4.0),
+                }, handle, indent=2, sort_keys=True)
+        except OSError:
+            pass  # settings are a convenience, never worth failing over
 
     def _highlight_speed(self, value):
         for preset, button in self._speed_buttons.items():
             button.configure(style="Accent.TButton" if preset == value
                              else "Transport.TButton")
+
+    def _on_replay_key(self, event):
+        """Keyboard transport: space, arrows, N/M, Home/End."""
+        if self._replay_controller is None:
+            return None
+        if self._notebook.select() != str(self._replays_tab):
+            return None
+        focus = self.root.focus_get()
+        if isinstance(focus, (tk.Entry, ttk.Entry, tk.Text)):
+            return None
+        keysym = event.keysym.lower()
+        shift = bool(event.state & 0x0001)
+        if keysym == "space":
+            self._toggle_play()
+        elif keysym == "left":
+            self._transport("step", -10 if shift else -1)
+        elif keysym == "right":
+            self._transport("step", 10 if shift else 1)
+        elif keysym == "n":
+            self._transport("jump", False)
+        elif keysym == "m":
+            self._transport("jump", True)
+        elif keysym == "home":
+            self._transport("seek", 0)
+        elif keysym == "end":
+            self._transport("seek", self._replay_total)
+        return "break"
 
     def _on_scrub_preview(self, index):
         # live position while dragging; the actual seek happens on release
@@ -680,11 +765,13 @@ class ArenaMirrorApp(object):
                        ("All files", "*.*")])
         if path:
             self.log_var.set(path)
+            self._save_settings()
 
     def _pick_out(self):
         path = filedialog.askdirectory(title="Output folder")
         if path:
             self.out_var.set(path)
+            self._save_settings()
 
     def _open_output(self):
         path = self.out_var.get()
@@ -967,8 +1054,8 @@ class ArenaMirrorApp(object):
                                               controller.turn_marks)
             self.scrubber.set_enabled(True)
             self.replay_status_var.set(
-                "Loaded %s — press ▶ Play, step with ⏮/⏭, or jump between "
-                "decisions" % name)
+                "Loaded %s — space plays/pauses · ←/→ step (shift: ×10) · "
+                "N next action · M next real play" % name)
         elif kind == "replay_reset":
             if payload is not None and payload != self._replay_generation:
                 return
@@ -1047,6 +1134,7 @@ class ArenaMirrorApp(object):
     def _on_close(self):
         # closing the GUI ends everything: stop following, stop any replay,
         # and close the XMage window the user left open.
+        self._save_settings()
         self._stop_requested = True
         if self._session is not None:
             self._session.stop()
@@ -1334,6 +1422,15 @@ class _ReplayNamer(object):
         return self._INSTANCE_RE.sub(
             lambda match: instance_name(match.group(1)) or match.group(0),
             text)
+
+
+def _load_settings():
+    try:
+        with open(SETTINGS_PATH, "r", encoding="utf-8") as handle:
+            settings = json.load(handle)
+        return settings if isinstance(settings, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _outlook_text(outlook):

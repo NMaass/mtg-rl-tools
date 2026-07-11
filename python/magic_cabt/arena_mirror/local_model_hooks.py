@@ -232,6 +232,26 @@ def install_local_model_hooks():
     class LocalReplayController(BaseController):
         def __init__(self, bundle_dir, display=None, on_progress=None,
                      on_message=None, speed=4.0):
+            # Analysis at storage time, transparently: score any decisions
+            # this checkpoint hasn't seen before the replay opens (a no-op
+            # once cached), so every replay simply has ranked choices.
+            checkpoint = os.environ.get("MAGIC_CABT_MODEL_CHECKPOINT")
+            if checkpoint and os.path.exists(checkpoint) and on_message:
+                try:
+                    from magic_cabt.analysis import backfill_bundle
+                    summary = backfill_bundle(
+                        bundle_dir, checkpoint,
+                        device=os.environ.get(
+                            "MAGIC_CABT_MODEL_DEVICE") or None,
+                        progress=lambda done, total: on_message(
+                            "[model] analyzing decisions… %d/%d"
+                            % (done, total)))
+                    if summary["scored"]:
+                        on_message("[model] analyzed %d new decision(s)"
+                                   % summary["scored"])
+                except Exception as error:
+                    on_message("[model] analysis backfill skipped: %s"
+                               % (error,))
             self._local_analysis = load_analysis(bundle_dir)
             original_progress = on_progress
 
