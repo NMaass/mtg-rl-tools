@@ -19,6 +19,7 @@ import glob
 import json
 import os
 import queue
+import re
 import shutil
 import threading
 import tkinter as tk
@@ -89,6 +90,12 @@ class ArenaMirrorApp(object):
         self._replay_controller = None
         self._replay_at_end = False
         self._replay_total = 0
+        # Guards against the double-start race: a second Watch click (or a
+        # double-click's second event) must never launch a second controller
+        # while the first is still opening XMage in its worker thread.
+        self._replay_launching = False
+        self._replay_generation = 0
+        self._replay_namer = None
 
         self._build_layout()
         self.root.after(100, self._drain_queue)
@@ -561,6 +568,8 @@ class ArenaMirrorApp(object):
 
     # ------------------------------------------------------------- transport
     def watch_replay(self):
+        if self._replay_launching:
+            return  # already opening; ignore the double-click's second event
         if self._replay_active():
             self._transport("stop")
             return
@@ -571,32 +580,47 @@ class ArenaMirrorApp(object):
         bundle = self._replay_paths.get(selection[0])
         if not bundle:
             return
-        self.watch_btn.config(state=tk.DISABLED)
+        self._replay_launching = True
+        self._replay_generation += 1
+        self.watch_btn.config(state=tk.DISABLED, text="…  Loading")
         self.replay_status_var.set("Opening XMage for replay…")
-        threading.Thread(target=self._launch_replay, args=(bundle,),
+        threading.Thread(target=self._launch_replay,
+                         args=(bundle, self._replay_generation),
                          daemon=True).start()
 
-    def _launch_replay(self, bundle):
+    def _launch_replay(self, bundle, generation):
+        # Defensive: a leftover controller must never keep driving the board;
+        # every stale one is stopped before a new one exists.
+        leftover = self._replay_controller
+        if leftover is not None:
+            self._replay_controller = None
+            try:
+                leftover.stop()
+            except Exception:
+                pass
         try:
             display = self._get_display()
         except Exception as error:
             self._post(("replay_status", "Cannot open XMage: %s" % error))
-            self._post(("replay_reset", None))
+            self._post(("replay_reset", generation))
             return
         try:
             controller = ReplayController(
                 bundle, display=display, speed=self.replay_speed,
-                on_progress=lambda info: self._post(("replay_progress", info)),
+                on_progress=lambda info: self._post(
+                    ("replay_progress", (generation, info))),
                 on_message=lambda text: self._post(("log", text)))
+            namer = _ReplayNamer(bundle, controller.states)
         except Exception as error:
             self._post(("replay_status", "Replay error: %s" % error))
-            self._post(("replay_reset", None))
+            self._post(("replay_reset", generation))
             return
         self._replay_controller = controller
+        self._replay_namer = namer
         self._replay_total = max(1, controller.total - 1)
-        self._post(("replay_ready", os.path.basename(bundle)))
+        self._post(("replay_ready", (generation, os.path.basename(bundle))))
+        # Start paused on frame 1: playback is the user's to drive.
         controller.start()
-        controller.play()
 
     def _toggle_play(self):
         controller = self._replay_controller
@@ -931,6 +955,10 @@ class ArenaMirrorApp(object):
         elif kind == "replay_status":
             self.replay_status_var.set(payload)
         elif kind == "replay_ready":
+            generation, name = payload
+            if generation != self._replay_generation:
+                return  # a newer replay superseded this launch
+            self._replay_launching = False
             self._set_transport_enabled(True)
             self.watch_btn.config(text="⏹  Stop", state=tk.NORMAL)
             controller = self._replay_controller
@@ -938,14 +966,42 @@ class ArenaMirrorApp(object):
                 self.scrubber.configure_marks(controller.total,
                                               controller.turn_marks)
             self.scrubber.set_enabled(True)
-            self.replay_status_var.set("Playing %s" % payload)
+            self.replay_status_var.set(
+                "Loaded %s — press ▶ Play, step with ⏮/⏭, or jump between "
+                "decisions" % name)
         elif kind == "replay_reset":
+            if payload is not None and payload != self._replay_generation:
+                return
+            self._replay_launching = False
             self._set_transport_enabled(False)
             self.watch_btn.config(text="▶  Watch", state=tk.NORMAL)
             self.scrubber.set_enabled(False)
             self._replay_controller = None
+            self._replay_namer = None
         elif kind == "replay_progress":
-            self._update_progress(payload)
+            generation, info = payload
+            # Events from a stopped/superseded controller are dropped whole:
+            # exactly one controller may ever steer the transport UI.
+            if generation != self._replay_generation or \
+                    self._replay_controller is None:
+                return
+            self._resolve_replay_names(info)
+            self._update_progress(info)
+
+    def _resolve_replay_names(self, info):
+        """Rewrite raw grpId/instance ids in transport text to card names."""
+        namer = self._replay_namer
+        if namer is None:
+            return
+        game_instance = None
+        controller = self._replay_controller
+        index = info.get("index")
+        if controller is not None and isinstance(index, int) and \
+                0 <= index < len(controller.states):
+            game_instance = controller.states[index].get("gameInstance")
+        for key in ("decision", "analysis"):
+            if info.get(key):
+                info[key] = namer.resolve(info[key], game_instance)
 
     def _update_progress(self, info):
         self.scrubber.set_position(info.get("index", 0))
@@ -1204,6 +1260,80 @@ def _side_text(side):
     if archetype and name:
         return "%s (%s)" % (archetype, name)
     return archetype or name or "?"
+
+
+class _ReplayNamer(object):
+    """Resolve raw ids in recorded replay text back to card names.
+
+    Recorded option labels read "Cast grpId=76615 instance=169"; the bundle
+    already knows the names — ``card_cache.json`` maps grpId to card info and
+    the board snapshots name every object instance the mirror ever rendered.
+    Unknown ids are left untouched rather than guessed.
+    """
+
+    # "grpId=N instance=M" pairs collapse to one name; the singles catch
+    # bare "instance=M" (attackers/blockers) and "id=M" (SelectN prompts).
+    _PAIR_RE = re.compile(r"\bgrpId=(\d+) instance=(\d+)\b")
+    _GRP_RE = re.compile(r"\bgrpId=(\d+)\b")
+    _INSTANCE_RE = re.compile(r"\b(?:instance|id)=(\d+)\b")
+
+    def __init__(self, bundle_dir, states):
+        self.by_grp = {}
+        try:
+            with open(os.path.join(bundle_dir, "card_cache.json"),
+                      encoding="utf-8") as handle:
+                cards = json.load(handle) or {}
+            if isinstance(cards.get("cards"), dict):
+                cards = cards["cards"]
+            for grp_id, card in cards.items():
+                name = (card or {}).get("name") if isinstance(card, dict) \
+                    else None
+                if name:
+                    self.by_grp[str(grp_id)] = name
+        except (OSError, ValueError):
+            pass
+        self.by_instance = {}
+        for state in states or []:
+            self._collect(state.get("zones"), state.get("gameInstance"))
+
+    def _collect(self, value, game_instance):
+        if isinstance(value, dict):
+            for item in value.values():
+                self._collect(item, game_instance)
+        elif isinstance(value, list):
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name")
+                if not name:
+                    continue
+                if item.get("grpId") is not None:
+                    self.by_grp.setdefault(str(item["grpId"]), name)
+                instance_id = item.get("instanceId")
+                if instance_id is not None:
+                    self.by_instance[(game_instance, str(instance_id))] = name
+                    self.by_instance.setdefault(
+                        (None, str(instance_id)), name)
+
+    def resolve(self, text, game_instance=None):
+        if not text:
+            return text
+
+        def instance_name(instance_id):
+            return self.by_instance.get((game_instance, instance_id)) or \
+                self.by_instance.get((None, instance_id))
+
+        def pair(match):
+            return instance_name(match.group(2)) or \
+                self.by_grp.get(match.group(1)) or match.group(0)
+
+        text = self._PAIR_RE.sub(pair, text)
+        text = self._GRP_RE.sub(
+            lambda match: self.by_grp.get(match.group(1)) or match.group(0),
+            text)
+        return self._INSTANCE_RE.sub(
+            lambda match: instance_name(match.group(1)) or match.group(0),
+            text)
 
 
 def _outlook_text(outlook):

@@ -299,20 +299,27 @@ def install_local_model_gui_hooks():
 
     def build_transport(self, frame):
         original_build_transport(self, frame)
-        self.replay_analysis_var = gui_module.tk.StringVar(
-            value="No cached model analysis for this frame.")
-        label = gui_module.ttk.Label(
-            frame, textvariable=self.replay_analysis_var,
-            style="Muted.TLabel", justify=gui_module.tk.LEFT,
-            anchor="w", wraplength=960)
-        label.pack(fill=gui_module.tk.X, pady=(8, 0))
+        # A fixed-height readout: a wrapping Label re-measures per frame and
+        # makes the window height stutter as analysis length changes.
+        text = gui_module.tk.Text(
+            frame, height=8, wrap=gui_module.tk.WORD, bd=0,
+            relief=gui_module.tk.FLAT, bg=gui_module.Palette.PANEL,
+            fg=gui_module.Palette.MUTED, state=gui_module.tk.DISABLED,
+            font=self.font_mono, padx=10, pady=6)
+        text.configure(highlightthickness=0)
+        text.pack(fill=gui_module.tk.X, pady=(8, 0))
+        self.replay_analysis_text = text
 
     def update_progress(self, info):
         original_update_progress(self, info)
-        variable = getattr(self, "replay_analysis_var", None)
-        if variable is not None:
-            variable.set(info.get("analysis") or
-                         "No cached model analysis for this frame.")
+        widget = getattr(self, "replay_analysis_text", None)
+        if widget is not None:
+            content = info.get("analysis") or \
+                "No cached model analysis for this frame."
+            widget.configure(state=gui_module.tk.NORMAL)
+            widget.delete("1.0", gui_module.tk.END)
+            widget.insert("1.0", content)
+            widget.configure(state=gui_module.tk.DISABLED)
 
     app._build_transport = build_transport
     app._update_progress = update_progress
