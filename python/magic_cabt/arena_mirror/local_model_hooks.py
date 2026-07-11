@@ -194,6 +194,24 @@ def install_local_model_hooks():
         record = records.get(decision_fingerprint(decision))
         return format_analysis(record) if record else None
 
+    def analysis_recommends_action(records, decision):
+        """True when the cached model's top choice is not a pass.
+
+        Lets the "next non-pass action" jump also stop where the human
+        passed but the model wanted to act — the disagreements worth
+        reviewing."""
+        record = records.get(decision_fingerprint(decision)) \
+            if records else None
+        top = ((record or {}).get("analysis") or {}).get("topK") or []
+        if not top:
+            return False
+        index = top[0].get("optionIndex")
+        select = (decision.get("observation") or {}).get("select") or {}
+        for option in select.get("option") or []:
+            if option.get("index") == index:
+                return not replay_module.option_is_pass(option)
+        return False
+
     class LocalReplayPlayer(BasePlayer):
         def play(self, bundle_dir):
             self._local_analysis = load_analysis(bundle_dir)
@@ -241,6 +259,21 @@ def install_local_model_hooks():
                     self.display.send_message(text)
                 except Exception:
                     pass
+
+        def _jump(self, meaningful):
+            if not meaningful:
+                return super()._jump(meaningful)
+            for i in range(self._index + 1, self.total):
+                decisions = self._decisions.get(i)
+                if not decisions:
+                    continue
+                if any(not replay_module.decision_is_pass(d)
+                       for d in decisions) or \
+                        any(analysis_recommends_action(
+                            self._local_analysis, d) for d in decisions):
+                    self._render(i)
+                    return
+            self._render(self.total - 1)
 
     recorder_module.MirrorRecorder = LocalModelRecorder
     session_module.MirrorSession = LocalModelSession

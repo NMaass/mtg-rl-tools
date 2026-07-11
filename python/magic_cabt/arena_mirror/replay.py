@@ -8,7 +8,7 @@ import threading
 import time
 
 __all__ = ["ReplayPlayer", "ReplayController", "load_bundle",
-           "describe_decision", "decision_is_pass"]
+           "describe_decision", "decision_is_pass", "option_is_pass"]
 
 
 # Action types that are just yielding priority / declining to act — the noise a
@@ -44,6 +44,11 @@ def decision_is_pass(decision):
         if option is None or option.get("type") not in _PASS_OPTION_TYPES:
             return False
     return True
+
+
+def option_is_pass(option):
+    """True when a single recorded option merely yields priority."""
+    return (option or {}).get("type") in _PASS_OPTION_TYPES
 
 
 def _chosen_labels(decision, select):
