@@ -69,8 +69,8 @@ class ArenaMirrorApp(object):
         self.classpath = classpath
         self.java = java
         root.title("Arena → XMage Mirror")
-        root.geometry("1040x680")
-        root.minsize(880, 560)
+        root.geometry("1040x760")
+        root.minsize(940, 700)
         root.configure(bg=Palette.BG)
 
         self._init_fonts()
@@ -366,8 +366,11 @@ class ArenaMirrorApp(object):
                     ("decisions", "Decisions", 90), ("date", "Played", 130))
         table_wrap = ttk.Frame(frm, style="Card.TFrame")
         table_wrap.pack(fill=tk.BOTH, expand=True, pady=(12, 8))
+        # height is a minimum request, not a cap (the table expands to fill);
+        # keeping it small guarantees the transport bar and the analysis
+        # readout below are never clipped out of a short window
         self.replay_table = ttk.Treeview(table_wrap, columns=columns,
-                                         show="headings", height=10)
+                                         show="headings", height=5)
         for column, heading, width in headings:
             anchor = tk.W if column in ("title",) else tk.CENTER
             self.replay_table.heading(column, text=heading)
