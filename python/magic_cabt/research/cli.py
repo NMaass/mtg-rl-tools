@@ -12,6 +12,7 @@ from .experiment import plan_report
 from .expert_cost import (
     ExpertCostModel,
     evaluate_preferences,
+    expert_agreement,
     file_sha256,
     fit_cost_model,
     load_factor_specs,
@@ -43,8 +44,13 @@ def build_parser() -> argparse.ArgumentParser:
     score = subparsers.add_parser(
         "score-cost", help="score and explain one candidate factor JSON object")
     score.add_argument("--model", required=True, help="expert cost model JSON")
-    score.add_argument("--candidate", required=True,
-                       help="candidate JSON file containing factors or a factors object")
+    score_input = score.add_mutually_exclusive_group(required=True)
+    score_input.add_argument(
+        "--candidate",
+        help="candidate JSON file containing factors or a factors object")
+    score_input.add_argument(
+        "--factors-json",
+        help="inline JSON object containing factor values")
     score.add_argument("--out", default=None, help="optional result JSON")
 
     analysis = subparsers.add_parser(
@@ -127,6 +133,7 @@ def _fit_cost(args: argparse.Namespace) -> int:
     payload["diagnostics"] = {
         "train": evaluate_preferences(model, train),
         "holdout": evaluate_preferences(model, holdout),
+        "expertAgreement": expert_agreement(preferences),
     }
     _write_json(args.out, payload)
     sys.stdout.write(json.dumps({
@@ -135,6 +142,7 @@ def _fit_cost(args: argparse.Namespace) -> int:
         "holdoutExamples": len(holdout),
         "weights": payload["weights"],
         "holdout": payload["diagnostics"]["holdout"],
+        "expertAgreement": payload["diagnostics"]["expertAgreement"],
     }, sort_keys=True) + "\n")
     return 0
 
@@ -142,14 +150,17 @@ def _fit_cost(args: argparse.Namespace) -> int:
 def _score_cost(args: argparse.Namespace) -> int:
     with open(args.model, encoding="utf-8") as handle:
         model = ExpertCostModel.from_dict(json.load(handle))
-    with open(args.candidate, encoding="utf-8") as handle:
-        candidate = json.load(handle)
+    if args.factors_json is not None:
+        candidate = json.loads(args.factors_json)
+    else:
+        with open(args.candidate, encoding="utf-8") as handle:
+            candidate = json.load(handle)
     if isinstance(candidate, Mapping) and isinstance(candidate.get("factors"), Mapping):
         factors = candidate["factors"]
     elif isinstance(candidate, Mapping):
         factors = candidate
     else:
-        raise ValueError("candidate file must contain a JSON object")
+        raise ValueError("candidate input must contain a JSON object")
     result = model.explain(factors)
     if args.out:
         _write_json(args.out, result)
