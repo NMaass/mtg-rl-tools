@@ -2,11 +2,34 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 
 from magic_cabt.models.structured_jepa import CardTextResolver, StructuredJEPAConfig
 from . import train_jepa as core
 from .train_reliable import merge_best, write_outputs
+
+
+def collect_decision_data(inputs, max_decisions=100000, seed=0):
+    """Collect only decisions and card metadata; never traverse transitions."""
+    decisions = core._reservoir(
+        core._iter_all_decisions(inputs), max_decisions, seed + 1)
+    cards = {}
+    for path in inputs:
+        if not os.path.isdir(path):
+            continue
+        cache = os.path.join(path, "card_cache.json")
+        if not os.path.isfile(cache):
+            continue
+        try:
+            with open(cache, encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                cards.update(payload)
+        except (OSError, ValueError):
+            pass
+    return decisions, cards
 
 
 def build_parser():
@@ -37,9 +60,8 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    _transitions, decisions, cards = core.collect_training_data(
-        args.input, max_transitions=0, max_decisions=args.max_decisions,
-        seed=args.seed)
+    decisions, cards = collect_decision_data(
+        args.input, max_decisions=args.max_decisions, seed=args.seed)
     if not decisions:
         raise SystemExit("no trainable single-choice decisions")
     config = StructuredJEPAConfig.preset(args.preset)
