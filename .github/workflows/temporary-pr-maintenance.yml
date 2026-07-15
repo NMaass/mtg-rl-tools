@@ -1,0 +1,280 @@
+name: temporary-pr-maintenance
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  maintain:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.user.login == 'NMaass' &&
+      (github.event.comment.body == '/maint-fix-pr32' ||
+       github.event.comment.body == '/maint-fix-pr33')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Select branch
+        id: select
+        run: |
+          if [ "${{ github.event.comment.body }}" = "/maint-fix-pr32" ]; then
+            echo 'branch=training/reliable-jepa-runs' >> "$GITHUB_OUTPUT"
+            echo 'kind=pr32' >> "$GITHUB_OUTPUT"
+          else
+            echo 'branch=analysis/head-to-head-viewer' >> "$GITHUB_OUTPUT"
+            echo 'kind=pr33' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.select.outputs.branch }}
+      - name: Fix PR 32
+        if: steps.select.outputs.kind == 'pr32'
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('python/magic_cabt/training/train_jepa.py')
+          text = path.read_text()
+          old = '''    completed_before = int(previous_state.get("completedEpochs") or 0)
+    best_metric = math.inf
+    best_epoch = None
+    best_state = None
+    optimizer_steps = 0
+'''
+          new = '''    completed_before = int(previous_state.get("completedEpochs") or 0)
+    previous_best_state = previous_state.get("bestStateDict")
+    previous_best_metric = previous_state.get("bestSelectionMetric")
+    previous_best_epoch = previous_state.get("bestEpoch")
+    if previous_best_state is not None and previous_best_metric is not None:
+        best_metric = float(previous_best_metric)
+        best_epoch = int(previous_best_epoch) \\
+            if previous_best_epoch is not None else None
+        best_state = previous_best_state
+    else:
+        best_metric = math.inf
+        best_epoch = None
+        best_state = None
+    optimizer_steps = 0
+'''
+          if old not in text:
+              raise SystemExit('training initialization target not found')
+          text = text.replace(old, new, 1)
+          old = '''        "cudaRngStateAll": torch.cuda.get_rng_state_all()
+            if device.type == "cuda" else None,
+    }
+'''
+          new = '''        "cudaRngStateAll": torch.cuda.get_rng_state_all()
+            if device.type == "cuda" else None,
+        "bestStateDict": best_state,
+        "bestSelectionMetric": best_metric,
+        "bestEpoch": best_epoch,
+    }
+'''
+          if old not in text:
+              raise SystemExit('training state target not found')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+
+          test_path = Path('python/tests/test_train_jepa_reliable.py')
+          tests = test_path.read_text()
+          marker = '''            self.assertEqual(1, extra["trainingState"]["completedEpochs"])
+'''
+          addition = '''            self.assertEqual(1, extra["trainingState"]["completedEpochs"])
+            self.assertIsNotNone(extra["trainingState"]["bestStateDict"])
+
+            _resumed, resumed_metrics = train(
+                transitions,
+                decisions,
+                resume=checkpoint,
+                epochs=1,
+                batch_size=2,
+                eval_fraction=0.25,
+                seed=3,
+                device="cpu",
+                amp="off",
+                lr=0.0,
+                max_steps_per_epoch=1,
+            )
+            self.assertEqual(metrics["bestEpoch"], resumed_metrics["bestEpoch"])
+            self.assertEqual(
+                metrics["bestSelectionMetric"],
+                resumed_metrics["bestSelectionMetric"])
+'''
+          if marker not in tests:
+              raise SystemExit('test insertion target not found')
+          test_path.write_text(tests.replace(marker, addition, 1))
+          Path('.github/workflows/fix-pr32-review.yml').unlink(missing_ok=True)
+          PY
+      - name: Fix PR 33
+        if: steps.select.outputs.kind == 'pr33'
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('python/magic_cabt/analysis/compare.py')
+          text = path.read_text()
+          old = '''                top_keys.append(cell.get("topCanonicalKey") or
+                                "label:" + str(cell.get("topLabel")))
+'''
+          new = '''                top_keys.append(cell.get("topIdentity"))
+'''
+          if old not in text:
+              raise SystemExit('agreement target not found')
+          text = text.replace(old, new, 1)
+          old = '''def _model_cell(record, options, chosen_index):
+    if not record:
+        return {"covered": False, "top": [], "playedRank": None}
+    analysis = record.get("analysis") or {}
+    top = []
+    for row in analysis.get("topK") or []:
+        index = row.get("optionIndex")
+        top.append({
+            "optionIndex": index,
+            "label": row.get("label") or _option_label(options, index),
+            "canonicalKey": row.get("canonicalGroupKey") or
+                _option_key(options, index),
+            "score": row.get("score"),
+            "probability": row.get("probability"),
+        })
+    first = top[0] if top else {}
+    return {
+        "covered": True,
+        "topLabel": first.get("label"),
+        "topCanonicalKey": first.get("canonicalKey"),
+        "topProbability": first.get("probability"),
+        "playedRank": analysis.get("chosenRank"),
+        "playedScore": analysis.get("chosenScore"),
+        "stateValue": analysis.get("value"),
+        "latencyMs": record.get("latencyMs"),
+        "top": top,
+    }
+'''
+          new = '''def _model_cell(record, options, chosen_index):
+    if not record:
+        return {"covered": False, "top": [], "playedRank": None}
+    analysis = record.get("analysis") or {}
+    top = []
+    for row in analysis.get("topK") or []:
+        index = row.get("optionIndex")
+        canonical_key = row.get("canonicalGroupKey") or \\
+            _option_key(options, index)
+        top.append({
+            "optionIndex": index,
+            "label": row.get("label") or _option_label(options, index),
+            "canonicalKey": canonical_key,
+            "identity": ("canonical:" + str(canonical_key))
+                if canonical_key is not None else
+                _option_identity(options, index),
+            "score": row.get("score"),
+            "probability": row.get("probability"),
+        })
+    first = top[0] if top else {}
+    human_identity = _option_identity(options, chosen_index)
+    played_rank = None
+    seen = set()
+    for row in top:
+        identity = row.get("identity")
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if identity == human_identity:
+            played_rank = len(seen)
+            break
+    if played_rank is None:
+        played_rank = analysis.get("chosenRank")
+    return {
+        "covered": True,
+        "topLabel": first.get("label"),
+        "topCanonicalKey": first.get("canonicalKey"),
+        "topIdentity": first.get("identity"),
+        "topProbability": first.get("probability"),
+        "playedRank": played_rank,
+        "rawPlayedRank": analysis.get("chosenRank"),
+        "playedScore": analysis.get("chosenScore"),
+        "stateValue": analysis.get("value"),
+        "latencyMs": record.get("latencyMs"),
+        "top": top,
+    }
+'''
+          if old not in text:
+              raise SystemExit('model cell target not found')
+          text = text.replace(old, new, 1)
+          marker = '''def _public_option(option):
+'''
+          helper = '''def _option_identity(options, index):
+    if not isinstance(index, int) or not 0 <= index < len(options):
+        return None
+    canonical_key = _option_key(options, index)
+    if canonical_key is not None:
+        return "canonical:" + str(canonical_key)
+    option = options[index]
+    return "option:%s:%s" % (index, option.get("type") or "")
+
+
+'''
+          if marker not in text:
+              raise SystemExit('helper insertion target not found')
+          path.write_text(text.replace(marker, helper + marker, 1))
+
+          test_path = Path('python/tests/test_analysis_compare.py')
+          tests = test_path.read_text()
+          tests = tests.replace(
+              'from magic_cabt.analysis.compare import build_comparison, render_comparison_html',
+              'from magic_cabt.analysis.compare import (\n    _model_cell, _option_identity, build_comparison, render_comparison_html)')
+          marker = '''
+
+if __name__ == "__main__":
+'''
+          addition = '''
+    def test_fungible_human_choice_uses_canonical_rank(self):
+        options = [
+            {"index": 0, "type": "TARGET", "label": "Token",
+             "payload": {"canonicalKey": "target:soldier-token"}},
+            {"index": 1, "type": "TARGET", "label": "Token",
+             "payload": {"canonicalKey": "target:soldier-token"}},
+        ]
+        record = {"analysis": {"topK": [{
+            "optionIndex": 0,
+            "canonicalGroupKey": "target:soldier-token",
+            "label": "Token",
+            "probability": 0.6,
+        }], "chosenRank": 2}}
+        cell = _model_cell(record, options, 1)
+        self.assertEqual(1, cell["playedRank"])
+        self.assertEqual(2, cell["rawPlayedRank"])
+
+    def test_unkeyed_equal_labels_remain_distinct(self):
+        options = [
+            {"index": 0, "type": "TARGET", "label": "Token", "payload": {}},
+            {"index": 1, "type": "TARGET", "label": "Token", "payload": {}},
+        ]
+        self.assertNotEqual(
+            _option_identity(options, 0), _option_identity(options, 1))
+'''
+          if marker not in tests:
+              raise SystemExit('test insertion target not found')
+          test_path.write_text(tests.replace(marker, addition + marker, 1))
+          Path('.github/workflows/fix-pr33-review.yml').unlink(missing_ok=True)
+          PY
+      - name: Run tests
+        working-directory: python
+        run: |
+          python -m pip install --upgrade pip
+          if [ "${{ steps.select.outputs.kind }}" = "pr32" ]; then
+            python -m pip install -e '.[jepa]'
+            python -m unittest tests.test_train_jepa_reliable -v
+          else
+            python -m pip install -e .
+            python -m unittest tests.test_analysis_compare -v
+          fi
+      - name: Commit and push
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          if [ "${{ steps.select.outputs.kind }}" = "pr32" ]; then
+            git commit -m 'Preserve best JEPA checkpoint across resumed runs'
+          else
+            git commit -m 'Respect canonical action identity in model comparisons'
+          fi
+          git push origin HEAD:${{ steps.select.outputs.branch }}
