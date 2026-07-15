@@ -91,6 +91,24 @@ magic-cabt-train-jepa \
 policy top-k/MRR, latent effective rank, throughput, peak CUDA allocation, input
 hashes, and the selected best epoch.
 
+## Head-to-head model analysis
+
+Score the same recorded decisions with multiple checkpoints and generate a
+self-contained HTML comparison plus a machine-readable JSON artifact:
+
+```sh
+magic-cabt-compare-models \
+  --bundle ../arena-mirror-runs/run-001 \
+  --model hashed-ranker=runs/ranker/checkpoint.pt \
+  --model structured-jepa=runs/jepa/best.pt \
+  --out runs/comparisons/run-001.html \
+  --device cuda
+```
+
+Agreement and human-play rank use canonical action groups when XMage identifies
+fungible options. Options without a canonical key retain concrete option
+identity; equal display labels are never treated as strategically equivalent.
+
 ## Research experiment commands
 
 `magic-cabt-research` provides dependency-free guardrails and reports shared by
