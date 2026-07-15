@@ -17,6 +17,12 @@ cd python
 python -m pip install -e .
 ```
 
+For PyTorch ranker and JEPA training:
+
+```sh
+python -m pip install -e ".[jepa]"
+```
+
 Then the import surface is available from any working directory:
 
 ```python
@@ -43,6 +49,47 @@ magic-cabt-arena-mirror live --no-display
 `magic-cabt-eval-play`, `CabtBridge`, and display-backed Arena mirror commands
 need `MAGIC_CABT_CLASSPATH` or `--classpath` pointing at a built XMage+CABT
 classpath.
+
+## Reliable JEPA training
+
+The structured trainer splits transitions and decisions on whole-game IDs,
+reports held-out policy/world-model metrics and collapse diagnostics, supports
+CUDA mixed precision and gradient accumulation, and writes both:
+
+- `checkpoint.pt`: final model plus optimizer, scaler, RNG, and epoch state for
+  exact continuation;
+- `best.pt`: lowest held-out-loss model for analysis or deployment.
+
+Example:
+
+```sh
+magic-cabt-train-jepa \
+  --input ../arena-mirror-runs/run-001 \
+  --input ../arena-mirror-runs/run-002 \
+  --out runs/jepa-local \
+  --preset local \
+  --device cuda \
+  --amp auto \
+  --batch-size 16 \
+  --grad-accum-steps 2 \
+  --epochs 10 \
+  --eval-fraction 0.1
+```
+
+Resume the final training state:
+
+```sh
+magic-cabt-train-jepa \
+  --input ../arena-mirror-runs/run-001 \
+  --out runs/jepa-local-resumed \
+  --resume runs/jepa-local/checkpoint.pt \
+  --device cuda \
+  --epochs 5
+```
+
+`metrics.json` records whole-game split identities, train/eval losses, canonical
+policy top-k/MRR, latent effective rank, throughput, peak CUDA allocation, input
+hashes, and the selected best epoch.
 
 ## Research experiment commands
 
@@ -85,3 +132,8 @@ expert-annotation procedure are documented in:
 cd python
 python -m unittest discover -s tests -v
 ```
+
+The dedicated `python-training-tests` GitHub Actions workflow installs the
+PyTorch extra and executes a real forward/backward/checkpoint smoke run. This
+prevents the optional training path from passing CI only because torch-gated
+tests were skipped.
