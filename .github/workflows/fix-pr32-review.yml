@@ -14,4 +14,92 @@ jobs:
           ref: training/reliable-jepa-runs
       - name: Patch resume best-checkpoint handling
         run: |
-          python - <<'PY
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('python/magic_cabt/training/train_jepa.py')
+          text = path.read_text()
+          old = '''    completed_before = int(previous_state.get("completedEpochs") or 0)
+    best_metric = math.inf
+    best_epoch = None
+    best_state = None
+    optimizer_steps = 0
+'''
+          new = '''    completed_before = int(previous_state.get("completedEpochs") or 0)
+    previous_best_state = previous_state.get("bestStateDict")
+    previous_best_metric = previous_state.get("bestSelectionMetric")
+    previous_best_epoch = previous_state.get("bestEpoch")
+    if previous_best_state is not None and previous_best_metric is not None:
+        best_metric = float(previous_best_metric)
+        best_epoch = int(previous_best_epoch) \\
+            if previous_best_epoch is not None else None
+        best_state = previous_best_state
+    else:
+        best_metric = math.inf
+        best_epoch = None
+        best_state = None
+    optimizer_steps = 0
+'''
+          if old not in text:
+              raise SystemExit('training initialization target not found')
+          text = text.replace(old, new, 1)
+          old = '''        "cudaRngStateAll": torch.cuda.get_rng_state_all()
+            if device.type == "cuda" else None,
+    }
+'''
+          new = '''        "cudaRngStateAll": torch.cuda.get_rng_state_all()
+            if device.type == "cuda" else None,
+        "bestStateDict": best_state,
+        "bestSelectionMetric": best_metric,
+        "bestEpoch": best_epoch,
+    }
+'''
+          if old not in text:
+              raise SystemExit('training state target not found')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+
+          test_path = Path('python/tests/test_train_jepa_reliable.py')
+          tests = test_path.read_text()
+          marker = '''            self.assertEqual(1, extra["trainingState"]["completedEpochs"])
+'''
+          addition = '''            self.assertEqual(1, extra["trainingState"]["completedEpochs"])
+            self.assertIsNotNone(extra["trainingState"]["bestStateDict"])
+
+            _resumed, resumed_metrics = train(
+                transitions,
+                decisions,
+                resume=checkpoint,
+                epochs=1,
+                batch_size=2,
+                eval_fraction=0.25,
+                seed=3,
+                device="cpu",
+                amp="off",
+                lr=0.0,
+                max_steps_per_epoch=1,
+            )
+            self.assertEqual(metrics["bestEpoch"], resumed_metrics["bestEpoch"])
+            self.assertEqual(
+                metrics["bestSelectionMetric"],
+                resumed_metrics["bestSelectionMetric"])
+'''
+          if marker not in tests:
+              raise SystemExit('test insertion target not found')
+          tests = tests.replace(marker, addition, 1)
+          test_path.write_text(tests)
+          PY
+      - name: Run focused tests
+        working-directory: python
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[jepa]'
+          python -m unittest tests.test_train_jepa_reliable -v
+      - name: Commit fix and remove one-shot workflow
+        run: |
+          rm .github/workflows/fix-pr32-review.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add python/magic_cabt/training/train_jepa.py python/tests/test_train_jepa_reliable.py .github/workflows/fix-pr32-review.yml
+          git commit -m 'Preserve best JEPA checkpoint across resumed runs'
+          git push origin HEAD:training/reliable-jepa-runs
