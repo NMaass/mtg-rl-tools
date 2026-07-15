@@ -53,7 +53,7 @@ magic-cabt-build-draft-dataset = "magic_cabt.training.build_draft_dataset:main"
 magic-cabt-train-draft = "magic_cabt.training.train_draft:main"
 magic-cabt-draft-outlook = "magic_cabt.analysis.draft_outlook:main"
 magic-cabt-compare-models = "magic_cabt.analysis.compare:main"
-magic-cabt-compare-suite = "magic_cabt.analysis.baselines:main"
+magic-cabt-compare-suite = "magic_cabt.analysis.suite:main"
 magic-cabt-research = "magic_cabt.research.cli:main"
 
 [tool.setuptools.packages.find]
