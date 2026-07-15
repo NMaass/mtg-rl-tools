@@ -438,16 +438,23 @@ class ArenaMatchTracker(object):
         on_decision(record)               when a prompt is paired with the
                                           client's response
         on_game_event(kind, event)        lifecycle: connect/match/game_over
+        on_draft(kind, draft, event)      limited play: kind is "pack",
+                                          "pick", or "deck_submit"; draft is
+                                          a copy of the accumulated draft
+                                          state (draftId, pool, current pack)
     """
 
-    def __init__(self, on_snapshot=None, on_decision=None, on_game_event=None):
+    def __init__(self, on_snapshot=None, on_decision=None, on_game_event=None,
+                 on_draft=None):
         self.state = GameStateTracker()
         self.match_id = None
         self.game_number = None
         self.decks = []
+        self.draft = _empty_draft()
         self._on_snapshot = on_snapshot
         self._on_decision = on_decision
         self._on_game_event = on_game_event
+        self._on_draft = on_draft
         self._pending_prompts = []
         self._decision_sequence = 0
         # monotonic id per game instance; the GRE gameId is absent on early
@@ -470,8 +477,40 @@ class ArenaMatchTracker(object):
             self._handle_client_decision(event)
         elif event_type == "ARENA_GAME_OVER":
             self._fire_game_event("game_over", event)
+        elif event_type == "ARENA_DRAFT_PACK":
+            self._handle_draft_pack(event)
+        elif event_type == "ARENA_DRAFT_PICK":
+            self._handle_draft_pick(event)
+        elif event_type == "ARENA_DECK_SUBMIT":
+            self._fire_draft_event("deck_submit", event)
 
     # --- event handlers ---
+
+    def _handle_draft_pack(self, event):
+        draft_id = event.get("draftId")
+        if draft_id is not None and draft_id != self.draft["draftId"]:
+            self.draft = _empty_draft()
+            self.draft["draftId"] = draft_id
+        self.draft["packNumber"] = event.get("packNumber")
+        self.draft["pickNumber"] = event.get("pickNumber")
+        self.draft["packCards"] = list(event.get("packCards") or [])
+        self._fire_draft_event("pack", event)
+
+    def _handle_draft_pick(self, event):
+        draft_id = event.get("draftId")
+        if draft_id is not None and draft_id != self.draft["draftId"]:
+            self.draft = _empty_draft()
+            self.draft["draftId"] = draft_id
+        self.draft["pool"].extend(event.get("pickedCardIds") or [])
+        self.draft["packCards"] = []
+        self._fire_draft_event("pick", event)
+
+    def _fire_draft_event(self, kind, event):
+        if self._on_draft is not None:
+            draft = dict(self.draft)
+            draft["pool"] = list(self.draft["pool"])
+            draft["packCards"] = list(self.draft["packCards"])
+            self._on_draft(kind, draft, event)
 
     def _handle_game_state(self, event):
         payload = event.get("payload") or {}
@@ -584,6 +623,11 @@ class ArenaMatchTracker(object):
 
 
 # --- small helpers ---
+
+def _empty_draft():
+    return {"draftId": None, "packNumber": None, "pickNumber": None,
+            "packCards": [], "pool": []}
+
 
 def _details_map(annotation):
     details = {}

@@ -124,10 +124,15 @@ def format_analysis(record, max_rows=None):
         suffix = "%.1f%%" % (100.0 * probability) if probability is not None \
             else "%.4f" % row.get("score", 0.0)
         lines.append("%d. %s  %s" % (position, row.get("label"), suffix))
-    if analysis.get("chosenRank") is not None:
-        lines.append("Played rank: %s" % analysis.get("chosenRank"))
-    if record.get("latencyMs") is not None:
-        lines.append("Inference: %d ms" % record.get("latencyMs"))
+    # Latency stays in the record but out of the readout — a viewer cares
+    # whether the play matched the model, not how long inference took.
+    rank = analysis.get("chosenRank")
+    if rank == 1:
+        lines.append("✓ Played rank: 1 — the model's top pick")
+    elif rank is not None:
+        top = (analysis.get("topK") or [{}])[0].get("label")
+        lines.append("✗ Played rank: %s — model preferred %s" % (rank, top)
+                     if top else "✗ Played rank: %s" % rank)
     return "\n".join(lines)
 
 

@@ -48,6 +48,16 @@ def build_parser():
     _add_common(replay)
     replay.add_argument("bundle")
 
+    analyze = commands.add_parser(
+        "analyze",
+        help="score a recorded bundle's decisions into its analysis.jsonl "
+             "cache, so replays show ranked choices without a live session")
+    _add_common(analyze)
+    analyze.add_argument("bundle")
+    analyze.add_argument("--checkpoint", default=None,
+                         help="checkpoint.pt (default: the local model's)")
+    analyze.add_argument("--top-k", type=int, default=5)
+
     status = commands.add_parser("status")
     status.add_argument("--model-dir", default=DEFAULT_MODEL_DIR)
     return parser
@@ -87,6 +97,23 @@ def _configure_environment(args, auto_train):
     })
 
 
+def _analyze_bundle(args):
+    """Backfill ``analysis.jsonl`` for a recorded bundle, offline."""
+    from magic_cabt.analysis import backfill_bundle
+
+    checkpoint = args.checkpoint or _make_evolver(args).ensure_checkpoint()
+    try:
+        summary = backfill_bundle(
+            args.bundle, checkpoint, device=args.device, top_k=args.top_k,
+            progress=lambda done, total: sys.stderr.write(
+                "analyzed %d/%d decisions\n" % (done, total)))
+    except IOError as error:
+        sys.stderr.write("%s\n" % error)
+        return 2
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
 def main(argv=None):
     parser = build_parser()
     args, passthrough = parser.parse_known_args(argv)
@@ -106,6 +133,9 @@ def main(argv=None):
             arena_card_db=args.arena_card_db)
         evolver.train_once(args.bundle)
         return 0
+
+    if args.command == "analyze":
+        return _analyze_bundle(args)
 
     if args.command == "status":
         path = os.path.join(os.path.abspath(

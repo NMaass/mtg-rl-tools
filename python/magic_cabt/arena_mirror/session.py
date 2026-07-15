@@ -23,12 +23,13 @@ class MirrorSession(object):
 
     def __init__(self, recorder=None, display=None, display_factory=None,
                  card_db=None, log_stream=None, verbose=True,
-                 on_status=None, on_action=None, on_game=None):
+                 on_status=None, on_action=None, on_game=None, on_draft=None):
         """``display`` is a ready display; ``display_factory`` is a callable
         that builds one lazily on the first live board update (so the GUI can
         open XMage only once gameplay actually appears). ``on_status`` /
-        ``on_action`` / ``on_game`` are optional observer callbacks the GUI
-        subscribes to for its log, actions, and lifecycle panes."""
+        ``on_action`` / ``on_game`` / ``on_draft`` are optional observer
+        callbacks the GUI subscribes to for its log, actions, lifecycle, and
+        draft panes."""
         self.recorder = recorder
         self.display = display
         self.display_factory = display_factory
@@ -38,6 +39,7 @@ class MirrorSession(object):
         self._on_status = on_status
         self._on_action = on_action
         self._on_game = on_game
+        self._on_draft = on_draft
         self._display_started_for = None
         self._last_flush = time.monotonic()
         self._display_failed = False
@@ -47,6 +49,7 @@ class MirrorSession(object):
             on_snapshot=self._on_snapshot,
             on_decision=self._on_decision,
             on_game_event=self._on_game_event,
+            on_draft=self._on_draft_event,
         )
 
     # --- feeding ---
@@ -125,6 +128,23 @@ class MirrorSession(object):
         self._say(line)
         if self._on_action is not None:
             self._on_action(line, record)
+
+    def _on_draft_event(self, kind, draft, event):
+        # Draft events already reach the recorder via record_history_event;
+        # this callback only narrates and feeds the GUI's draft pane.
+        if kind == "pack":
+            self._say("draft pack %s pick %s: %d cards on offer" % (
+                draft.get("packNumber"), draft.get("pickNumber"),
+                len(draft.get("packCards") or [])))
+        elif kind == "pick":
+            self._say("draft pick recorded; pool is %d cards" % (
+                len(draft.get("pool") or []),))
+        elif kind == "deck_submit":
+            self._say("deck submitted: %s (%d cards)" % (
+                event.get("eventName"),
+                len(event.get("mainDeckArenaIds") or [])))
+        if self._on_draft is not None:
+            self._on_draft(kind, draft, event)
 
     def _on_game_event(self, kind, event):
         if self.recorder is not None:

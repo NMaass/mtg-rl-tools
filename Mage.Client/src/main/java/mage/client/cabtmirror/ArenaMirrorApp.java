@@ -95,6 +95,7 @@ public final class ArenaMirrorApp {
         waitForMageFrame();
         muteClientAudio();
         tuneBoardForViewing();
+        resetBoardLayout();
         SwingUtilities.invokeLater(ArenaMirrorApp::hideConnectDialog);
 
         new ArenaMirrorApp().protocolLoop(protocolOut);
@@ -137,6 +138,26 @@ public final class ArenaMirrorApp {
                     () -> mage.client.util.GUISizeHelper.calculateGUISizes());
         } catch (Exception e) {
             logger.warn("mirror: could not recompute GUI sizes", e);
+        }
+    }
+
+    /**
+     * The mirror collapses the chat/big-card splits to widen the board, and
+     * XMage persists collapsed dividers as "hidden" sentinels when the pane
+     * closes. Restoring those on the next launch collapses the battlefield
+     * itself, leaving a permanently blank board. Every mirror start
+     * therefore begins from the default layout: the saved divider locations
+     * are masked in the preference cache before any pane opens.
+     */
+    private static void resetBoardLayout() {
+        String[] dividerKeys = {
+                PreferencesDialog.KEY_GAMEPANEL_DIVIDER_LOCATIONS_GAME_AND_BIG_CARD,
+                PreferencesDialog.KEY_GAMEPANEL_DIVIDER_LOCATIONS_BATTLEFIELD_AND_CHATS,
+                PreferencesDialog.KEY_GAMEPANEL_DIVIDER_LOCATIONS_HAND_STACK,
+                PreferencesDialog.KEY_GAMEPANEL_DIVIDER_LOCATIONS_CHAT_AND_LOGS,
+        };
+        for (String key : dividerKeys) {
+            putCachedPreference(key, "{}");
         }
     }
 

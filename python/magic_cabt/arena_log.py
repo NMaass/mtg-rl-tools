@@ -95,6 +95,8 @@ class ArenaLogNormalizer:
         self._current_match_id = None
         self._current_game_number = None
         self._game_over_keys = set()
+        self._draft_pack_keys = set()
+        self._sideboard_prompt_keys = set()
         self.records = {
             "raw_events": [],
             "normalized_events": [],
@@ -114,6 +116,14 @@ class ArenaLogNormalizer:
             "clientSelectNRespDecisions": 0,
             "gameOverEvents": 0,
             "deckCardIdsFound": [],
+            "draftIds": [],
+            "draftEvents": {
+                "packs": 0,
+                "picks": 0,
+                "deckSubmits": 0,
+                "sideboardPrompts": 0,
+                "sideboardSubmits": 0,
+            },
             "parseErrors": [],
             "normalizedEvents": 0,
             "rawEvents": 0,
@@ -178,6 +188,19 @@ class ArenaLogNormalizer:
         if isinstance(match_event, dict):
             self._emit_match_state_changed(match_event, raw_event)
 
+        # Limited-play business messages (draft packs/picks, deck submission)
+        # travel on the UnityCrossThreadLogger channel outside the GRE stream;
+        # the method-name prefix is not part of the JSON, so they are detected
+        # by payload shape.
+        if "PackCards" in unwrapped:
+            self._emit_draft_pack(unwrapped, raw_event)
+        elif "GrpIds" in unwrapped and _first_present(
+                unwrapped, ("DraftId", "draftId")) is not None:
+            self._emit_draft_pick(unwrapped, raw_event)
+        elif isinstance(unwrapped.get("Deck"), dict) and \
+                "EventName" in unwrapped:
+            self._emit_deck_submit(unwrapped, raw_event)
+
         gre_event = unwrapped.get("greToClientEvent")
         if isinstance(gre_event, dict):
             messages = gre_event.get("greToClientMessages")
@@ -229,6 +252,8 @@ class ArenaLogNormalizer:
         message_type = message.get("type")
         if message_type == "GREMessageType_ConnectResp":
             self._emit_connect_resp(message, raw_event)
+        elif message_type == "GREMessageType_SubmitDeckReq":
+            self._emit_sideboard_prompt(message, raw_event)
         elif message_type == "GREMessageType_GameStateMessage":
             self._emit_game_state(message, raw_event, queued=False)
         elif message_type == "GREMessageType_QueuedGameStateMessage":
@@ -260,6 +285,9 @@ class ArenaLogNormalizer:
 
     def _handle_client_to_gre_message(self, payload, raw_event):
         message_type = payload.get("type")
+        if message_type == "ClientMessageType_SubmitDeckResp":
+            self._emit_sideboard_submit(payload, raw_event)
+            return
         if message_type not in DECISION_CLIENT_TYPES:
             self._emit(
                 "ARENA_CLIENT_TO_GRE_MESSAGE",
@@ -366,6 +394,104 @@ class ArenaLogNormalizer:
             {
                 "connectResp": connect_resp,
                 "deckInfo": deck_entry,
+            },
+            history=True,
+        )
+
+    def _register_draft(self, draft_id):
+        if draft_id is not None and draft_id not in self.summary["draftIds"]:
+            self.summary["draftIds"].append(draft_id)
+
+    def _emit_draft_pack(self, unwrapped, raw_event):
+        draft_id = _first_present(unwrapped, ("draftId", "DraftId"))
+        pack_number = _first_present(unwrapped, ("SelfPack", "PackNumber", "Pack"))
+        pick_number = _first_present(unwrapped, ("SelfPick", "PickNumber", "Pick"))
+        pack_cards = _card_id_list(unwrapped.get("PackCards"))
+        # Arena logs each Draft.Notify more than once; keep the first sighting.
+        key = (draft_id, pack_number, pick_number, tuple(pack_cards))
+        if key in self._draft_pack_keys:
+            return
+        self._draft_pack_keys.add(key)
+        self._register_draft(draft_id)
+        self.summary["draftEvents"]["packs"] += 1
+        self._emit(
+            "ARENA_DRAFT_PACK",
+            raw_event,
+            {
+                "draftId": draft_id,
+                "packNumber": pack_number,
+                "pickNumber": pick_number,
+                "packCards": pack_cards,
+            },
+            history=True,
+        )
+
+    def _emit_draft_pick(self, unwrapped, raw_event):
+        draft_id = _first_present(unwrapped, ("DraftId", "draftId"))
+        self._register_draft(draft_id)
+        self.summary["draftEvents"]["picks"] += 1
+        self._emit(
+            "ARENA_DRAFT_PICK",
+            raw_event,
+            {
+                "draftId": draft_id,
+                "packNumber": _first_present(unwrapped, ("Pack", "PackNumber")),
+                "pickNumber": _first_present(unwrapped, ("Pick", "PickNumber")),
+                "pickedCardIds": _card_id_list(unwrapped.get("GrpIds")),
+            },
+            history=True,
+        )
+
+    def _emit_deck_submit(self, unwrapped, raw_event):
+        deck = unwrapped.get("Deck") or {}
+        self.summary["draftEvents"]["deckSubmits"] += 1
+        self._emit(
+            "ARENA_DECK_SUBMIT",
+            raw_event,
+            {
+                "eventName": unwrapped.get("EventName"),
+                "mainDeckArenaIds": _expand_deck_entries(deck.get("MainDeck")),
+                "sideboardArenaIds": _expand_deck_entries(deck.get("Sideboard")),
+                "payload": unwrapped,
+            },
+            history=True,
+        )
+
+    def _emit_sideboard_prompt(self, message, raw_event):
+        deck = (message.get("submitDeckReq") or {}).get("deck") or {}
+        # Queued replays repeat the request; keep one per match and msgId.
+        key = (self._current_match_id, message.get("msgId"))
+        if key in self._sideboard_prompt_keys:
+            return
+        self._sideboard_prompt_keys.add(key)
+        self.summary["draftEvents"]["sideboardPrompts"] += 1
+        self._emit(
+            "ARENA_SIDEBOARD_PROMPT",
+            raw_event,
+            {
+                "matchId": self._current_match_id,
+                "gameNumber": self._current_game_number,
+                "msgId": message.get("msgId"),
+                "gameStateId": message.get("gameStateId"),
+                "deckCards": _card_ids_from_cards(deck.get("deckCards")),
+                "sideboardCards": _card_ids_from_cards(deck.get("sideboardCards")),
+            },
+            history=True,
+        )
+
+    def _emit_sideboard_submit(self, payload, raw_event):
+        deck = (payload.get("submitDeckResp") or {}).get("deck") or {}
+        self.summary["draftEvents"]["sideboardSubmits"] += 1
+        self._emit(
+            "ARENA_SIDEBOARD_SUBMIT",
+            raw_event,
+            {
+                "matchId": self._current_match_id,
+                "gameNumber": self._current_game_number,
+                "respId": payload.get("respId"),
+                "gameStateId": payload.get("gameStateId"),
+                "deckCards": _card_ids_from_cards(deck.get("deckCards")),
+                "sideboardCards": _card_ids_from_cards(deck.get("sideboardCards")),
             },
             history=True,
         )
@@ -539,6 +665,29 @@ def _format_timestamp(raw_time):
         except ValueError:
             pass
     return raw_time
+
+
+def _card_id_list(value):
+    """Parse pack/pick card ids from a comma string or an id list."""
+    if isinstance(value, str):
+        return [int(part) for part in value.split(",") if part.strip().isdigit()]
+    return _card_ids_from_cards(value)
+
+
+def _expand_deck_entries(entries):
+    """Flatten deck-builder entries ({cardId, quantity}) with multiplicity."""
+    ids = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            if isinstance(entry, int):
+                ids.append(entry)
+            continue
+        card_id = _first_present(entry, ("cardId", "grpId", "id"))
+        if card_id is None:
+            continue
+        quantity = entry.get("quantity")
+        ids.extend([card_id] * max(1, int(quantity or 1)))
+    return ids
 
 
 def _card_ids_from_cards(cards):

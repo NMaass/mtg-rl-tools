@@ -8,7 +8,7 @@ import threading
 import time
 
 __all__ = ["ReplayPlayer", "ReplayController", "load_bundle",
-           "describe_decision", "decision_is_pass"]
+           "describe_decision", "decision_is_pass", "option_is_pass"]
 
 
 # Action types that are just yielding priority / declining to act — the noise a
@@ -44,6 +44,11 @@ def decision_is_pass(decision):
         if option is None or option.get("type") not in _PASS_OPTION_TYPES:
             return False
     return True
+
+
+def option_is_pass(option):
+    """True when a single recorded option merely yields priority."""
+    return (option or {}).get("type") in _PASS_OPTION_TYPES
 
 
 def _chosen_labels(decision, select):
@@ -225,6 +230,7 @@ class ReplayController(object):
         self._commands = queue.Queue()
         self._thread = None
         self._opened_games = set()
+        self._display_errors_reported = 0
 
     # --- lifecycle ---
 
@@ -359,8 +365,8 @@ class ReplayController(object):
         if self.display is not None:
             try:
                 self.display.send_state(state)
-            except Exception:
-                pass
+            except Exception as error:
+                self._report_display_error("board update failed", error)
         for decision in self._decisions.get(index, []):
             self._narrate(decision)
         self._report()
@@ -376,9 +382,16 @@ class ReplayController(object):
         try:
             self.display.start_game(players, local_seat=state.get("localSeat"),
                                     match_id=state.get("matchId"))
-        except Exception:
-            pass
+        except Exception as error:
+            self._report_display_error("board could not open the game", error)
         self._opened_games.add(key)
+
+    def _report_display_error(self, what, error):
+        """Playback survives a broken board, but never hides it: the first
+        few failures are narrated so a blank display is diagnosable."""
+        self._display_errors_reported += 1
+        if self._on_message is not None and self._display_errors_reported <= 3:
+            self._on_message("[display] %s: %s" % (what, error))
 
     def _narrate(self, decision):
         text = describe_decision(decision)

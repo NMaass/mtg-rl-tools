@@ -194,6 +194,24 @@ def install_local_model_hooks():
         record = records.get(decision_fingerprint(decision))
         return format_analysis(record) if record else None
 
+    def analysis_recommends_action(records, decision):
+        """True when the cached model's top choice is not a pass.
+
+        Lets the "next non-pass action" jump also stop where the human
+        passed but the model wanted to act — the disagreements worth
+        reviewing."""
+        record = records.get(decision_fingerprint(decision)) \
+            if records else None
+        top = ((record or {}).get("analysis") or {}).get("topK") or []
+        if not top:
+            return False
+        index = top[0].get("optionIndex")
+        select = (decision.get("observation") or {}).get("select") or {}
+        for option in select.get("option") or []:
+            if option.get("index") == index:
+                return not replay_module.option_is_pass(option)
+        return False
+
     class LocalReplayPlayer(BasePlayer):
         def play(self, bundle_dir):
             self._local_analysis = load_analysis(bundle_dir)
@@ -214,6 +232,26 @@ def install_local_model_hooks():
     class LocalReplayController(BaseController):
         def __init__(self, bundle_dir, display=None, on_progress=None,
                      on_message=None, speed=4.0):
+            # Analysis at storage time, transparently: score any decisions
+            # this checkpoint hasn't seen before the replay opens (a no-op
+            # once cached), so every replay simply has ranked choices.
+            checkpoint = os.environ.get("MAGIC_CABT_MODEL_CHECKPOINT")
+            if checkpoint and os.path.exists(checkpoint) and on_message:
+                try:
+                    from magic_cabt.analysis import backfill_bundle
+                    summary = backfill_bundle(
+                        bundle_dir, checkpoint,
+                        device=os.environ.get(
+                            "MAGIC_CABT_MODEL_DEVICE") or None,
+                        progress=lambda done, total: on_message(
+                            "[model] analyzing decisions… %d/%d"
+                            % (done, total)))
+                    if summary["scored"]:
+                        on_message("[model] analyzed %d new decision(s)"
+                                   % summary["scored"])
+                except Exception as error:
+                    on_message("[model] analysis backfill skipped: %s"
+                               % (error,))
             self._local_analysis = load_analysis(bundle_dir)
             original_progress = on_progress
 
@@ -242,6 +280,21 @@ def install_local_model_hooks():
                 except Exception:
                     pass
 
+        def _jump(self, meaningful):
+            if not meaningful:
+                return super()._jump(meaningful)
+            for i in range(self._index + 1, self.total):
+                decisions = self._decisions.get(i)
+                if not decisions:
+                    continue
+                if any(not replay_module.decision_is_pass(d)
+                       for d in decisions) or \
+                        any(analysis_recommends_action(
+                            self._local_analysis, d) for d in decisions):
+                    self._render(i)
+                    return
+            self._render(self.total - 1)
+
     recorder_module.MirrorRecorder = LocalModelRecorder
     session_module.MirrorSession = LocalModelSession
     replay_module.ReplayPlayer = LocalReplayPlayer
@@ -266,20 +319,27 @@ def install_local_model_gui_hooks():
 
     def build_transport(self, frame):
         original_build_transport(self, frame)
-        self.replay_analysis_var = gui_module.tk.StringVar(
-            value="No cached model analysis for this frame.")
-        label = gui_module.ttk.Label(
-            frame, textvariable=self.replay_analysis_var,
-            style="Muted.TLabel", justify=gui_module.tk.LEFT,
-            anchor="w", wraplength=960)
-        label.pack(fill=gui_module.tk.X, pady=(8, 0))
+        # A fixed-height readout: a wrapping Label re-measures per frame and
+        # makes the window height stutter as analysis length changes.
+        text = gui_module.tk.Text(
+            frame, height=8, wrap=gui_module.tk.WORD, bd=0,
+            relief=gui_module.tk.FLAT, bg=gui_module.Palette.PANEL,
+            fg=gui_module.Palette.MUTED, state=gui_module.tk.DISABLED,
+            font=self.font_mono, padx=10, pady=6)
+        text.configure(highlightthickness=0)
+        text.pack(fill=gui_module.tk.X, pady=(8, 0))
+        self.replay_analysis_text = text
 
     def update_progress(self, info):
         original_update_progress(self, info)
-        variable = getattr(self, "replay_analysis_var", None)
-        if variable is not None:
-            variable.set(info.get("analysis") or
-                         "No cached model analysis for this frame.")
+        widget = getattr(self, "replay_analysis_text", None)
+        if widget is not None:
+            content = info.get("analysis") or \
+                "No cached model analysis for this frame."
+            widget.configure(state=gui_module.tk.NORMAL)
+            widget.delete("1.0", gui_module.tk.END)
+            widget.insert("1.0", content)
+            widget.configure(state=gui_module.tk.DISABLED)
 
     app._build_transport = build_transport
     app._update_progress = update_progress

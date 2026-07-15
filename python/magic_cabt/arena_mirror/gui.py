@@ -19,6 +19,7 @@ import glob
 import json
 import os
 import queue
+import re
 import shutil
 import threading
 import tkinter as tk
@@ -26,6 +27,7 @@ import tkinter.font as tkfont
 from tkinter import filedialog, scrolledtext, ttk
 
 from .cards import CardDatabase
+from .draft_advisor import DraftAdvisor
 from .mirror import CLASSPATH_ENV_VAR, MirrorDisplay
 from .recorder import MirrorRecorder
 from .replay import ReplayController
@@ -34,6 +36,10 @@ from .session import MirrorSession
 DEFAULT_LOG_PATH = os.path.expanduser(
     r"~\AppData\LocalLow\Wizards Of The Coast\MTGA\Player.log")
 DEFAULT_RUNS_DIR = "arena-mirror-runs"
+# Paths and speed the user picked last time; the window should reopen on
+# their library, not on whatever directory the process happened to start in.
+SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".magic-cabt",
+                             "gui-settings.json")
 # Where setup-arena-mirror.ps1 builds XMage; used to auto-find the classpath
 # and the java runtime when the GUI wasn't launched through that script.
 DEFAULT_XMAGE_DIR = r"C:\Users\nicho\Code\xmage-goldflush"
@@ -63,16 +69,19 @@ class ArenaMirrorApp(object):
         self.classpath = classpath
         self.java = java
         root.title("Arena → XMage Mirror")
-        root.geometry("1040x680")
-        root.minsize(880, 560)
+        root.geometry("1040x760")
+        root.minsize(940, 700)
         root.configure(bg=Palette.BG)
 
         self._init_fonts()
         self._init_style()
 
-        self.log_var = tk.StringVar(value=DEFAULT_LOG_PATH)
-        self.out_var = tk.StringVar(value=os.path.join(
-            DEFAULT_RUNS_DIR, "session"))
+        self._settings = _load_settings()
+        self.log_var = tk.StringVar(
+            value=self._settings.get("logPath") or DEFAULT_LOG_PATH)
+        self.out_var = tk.StringVar(
+            value=self._settings.get("outDir") or os.path.join(
+                DEFAULT_RUNS_DIR, "session"))
         self.display_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Idle")
 
@@ -88,8 +97,20 @@ class ArenaMirrorApp(object):
         self._replay_controller = None
         self._replay_at_end = False
         self._replay_total = 0
+        # Guards against the double-start race: a second Watch click (or a
+        # double-click's second event) must never launch a second controller
+        # while the first is still opening XMage in its worker thread.
+        self._replay_launching = False
+        self._replay_generation = 0
+        self._replay_namer = None
 
         self._build_layout()
+        # Keyboard transport for stepping through a loaded replay. Handlers
+        # no-op unless the Replays tab is showing and focus is not in a
+        # text field, so typing a path never drives the board.
+        for sequence in ("<space>", "<Left>", "<Right>", "<n>", "<m>",
+                         "<Home>", "<End>"):
+            self.root.bind(sequence, self._on_replay_key)
         self.root.after(100, self._drain_queue)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -127,16 +148,23 @@ class ArenaMirrorApp(object):
         # buttons
         style.configure("TButton", background=p.PANEL_ALT, foreground=p.TEXT,
                         borderwidth=0, focuscolor=p.PANEL_ALT, padding=(12, 6))
+        # every button needs visible pressed feedback, or clicks feel dead
         style.map("TButton",
-                  background=[("active", p.BORDER), ("disabled", p.PANEL)],
+                  background=[("pressed", p.SELECT), ("active", p.BORDER),
+                              ("disabled", p.PANEL)],
                   foreground=[("disabled", p.MUTED)])
         style.configure("Accent.TButton", background=p.ACCENT,
                         foreground="#ffffff", padding=(14, 7))
         style.map("Accent.TButton",
-                  background=[("active", p.ACCENT_DK), ("disabled", p.PANEL)],
+                  background=[("pressed", "#4b63c4"), ("active", p.ACCENT_DK),
+                              ("disabled", p.PANEL)],
                   foreground=[("disabled", p.MUTED)])
         style.configure("Transport.TButton", padding=(10, 6),
                         font=self.font_h2)
+        style.map("Transport.TButton",
+                  background=[("pressed", p.ACCENT), ("active", p.BORDER),
+                              ("disabled", p.PANEL)],
+                  foreground=[("pressed", "#ffffff"), ("disabled", p.MUTED)])
 
         # entries / checkbuttons
         style.configure("TEntry", fieldbackground=p.PANEL, foreground=p.TEXT,
@@ -180,13 +208,17 @@ class ArenaMirrorApp(object):
         notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=(10, 12))
 
         follow_tab = ttk.Frame(notebook, padding=16)
+        draft_tab = ttk.Frame(notebook, padding=16)
         replays_tab = ttk.Frame(notebook, padding=16)
         notebook.add(follow_tab, text="Follow")
+        notebook.add(draft_tab, text="Draft")
         notebook.add(replays_tab, text="Replays")
         self._notebook = notebook
+        self._replays_tab = replays_tab
         notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self._build_follow_tab(follow_tab)
+        self._build_draft_tab(draft_tab)
         self._build_replays_tab(replays_tab)
 
     def _build_follow_tab(self, frm):
@@ -246,6 +278,78 @@ class ArenaMirrorApp(object):
         panes.add(wrap, stretch="always", minsize=260)
         return view
 
+    def _build_draft_tab(self, frm):
+        header = ttk.Frame(frm)
+        header.pack(fill=tk.X)
+        ttk.Label(header, text="Live draft", style="H1.TLabel").pack(
+            side=tk.LEFT)
+        self.draft_status_var = tk.StringVar(
+            value="No draft seen yet — start following on the Follow tab.")
+        ttk.Label(frm, textvariable=self.draft_status_var,
+                  style="Muted.TLabel").pack(anchor="w", pady=(2, 14))
+
+        panes = tk.PanedWindow(frm, orient=tk.HORIZONTAL, sashwidth=8,
+                               bg=Palette.BG, bd=0)
+        panes.pack(fill=tk.BOTH, expand=True)
+
+        pack_wrap = ttk.Frame(panes, style="Card.TFrame")
+        ttk.Label(pack_wrap, text="Current pack", style="Card.TLabel",
+                  font=self.font_h2).pack(fill=tk.X, padx=10, pady=(8, 4))
+        self.draft_pack_table = ttk.Treeview(
+            pack_wrap, columns=("rank", "card", "score"), show="headings",
+            height=15)
+        for column, heading, width, anchor, stretch in (
+                ("rank", "#", 36, tk.CENTER, False),
+                ("card", "Card", 260, tk.W, True),
+                ("score", "Score", 70, tk.CENTER, False)):
+            self.draft_pack_table.heading(column, text=heading)
+            self.draft_pack_table.column(column, width=width, anchor=anchor,
+                                         stretch=stretch)
+        self.draft_pack_table.tag_configure("odd", background=Palette.PANEL)
+        self.draft_pack_table.tag_configure("even",
+                                            background=Palette.PANEL_ALT)
+        self.draft_pack_table.tag_configure("best",
+                                            foreground=Palette.SUCCESS)
+        self.draft_pack_table.pack(fill=tk.BOTH, expand=True, padx=2,
+                                   pady=(0, 4))
+        panes.add(pack_wrap, stretch="always", minsize=280)
+
+        self.draft_outlook_view = self._log_pane(panes, "Deck outlook")
+
+    def _update_draft_pane(self, payload):
+        kind = payload.get("kind")
+        draft = payload.get("draft") or {}
+        pool_size = len(draft.get("pool") or [])
+        if kind == "deck_submit":
+            self.draft_status_var.set(
+                "Deck submitted for %s." % (payload.get("eventName"),))
+        else:
+            self.draft_status_var.set(
+                "Pack %s, pick %s — pool %d cards%s" % (
+                    draft.get("packNumber"), draft.get("pickNumber"),
+                    pool_size,
+                    "" if payload.get("scored") else
+                    " (no draft model — showing names only)"))
+        self.draft_pack_table.delete(
+            *self.draft_pack_table.get_children())
+        for index, entry in enumerate(payload.get("pack") or []):
+            score = entry.get("score")
+            tags = ["odd" if index % 2 else "even"]
+            if index == 0 and payload.get("scored"):
+                tags.append("best")
+            self.draft_pack_table.insert(
+                "", tk.END, tags=tags,
+                values=(index + 1, entry.get("name"),
+                        "%.2f" % score if score is not None else "—"))
+        if payload.get("error"):
+            self.draft_status_var.set(
+                self.draft_status_var.get() +
+                " — advisor error: %s" % payload["error"])
+        outlook = payload.get("outlook")
+        if outlook is not None:
+            self.draft_outlook_view.delete("1.0", tk.END)
+            self._append(self.draft_outlook_view, _outlook_text(outlook))
+
     def _build_replays_tab(self, frm):
         header = ttk.Frame(frm)
         header.pack(fill=tk.X)
@@ -262,8 +366,11 @@ class ArenaMirrorApp(object):
                     ("decisions", "Decisions", 90), ("date", "Played", 130))
         table_wrap = ttk.Frame(frm, style="Card.TFrame")
         table_wrap.pack(fill=tk.BOTH, expand=True, pady=(12, 8))
+        # height is a minimum request, not a cap (the table expands to fill);
+        # keeping it small guarantees the transport bar and the analysis
+        # readout below are never clipped out of a short window
         self.replay_table = ttk.Treeview(table_wrap, columns=columns,
-                                         show="headings", height=10)
+                                         show="headings", height=5)
         for column, heading, width in headings:
             anchor = tk.W if column in ("title",) else tk.CENTER
             self.replay_table.heading(column, text=heading)
@@ -287,7 +394,7 @@ class ArenaMirrorApp(object):
         self._build_matchup_strip(frm)
         self._build_transport(frm)
 
-        self._runs_dir = DEFAULT_RUNS_DIR
+        self._runs_dir = self._settings.get("runsDir") or DEFAULT_RUNS_DIR
         self._replay_paths = {}
         self._replay_meta = {}
         self._refresh_replays()
@@ -328,7 +435,7 @@ class ArenaMirrorApp(object):
         # start / stop the whole replay session
         self.watch_btn = ttk.Button(inner, text="▶  Watch",
                                     style="Accent.TButton",
-                                    command=self.watch_replay)
+                                    command=self.watch_replay, takefocus=0)
         self.watch_btn.pack(side=tk.LEFT, padx=(0, 12))
 
         # the transport controls, enabled only while a replay is loaded
@@ -352,11 +459,15 @@ class ArenaMirrorApp(object):
 
         ttk.Label(inner, text="Speed", style="CardMuted.TLabel").pack(
             side=tk.LEFT, padx=(16, 6))
-        self.replay_speed = 4.0
+        try:
+            self.replay_speed = float(
+                self._settings.get("replaySpeed") or 4.0)
+        except (TypeError, ValueError):
+            self.replay_speed = 4.0
         self._speed_buttons = {}
         for value in (1, 2, 4, 8, 16):
             button = ttk.Button(inner, text="%d×" % value, width=3,
-                                style="Transport.TButton",
+                                style="Transport.TButton", takefocus=0,
                                 command=lambda v=value: self._set_speed(v))
             button.pack(side=tk.LEFT, padx=(0, 4))
             self._speed_buttons[value] = button
@@ -374,8 +485,10 @@ class ArenaMirrorApp(object):
         self._highlight_speed(self.replay_speed)
 
     def _transport_button(self, parent, text, tip, command, width=None):
+        # takefocus=0 keeps keyboard focus off the buttons, so the space
+        # bar always means play/pause instead of re-invoking the last click
         button = ttk.Button(parent, text=text, style="Transport.TButton",
-                            command=command, state=tk.DISABLED)
+                            command=command, state=tk.DISABLED, takefocus=0)
         if width is not None:
             button.configure(width=width)
         button.pack(side=tk.LEFT, padx=(0, 8))
@@ -405,6 +518,7 @@ class ArenaMirrorApp(object):
             title="Folder containing recorded replays")
         if path:
             self._runs_dir = path
+            self._save_settings()
             self._refresh_replays()
 
     def _refresh_replays(self):
@@ -423,8 +537,19 @@ class ArenaMirrorApp(object):
                                             tags=tags)
             self._replay_paths[item] = path
             self._replay_meta[item] = summary
+        if not rows:
+            self.replay_status_var.set(
+                "No replays in %s — click Browse folder… to point at your "
+                "library, or record a game on the Follow tab."
+                % os.path.abspath(self._runs_dir))
+            return
+        # Pre-select the newest match so ▶ Watch works immediately.
+        first = self.replay_table.get_children()[0]
+        self.replay_table.selection_set(first)
+        self.replay_table.focus(first)
         self.replay_status_var.set(
-            "%d replay(s) in %s" % (len(rows), self._runs_dir))
+            "%d replay(s) in %s — select one and press ▶ Watch."
+            % (len(rows), os.path.abspath(self._runs_dir)))
 
     def _row_for(self, path, summary, index):
         title = summary.get("title")
@@ -485,6 +610,8 @@ class ArenaMirrorApp(object):
 
     # ------------------------------------------------------------- transport
     def watch_replay(self):
+        if self._replay_launching:
+            return  # already opening; ignore the double-click's second event
         if self._replay_active():
             self._transport("stop")
             return
@@ -495,32 +622,47 @@ class ArenaMirrorApp(object):
         bundle = self._replay_paths.get(selection[0])
         if not bundle:
             return
-        self.watch_btn.config(state=tk.DISABLED)
+        self._replay_launching = True
+        self._replay_generation += 1
+        self.watch_btn.config(state=tk.DISABLED, text="…  Loading")
         self.replay_status_var.set("Opening XMage for replay…")
-        threading.Thread(target=self._launch_replay, args=(bundle,),
+        threading.Thread(target=self._launch_replay,
+                         args=(bundle, self._replay_generation),
                          daemon=True).start()
 
-    def _launch_replay(self, bundle):
+    def _launch_replay(self, bundle, generation):
+        # Defensive: a leftover controller must never keep driving the board;
+        # every stale one is stopped before a new one exists.
+        leftover = self._replay_controller
+        if leftover is not None:
+            self._replay_controller = None
+            try:
+                leftover.stop()
+            except Exception:
+                pass
         try:
             display = self._get_display()
         except Exception as error:
             self._post(("replay_status", "Cannot open XMage: %s" % error))
-            self._post(("replay_reset", None))
+            self._post(("replay_reset", generation))
             return
         try:
             controller = ReplayController(
                 bundle, display=display, speed=self.replay_speed,
-                on_progress=lambda info: self._post(("replay_progress", info)),
+                on_progress=lambda info: self._post(
+                    ("replay_progress", (generation, info))),
                 on_message=lambda text: self._post(("log", text)))
+            namer = _ReplayNamer(bundle, controller.states)
         except Exception as error:
             self._post(("replay_status", "Replay error: %s" % error))
-            self._post(("replay_reset", None))
+            self._post(("replay_reset", generation))
             return
         self._replay_controller = controller
+        self._replay_namer = namer
         self._replay_total = max(1, controller.total - 1)
-        self._post(("replay_ready", os.path.basename(bundle)))
+        self._post(("replay_ready", (generation, os.path.basename(bundle))))
+        # Start paused on frame 1: playback is the user's to drive.
         controller.start()
-        controller.play()
 
     def _toggle_play(self):
         controller = self._replay_controller
@@ -540,6 +682,8 @@ class ArenaMirrorApp(object):
             controller.toggle()
         elif action == "step":
             controller.step(arg)
+        elif action == "seek":
+            controller.seek(arg)
         elif action == "jump":
             controller.next_decision(meaningful=arg)
         elif action == "stop":
@@ -552,11 +696,55 @@ class ArenaMirrorApp(object):
         self._highlight_speed(value)
         if self._replay_controller is not None:
             self._replay_controller.set_speed(float(value))
+        self._save_settings()
+
+    def _save_settings(self):
+        log_var = getattr(self, "log_var", None)
+        if log_var is None:
+            return  # window closed before the vars were built
+        try:
+            os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+            with open(SETTINGS_PATH, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "logPath": log_var.get(),
+                    "outDir": self.out_var.get(),
+                    "runsDir": getattr(self, "_runs_dir", None),
+                    "replaySpeed": getattr(self, "replay_speed", 4.0),
+                }, handle, indent=2, sort_keys=True)
+        except OSError:
+            pass  # settings are a convenience, never worth failing over
 
     def _highlight_speed(self, value):
         for preset, button in self._speed_buttons.items():
             button.configure(style="Accent.TButton" if preset == value
                              else "Transport.TButton")
+
+    def _on_replay_key(self, event):
+        """Keyboard transport: space, arrows, N/M, Home/End."""
+        if self._replay_controller is None:
+            return None
+        if self._notebook.select() != str(self._replays_tab):
+            return None
+        focus = self.root.focus_get()
+        if isinstance(focus, (tk.Entry, ttk.Entry, tk.Text)):
+            return None
+        keysym = event.keysym.lower()
+        shift = bool(event.state & 0x0001)
+        if keysym == "space":
+            self._toggle_play()
+        elif keysym == "left":
+            self._transport("step", -10 if shift else -1)
+        elif keysym == "right":
+            self._transport("step", 10 if shift else 1)
+        elif keysym == "n":
+            self._transport("jump", False)
+        elif keysym == "m":
+            self._transport("jump", True)
+        elif keysym == "home":
+            self._transport("seek", 0)
+        elif keysym == "end":
+            self._transport("seek", self._replay_total)
+        return "break"
 
     def _on_scrub_preview(self, index):
         # live position while dragging; the actual seek happens on release
@@ -580,11 +768,13 @@ class ArenaMirrorApp(object):
                        ("All files", "*.*")])
         if path:
             self.log_var.set(path)
+            self._save_settings()
 
     def _pick_out(self):
         path = filedialog.askdirectory(title="Output folder")
         if path:
             self.out_var.set(path)
+            self._save_settings()
 
     def _open_output(self):
         path = self.out_var.get()
@@ -686,6 +876,8 @@ class ArenaMirrorApp(object):
 
         recorder = MirrorRecorder(out_dir, card_db=card_db)
         display_factory = self._get_display if self.display_var.get() else None
+        advisor = DraftAdvisor.maybe_load(
+            card_db, log=lambda text: self._post(("log", text)))
 
         session = MirrorSession(
             recorder=recorder, display_factory=display_factory,
@@ -693,7 +885,10 @@ class ArenaMirrorApp(object):
             on_status=lambda text: self._post(("log", text)),
             on_action=lambda line, record: self._post(("action", line)),
             on_game=lambda kind, match_id, game: self._post(
-                ("log", "• %s (match=%s game=%s)" % (kind, match_id, game))))
+                ("log", "• %s (match=%s game=%s)" % (kind, match_id, game))),
+            on_draft=lambda kind, draft, event: self._post(
+                ("draft", self._draft_payload(advisor, card_db, kind,
+                                              draft, event))))
         self._session = session
         self._post(("log", "Recording to %s" % os.path.abspath(out_dir)))
         try:
@@ -780,6 +975,38 @@ class ArenaMirrorApp(object):
         base = os.path.join(DEFAULT_XMAGE_DIR, "Mage.Client")
         return base if os.path.isdir(base) else None
 
+    @staticmethod
+    def _draft_payload(advisor, card_db, kind, draft, event):
+        """Build the draft-pane update on the session thread, so model
+        scoring never runs on (or blocks) the Tk event loop."""
+        payload = {"kind": kind, "draft": draft, "scored": False}
+        if kind == "deck_submit":
+            payload["eventName"] = event.get("eventName")
+
+        def name_for(grp_id):
+            if advisor is not None:
+                return advisor.name_for(grp_id)
+            if card_db is not None:
+                try:
+                    return card_db.name_for(grp_id) or str(grp_id)
+                except Exception:
+                    return str(grp_id)
+            return str(grp_id)
+
+        pack = draft.get("packCards") or []
+        payload["pack"] = [{"grpId": grp_id, "name": name_for(grp_id),
+                            "score": None} for grp_id in pack]
+        if advisor is not None:
+            try:
+                if pack:
+                    payload["pack"] = advisor.score_pack(draft)
+                    payload["scored"] = True
+                if kind in ("pick", "deck_submit") and draft.get("pool"):
+                    payload["outlook"] = advisor.outlook(draft["pool"])
+            except Exception as error:
+                payload["error"] = str(error)
+        return payload
+
     # ------------------------------------------------------------- Tk queue
     def _post(self, item):
         self._queue.put(item)
@@ -798,6 +1025,8 @@ class ArenaMirrorApp(object):
             self._log(payload)
         elif kind == "action":
             self._append(self.action_view, payload)
+        elif kind == "draft":
+            self._update_draft_pane(payload)
         elif kind == "done":
             self.start_btn.config(state=tk.NORMAL)
             self.stop_btn.config(state=tk.DISABLED)
@@ -816,6 +1045,10 @@ class ArenaMirrorApp(object):
         elif kind == "replay_status":
             self.replay_status_var.set(payload)
         elif kind == "replay_ready":
+            generation, name = payload
+            if generation != self._replay_generation:
+                return  # a newer replay superseded this launch
+            self._replay_launching = False
             self._set_transport_enabled(True)
             self.watch_btn.config(text="⏹  Stop", state=tk.NORMAL)
             controller = self._replay_controller
@@ -823,14 +1056,42 @@ class ArenaMirrorApp(object):
                 self.scrubber.configure_marks(controller.total,
                                               controller.turn_marks)
             self.scrubber.set_enabled(True)
-            self.replay_status_var.set("Playing %s" % payload)
+            self.replay_status_var.set(
+                "Loaded %s — space plays/pauses · ←/→ step (shift: ×10) · "
+                "N next action · M next real play" % name)
         elif kind == "replay_reset":
+            if payload is not None and payload != self._replay_generation:
+                return
+            self._replay_launching = False
             self._set_transport_enabled(False)
             self.watch_btn.config(text="▶  Watch", state=tk.NORMAL)
             self.scrubber.set_enabled(False)
             self._replay_controller = None
+            self._replay_namer = None
         elif kind == "replay_progress":
-            self._update_progress(payload)
+            generation, info = payload
+            # Events from a stopped/superseded controller are dropped whole:
+            # exactly one controller may ever steer the transport UI.
+            if generation != self._replay_generation or \
+                    self._replay_controller is None:
+                return
+            self._resolve_replay_names(info)
+            self._update_progress(info)
+
+    def _resolve_replay_names(self, info):
+        """Rewrite raw grpId/instance ids in transport text to card names."""
+        namer = self._replay_namer
+        if namer is None:
+            return
+        game_instance = None
+        controller = self._replay_controller
+        index = info.get("index")
+        if controller is not None and isinstance(index, int) and \
+                0 <= index < len(controller.states):
+            game_instance = controller.states[index].get("gameInstance")
+        for key in ("decision", "analysis"):
+            if info.get(key):
+                info[key] = namer.resolve(info[key], game_instance)
 
     def _update_progress(self, info):
         self.scrubber.set_position(info.get("index", 0))
@@ -876,6 +1137,7 @@ class ArenaMirrorApp(object):
     def _on_close(self):
         # closing the GUI ends everything: stop following, stop any replay,
         # and close the XMage window the user left open.
+        self._save_settings()
         self._stop_requested = True
         if self._session is not None:
             self._session.stop()
@@ -1089,6 +1351,115 @@ def _side_text(side):
     if archetype and name:
         return "%s (%s)" % (archetype, name)
     return archetype or name or "?"
+
+
+class _ReplayNamer(object):
+    """Resolve raw ids in recorded replay text back to card names.
+
+    Recorded option labels read "Cast grpId=76615 instance=169"; the bundle
+    already knows the names — ``card_cache.json`` maps grpId to card info and
+    the board snapshots name every object instance the mirror ever rendered.
+    Unknown ids are left untouched rather than guessed.
+    """
+
+    # "grpId=N instance=M" pairs collapse to one name; the singles catch
+    # bare "instance=M" (attackers/blockers) and "id=M" (SelectN prompts).
+    _PAIR_RE = re.compile(r"\bgrpId=(\d+) instance=(\d+)\b")
+    _GRP_RE = re.compile(r"\bgrpId=(\d+)\b")
+    _INSTANCE_RE = re.compile(r"\b(?:instance|id)=(\d+)\b")
+
+    def __init__(self, bundle_dir, states):
+        self.by_grp = {}
+        try:
+            with open(os.path.join(bundle_dir, "card_cache.json"),
+                      encoding="utf-8") as handle:
+                cards = json.load(handle) or {}
+            if isinstance(cards.get("cards"), dict):
+                cards = cards["cards"]
+            for grp_id, card in cards.items():
+                name = (card or {}).get("name") if isinstance(card, dict) \
+                    else None
+                if name:
+                    self.by_grp[str(grp_id)] = name
+        except (OSError, ValueError):
+            pass
+        self.by_instance = {}
+        for state in states or []:
+            self._collect(state.get("zones"), state.get("gameInstance"))
+
+    def _collect(self, value, game_instance):
+        if isinstance(value, dict):
+            for item in value.values():
+                self._collect(item, game_instance)
+        elif isinstance(value, list):
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name")
+                if not name:
+                    continue
+                if item.get("grpId") is not None:
+                    self.by_grp.setdefault(str(item["grpId"]), name)
+                instance_id = item.get("instanceId")
+                if instance_id is not None:
+                    self.by_instance[(game_instance, str(instance_id))] = name
+                    self.by_instance.setdefault(
+                        (None, str(instance_id)), name)
+
+    def resolve(self, text, game_instance=None):
+        if not text:
+            return text
+
+        def instance_name(instance_id):
+            return self.by_instance.get((game_instance, instance_id)) or \
+                self.by_instance.get((None, instance_id))
+
+        def pair(match):
+            return instance_name(match.group(2)) or \
+                self.by_grp.get(match.group(1)) or match.group(0)
+
+        text = self._PAIR_RE.sub(pair, text)
+        text = self._GRP_RE.sub(
+            lambda match: self.by_grp.get(match.group(1)) or match.group(0),
+            text)
+        return self._INSTANCE_RE.sub(
+            lambda match: instance_name(match.group(1)) or match.group(0),
+            text)
+
+
+def _load_settings():
+    try:
+        with open(SETTINGS_PATH, "r", encoding="utf-8") as handle:
+            settings = json.load(handle)
+        return settings if isinstance(settings, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _outlook_text(outlook):
+    """Render a deck-outlook dict (analysis.draft_outlook) as pane text."""
+    lines = ["Auto-built deck (%d of %d spells, pool %d):" % (
+        len(outlook.get("deck") or []), outlook.get("spellTarget") or 0,
+        outlook.get("poolSize") or 0)]
+    for index, entry in enumerate(outlook.get("deck") or []):
+        lines.append("%2d. %s" % (index + 1,
+                                  entry.get("name") or entry.get("grpId")))
+    colors = outlook.get("colors") or {}
+    if colors:
+        lines.append("")
+        lines.append("Colors: " + "  ".join(
+            "%s×%d" % (letter, count) for letter, count in colors.items()))
+    curve = outlook.get("curve") or {}
+    if curve:
+        lines.append("Curve:  " + "  ".join(
+            "%s:%d" % (cost, count) for cost, count in curve.items()))
+    cuts = outlook.get("cuts") or []
+    if cuts:
+        lines.append("")
+        lines.append("Cuts: " + ", ".join(
+            str(entry.get("name") or entry.get("grpId"))
+            for entry in cuts[:12]))
+    return "\n".join(lines)
 
 
 def main(argv=None):
