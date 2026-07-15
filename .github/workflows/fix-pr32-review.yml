@@ -1,0 +1,17 @@
+name: fix-pr32-review
+on:
+  push:
+    branches: [training/reliable-jepa-runs]
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: training/reliable-jepa-runs
+      - name: Patch resume best-checkpoint handling
+        run: |
+          python - <<'PY
