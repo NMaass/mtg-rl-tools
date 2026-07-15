@@ -9,16 +9,8 @@ description = "Python tooling for CABT-style Magic: The Gathering RL and imitati
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [
-  { name = "NMaass" }
-]
-keywords = [
-  "magic-the-gathering",
-  "reinforcement-learning",
-  "imitation-learning",
-  "xmage",
-  "mtg-arena"
-]
+authors = [{ name = "NMaass" }]
+keywords = ["magic-the-gathering", "reinforcement-learning", "imitation-learning", "xmage", "mtg-arena"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
@@ -53,7 +45,8 @@ magic-cabt-upload = "magic_cabt.upload.cli:main"
 magic-cabt-agent-service = "magic_cabt.server.agent_service:main"
 magic-cabt-train-ranker = "magic_cabt.training.train_ranker:main"
 magic-cabt-build-transitions = "magic_cabt.training.build_transitions:main"
-magic-cabt-train-jepa = "magic_cabt.training.train_jepa:main"
+magic-cabt-train-jepa = "magic_cabt.training.train_reliable:main"
+magic-cabt-train-structured-bc = "magic_cabt.training.train_structured_bc:main"
 magic-cabt-local-evolve = "magic_cabt.training.local_evolve:main"
 magic-cabt-local-model = "magic_cabt.local_model:main"
 magic-cabt-build-draft-dataset = "magic_cabt.training.build_draft_dataset:main"
