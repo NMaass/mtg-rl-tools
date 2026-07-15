@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "name": "mtg-gameplay-research-matrix-v1",
+  "claimLevel": "benchmark",
+  "description": "Pre-registered comparison of cheap imitation baselines, structured belief-aware policies, a representation/world-model experiment, and deck-local search. Model sizes and data thresholds are hypotheses to be tested by scaling curves, not claims embedded in this manifest.",
+  "data": {
+    "sources": [
+      "arena_human_decisions",
+      "arena_mirror_public_states",
+      "xmage_engine_selfplay",
+      "xmage_counterfactual_search"
+    ],
+    "decisionSources": [
+      "arena_human_decisions",
+      "search_distillation_targets"
+    ],
+    "transitionSources": [
+      "arena_mirror_public_states",
+      "xmage_engine_selfplay",
+      "xmage_counterfactual_search"
+    ],
+    "split": {
+      "unit": "session",
+      "strategy": "sha256(source-player-session)-stable-buckets",
+      "holdoutFraction": 0.2,
+      "notes": "All decisions, states, and transitions from a game remain in one partition. Additional benchmark reports should include time-block, matchup, archetype, and card-set holdouts."
+    },
+    "hiddenInformation": {
+      "opponentPrivateZones": "belief_only",
+      "allowTrueOpponentHand": false,
+      "notes": "The policy receives public observations, own private information, and optional beliefs generated only from information available at decision time. Ground-truth hidden zones may supervise a belief model during engine self-play but are never policy inputs."
+    },
+    "features": {
+      "includePerGameInstanceIds": false,
+      "semanticActions": true,
+      "notes": "Instance IDs remain provenance fields only. Action inputs use canonical cast/activate/target/mode/payment semantics."
+    }
+  },
+  "evaluation": {
+    "primaryMetrics": [
+      "heldout_canonical_group_top1",
+      "heldout_mrr",
+      "paired_match_score",
+      "tactical_suite_regret"
+    ],
+    "secondaryMetrics": [
+      "belief_log_loss",
+      "belief_brier_score",
+      "world_model_public_delta_error",
+      "world_model_latent_variance",
+      "latency_ms",
+      "invalid_or_fail_closed_rate"
+    ],
+    "baselines": [
+      "random_legal",
+      "heuristic_v0",
+      "hashed_option_ranker",
+      "human_action_frequency"
+    ],
+    "pairedEvaluation": true,
+    "confidenceIntervals": true,
+    "multipleComparisonCorrection": "holm",
+    "suites": [
+      "target-and-mode-fungibility-v1",
+      "removal-and-combat-tactics-v1",
+      "hidden-information-calibration-v1",
+      "fixed-deck-matchups-v1",
+      "out-of-time-card-set-v1"
+    ]
+  },
+  "experiments": [
+    {
+      "name": "hashed-option-ranker",
+      "modelFamily": "option_ranker",
+      "seeds": [1101, 1102, 1103, 1104, 1105],
+      "usesOpponentHiddenCards": false,
+      "input": "canonical hashed state and legal-option text",
+      "role": "minimum viable learned baseline and feature-pipeline check"
+    },
+    {
+      "name": "structured-set-behavior-cloning",
+      "modelFamily": "behavior_cloning",
+      "seeds": [1201, 1202, 1203, 1204, 1205],
+      "usesOpponentHiddenCards": false,
+      "input": "per-object structured rows plus composite card semantics",
+      "role": "tests whether structured permutation-symmetric state encoding beats hashing before world-model pretraining"
+    },
+    {
+      "name": "recurrent-belief-behavior-cloning",
+      "modelFamily": "recurrent_behavior_cloning",
+      "seeds": [1301, 1302, 1303, 1304, 1305],
+      "usesOpponentHiddenCards": false,
+      "input": "public event history, own private zones, and calibrated opponent-card beliefs",
+      "role": "separates imperfect-information memory from latent-dynamics claims"
+    },
+    {
+      "name": "structured-action-conditioned-jepa",
+      "modelFamily": "jepa",
+      "seeds": [1401, 1402, 1403, 1404, 1405],
+      "usesOpponentHiddenCards": false,
+      "objectives": [
+        "future_public_state_latent_at_1_4_16_decision_horizons",
+        "exact_public_zone_and_life_deltas",
+        "terminal_value_when_available",
+        "canonical_legal_option_imitation"
+      ],
+      "collapseDiagnostics": true,
+      "expertCost": {
+        "role": "auxiliary_head",
+        "heldOutExpertEvaluation": true,
+        "notes": "The expert score is a diagnostic/auxiliary target. Terminal win/loss remains the game objective."
+      },
+      "ablations": [
+        "no_future_latent_loss",
+        "no_exact_delta_heads",
+        "no_imitation_loss",
+        "no_expert_cost_head",
+        "deterministic_predictor_only",
+        "hash_card_text_instead_of_semantic_embeddings"
+      ],
+      "role": "representation and transition-model experiment; not assumed superior until it transfers to held-out decisions or search"
+    },
+    {
+      "name": "xmage-search-distillation",
+      "modelFamily": "search_distillation",
+      "seeds": [1501, 1502, 1503, 1504, 1505],
+      "usesOpponentHiddenCards": false,
+      "input": "cloned-game public-information search targets over canonical legal actions",
+      "expertCost": {
+        "role": "offline_reranker",
+        "heldOutExpertEvaluation": true,
+        "notes": "Used only to inspect or rerank tied shallow lines; search value and terminal outcome are reported separately."
+      },
+      "role": "tests whether engine-grounded counterfactual targets improve policy quality more directly than self-supervised pretraining"
+    },
+    {
+      "name": "deck-local-puct-selfplay",
+      "modelFamily": "deck_local_puct",
+      "seeds": [1601, 1602, 1603, 1604, 1605],
+      "usesOpponentHiddenCards": false,
+      "input": "deck-local policy/value network with XMage PUCT search",
+      "role": "MageZero-style local-optimization comparison under the same fixed deck, seed, seat, and evaluation protocol"
+    }
+  ]
+}
