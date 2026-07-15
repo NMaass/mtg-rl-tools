@@ -2,35 +2,35 @@
 
 ## Purpose
 
-This protocol turns expert MTG judgment into a versioned, testable model without pretending that an expert can directly specify one universally correct dense reward.
+This protocol turns expert MTG judgment into a versioned, testable signal without pretending that an expert can directly specify one universally correct dense reward.
 
-The unit of supervision is a **comparison between two legal candidate lines in one information state**. Each line is summarized by declared consequence factors. Experts choose left, right, or tie; provide confidence, rationale, and assumptions; and may disagree. A monotone Bradley-Terry model learns non-negative weights over factors that have already been oriented so larger means better.
+The supervision unit is a **comparison between two legal candidate lines in one information state**. Each line is summarized by declared consequence factors. Experts choose left, right, or tie; provide confidence, rationale, and assumptions; and may disagree. The supplied fitter learns a small monotone Bradley–Terry utility model over those factors.
 
-The output is an expert-preference utility model. Calling it a **causal cost** is justified only when the candidate factor values have causal provenance, such as:
+The output is an **expert-preference utility**. Calling it a **causal cost** is justified only when candidate factor values have causal provenance, for example:
 
-- an XMage intervention/branch from the same state;
+- an XMage intervention from the same cloned state;
 - an exact deterministic consequence produced by the rules engine;
-- a rollout under an explicitly declared opponent/chance policy;
-- an identified causal design with justified assumptions.
+- paired rollouts under a declared opponent, chance, and belief policy;
+- an identified observational design with explicit assumptions.
 
-A factor estimated from an observational Arena trajectory, a language model, or an expert guess is a tactical/strategic prediction, not automatically a causal effect.
+A factor estimated from Arena trajectories, a language model, a value model, or an expert guess is still useful, but it is a prediction or judgment—not automatically a causal effect.
 
 ## Non-goals
 
-This system does not:
+This framework does not:
 
 - replace terminal win/loss reward;
-- prove that the factor graph is causally identified;
+- prove that a factor graph is causally identified;
 - turn printed card text into a context-free card score;
 - declare one expert's annotations optimal;
-- resolve hidden information by reading the true opponent hand;
-- certify a learned world model merely because its latent loss decreases.
+- expose the true opponent hand to a deployable policy;
+- certify a world model merely because its latent loss decreases.
 
 ## Core objects
 
-### Factor ontology
+### 1. Factor ontology
 
-A factor ontology defines stable names, orientation, scaling, bounds, defaults, units, and meaning. It is versioned independently of annotations and models.
+The ontology defines stable factor names, orientation, transform, scale, bounds, defaults, units, and meaning. It is versioned independently of annotations and fitted models.
 
 ```json
 {
@@ -54,11 +54,11 @@ A factor ontology defines stable names, orientation, scaling, bounds, defaults, 
 }
 ```
 
-`scale` is for numerical conditioning. It is not the strategic coefficient; strategic weights are learned. Bounds should catch annotation or prediction errors rather than compress every context to the same range.
+`scale` is numerical conditioning, not strategic importance. Strategic weights are learned. Bounds should catch annotation or prediction errors rather than force every context into the same strategic range.
 
-### Candidate consequence vector
+### 2. Candidate consequence vector
 
-Each candidate represents one canonical legal action group or a declared multi-action line. The factor vector describes consequences over a stated horizon.
+A candidate represents one canonical legal action group or a declared multi-action line. Its factors describe consequences over a stated horizon.
 
 ```json
 {
@@ -79,16 +79,27 @@ Each candidate represents one canonical legal action group or a declared multi-a
 
 Omitted factors use ontology defaults. Unknown factors fail closed.
 
-### Preference annotation
+### 3. Preference annotation
 
-One JSONL row records an exact pair. `contextId` should identify the information state **and this candidate pair**. Use the same `contextId` for redundant ratings of the same oriented pair; use a different ID for another pair in the same game state.
+One JSONL row records an exact pair. `contextId` identifies the information state **and the oriented candidate pair**. Repeated ratings of the same pair share the same ID; another pair from the same state receives another ID.
 
 ```json
 {
   "contextId": "bolt-3-3-main-phase-v1",
   "expertId": "expert-01",
-  "left": {"candidateId": "bolt-creature", "factors": {}},
-  "right": {"candidateId": "bolt-face", "factors": {}},
+  "left": {
+    "candidateId": "bolt-creature",
+    "factors": {
+      "opponent_threat_value_removed": 3.0,
+      "tempo_delta": 1.0
+    }
+  },
+  "right": {
+    "candidateId": "bolt-face",
+    "factors": {
+      "opponent_life_loss": 3.0
+    }
+  },
   "preferred": "left",
   "confidence": 0.9,
   "weight": 1.0,
@@ -99,188 +110,108 @@ One JSONL row records an exact pair. `contextId` should identify the information
 }
 ```
 
-A tie is a valid label. Low confidence is preferable to inventing certainty. Confidence zero retains a row for audit but excludes it from fitting.
+A tie is valid. Low confidence is preferable to invented certainty. Confidence zero preserves a row for audit while excluding it from fitting.
 
 ## Factor design
 
 ### Separate measurement from preference
 
-A good factor has two parts:
+Every factor needs two definitions:
 
-1. **measurement rule**: how the value is produced;
+1. **measurement rule**: how its raw value is produced;
 2. **preference orientation**: whether larger or smaller is generally better.
 
-For example:
+Examples:
 
 - `opponent_life_loss` can be exact over an immediate deterministic branch;
-- `opponent_threat_value_removed` contains expert or learned contextual valuation;
-- `expected_win_probability_delta` is a model estimate and must name the checkpoint;
-- `lethal_risk` is a belief- and opponent-policy-dependent prediction;
-- `rules_or_model_uncertainty` records that the preceding estimates are unreliable.
+- `opponent_threat_value_removed` contains contextual expert or learned valuation;
+- `expected_win_probability_delta` is a model estimate and must name its checkpoint;
+- `lethal_risk` depends on beliefs and an opponent policy;
+- `rules_or_model_uncertainty` records unreliability in the preceding estimates.
 
-Do not merge uncertainty into the value itself. Preserve both value and provenance.
+Keep uncertainty and provenance separate from the estimate itself.
 
 ### Recommended factor families
 
-#### Outcome
+| Family | Examples |
+| --- | --- |
+| Outcome | win-probability change, terminal result, loss-before-horizon probability |
+| Board/material | threat value removed, material delta, card advantage, engine value |
+| Tempo | mana efficiency, initiative, attack quality, development delay |
+| Survival/pressure | life buffer, opponent life loss, clock length, lethal prevention |
+| Optionality | future legal-option value, answer coverage retained, face reach retained |
+| Information | information gained, belief entropy reduced, information leaked |
+| Risk/provenance | variance, hidden-card sensitivity, rules/model uncertainty |
 
-- expected game or match win-probability change;
-- terminal win/loss indicator when reached;
-- probability of losing before the next decision horizon.
-
-#### Board and material
-
-- threat value removed or added;
-- own material delta;
-- card advantage delta;
-- board pressure/control change;
-- permanent quality, resilience, or engine value.
-
-#### Tempo
-
-- mana efficiency;
-- initiative/attack quality;
-- time-to-stabilize;
-- opponent mana denied;
-- development delayed.
-
-#### Survival and pressure
-
-- own life buffer change;
-- opponent life loss;
-- clock length;
-- lethal setup or prevention.
-
-#### Optionality
-
-- future legal-option value;
-- flexible/specialized answer coverage retained;
-- face reach retained;
-- modal spell flexibility;
-- irreversible commitment.
-
-#### Information
-
-- information gained by probing, revealing, or forcing a response;
-- belief entropy reduced;
-- information leaked to the opponent, if operationally modeled.
-
-#### Risk and provenance
-
-- outcome variance;
-- lethal risk;
-- sensitivity to one hidden card class;
-- rules-engine/capture/model uncertainty;
-- rollout-policy sensitivity.
-
-### Avoid redundant aliases
-
-`board_advantage`, `material_advantage`, `creature_advantage`, and `board_power` can encode the same observation four times and make learned weights uninterpretable. Start with the smallest ontology that experts can apply consistently. Add a factor only when:
-
-- experts can define it independently;
-- it changes preferences in contexts where existing factors do not;
-- its measurement/provenance can be audited;
-- held-out evidence supports the addition.
+Avoid redundant aliases such as four slightly different versions of “board advantage.” Add a factor only when experts can define it independently, it changes preferences not represented by existing factors, its measurement can be audited, and held-out evidence supports it.
 
 ## Annotation workflow
 
-### Step 1: select states without outcome leakage
+### Step 1: sample complete contexts
 
-Sample whole decision contexts from:
+Sample whole decision contexts from held-out Arena games, fixed tactical scenarios, XMage self-play, learned-policy trajectories, model/expert/search disagreement, and poor-calibration slices.
 
-- held-out Arena games;
-- fixed tactical scenarios;
-- XMage self-play;
-- states visited by a learned policy;
-- disagreement between policy, expert, and search;
-- uncertainty or poor calibration slices.
+Do not reveal the actual later outcome unless the task is explicitly retrospective and records that fact. Otherwise hindsight leaks chance and opponent events into the target.
 
-Do not show the annotator the actual later outcome unless the annotation task explicitly asks for retrospective review and records that fact. Otherwise hindsight leaks chance/opponent events into the target.
-
-### Step 2: freeze perspective and legal choices
+### Step 2: freeze perspective and legality
 
 Record:
 
 - perspective seat;
 - public state;
 - acting player's legal private information;
-- event history made available to the model;
+- event history available to the model;
 - canonical legal action groups;
-- exact source version and state hash.
+- source versions and state hash.
 
-Never display the true opponent hand as ordinary context. An oracle review may use it only as a separately labeled analysis mode.
+Never show the true opponent hand as ordinary context. Oracle review is a separately labeled analysis mode.
 
 ### Step 3: generate candidate consequences
 
-Use a hierarchy of consequence sources:
+Use this provenance hierarchy:
 
 1. exact deterministic XMage branch;
-2. short exact branch plus declared opponent/chance responses;
-3. multiple engine rollouts under a fixed policy/belief sampler;
-4. learned world-model prediction with checkpoint and calibration metadata;
+2. short exact branch plus declared response script;
+3. paired engine rollouts under fixed policy and belief samplers;
+4. calibrated learned world-model prediction with checkpoint metadata;
 5. expert estimate.
 
-Store the source for each factor. A single candidate may combine exact life loss, search-estimated win probability, and expert-valued threat removal.
+One vector may combine exact life loss, search-estimated win probability, and expert-valued threat removal. Store provenance per factor when the sources differ.
 
-### Step 4: choose pairs deliberately
+### Step 4: choose informative pairs
 
-All-pairs annotation is wasteful. Prefer:
+Prefer:
 
-- model top choice versus human action;
+- model top choice versus the human action;
 - model top two near a decision boundary;
 - search top choice versus human action;
-- two cards/lines with identical immediate effect but different optionality;
-- a high-value factor conflict, such as tempo versus card advantage;
-- active-learning pairs with maximum predictive entropy;
+- lines with identical immediate effect but different optionality;
+- high-value conflicts such as tempo versus card advantage;
+- active-learning pairs near 0.5 predicted preference;
 - pairs on which experts disagree.
 
-Include easy controls—lethal, illegal-lookalike exclusions, and obvious equivalences—to detect annotation UI or schema errors.
+Include easy controls—lethal, obvious equivalence, and illegal-lookalike exclusions—to detect UI and schema errors.
 
 ### Step 5: collect independent judgments
 
-Recommended proof-of-method design:
+Initial proof-of-method target—not a sample-complexity guarantee:
 
 - 100–300 unique pairs across at least 50 states;
-- at least 20% rated independently by two or more experts;
+- at least 20% rated by two or more experts;
 - randomized left/right presentation;
-- confidence and rationale required for low-agreement/high-impact pairs;
-- pair IDs stable across annotation rounds;
-- expert identity pseudonymous but persistent;
-- annotation time and ontology version recorded.
+- stable pair IDs and pseudonymous persistent expert IDs;
+- rationale and confidence for disputed or high-impact pairs;
+- annotation time, ontology version, and UI version.
 
-These are initial operational targets, not sample-complexity guarantees.
+### Step 6: audit disagreement before fitting
 
-### Step 6: audit agreement before fitting
+Disagreement often indicates ambiguous horizons, missing hidden-information assumptions, overlapping factors, different deck/metagame beliefs, role-assignment disagreement, or genuinely mixed strategic choices.
 
-Agreement failures usually indicate one of:
+Do not erase disagreement by majority vote. Retain individual labels and report agreement by pair, expert, matchup, tag, and factor source.
 
-- ambiguous horizon;
-- missing hidden-information assumptions;
-- factors with overlapping definitions;
-- different beliefs about decklists/metagame;
-- role-assignment disagreement;
-- genuine strategically mixed choices.
+### Step 7: split without leakage
 
-Do not erase disagreement by majority vote. Keep individual labels and report:
-
-- majority agreement by pair;
-- pairwise expert agreement;
-- performance by expert;
-- disagreement by tag/factor family;
-- rationales and assumptions;
-- model uncertainty on disputed versus undisputed pairs.
-
-### Step 7: split by context and expert
-
-Never split annotations of one pair between train and holdout. Use at least:
-
-- context holdout;
-- expert holdout where multiple experts exist;
-- matchup/archetype holdout;
-- time-block holdout;
-- card/set holdout for semantic-transfer claims.
-
-A random row split can place near-identical annotations from the same state on both sides and overstate generalization.
+Never split annotations of one pair between train and holdout. Use context holdout first, then add expert, matchup, time-block, card, or set holdouts for the corresponding generalization claim.
 
 ### Step 8: fit simple models first
 
@@ -293,15 +224,7 @@ P(left preferred) = sigmoid((utility(left)-utility(right))/temperature)
 cost(candidate) = -utility(candidate)
 ```
 
-Non-negative weights enforce the ontology's monotonic directions. This improves auditability but does not capture every interaction. Compare against:
-
-- equal weights;
-- hand-set weights frozen before holdout evaluation;
-- unconstrained logistic/Bradley-Terry model;
-- monotone model with pairwise factor interactions;
-- small context-conditioned network.
-
-Only add capacity when held-out residuals show a specific missing interaction.
+Non-negative weights enforce ontology directions. Compare against equal weights, frozen hand-set weights, an unconstrained Bradley–Terry model, and only then interaction or context-conditioned models.
 
 ### Step 9: evaluate before deployment
 
@@ -312,113 +235,70 @@ Required preference metrics:
 - Brier score;
 - preferred utility margin;
 - calibration by probability bucket;
-- metrics by expert, tag, matchup, horizon, and factor source;
+- metrics by expert, tag, matchup, horizon, and factor provenance;
 - disagreement-conditioned metrics;
 - coverage and parse failures.
 
-For a cost model used in policy learning, also run:
+For policy-learning use, also compare terminal-only reward, equal-weight potential, learned potential, auxiliary-only use, shuffled factor labels, a matched-capacity scalar auxiliary control, reward-hacking scenarios, and paired gameplay.
 
-- terminal-only versus shaped reward;
-- equal-weight potential versus learned potential;
-- auxiliary-only versus shaping;
-- shuffled factor labels;
-- matched-capacity scalar auxiliary control;
-- reward-hacking/adversarial scenario tests;
-- paired gameplay evaluation.
-
-## Lightning Bolt, Abrade, and functional equivalence
+## Functional equivalence examples
 
 ### Lightning Bolt on a 3/3
 
-The expert judgment should not be encoded as:
-
-```text
-Lightning Bolt prefers creature named X.
-```
-
-It should be encoded as a conflict between consequences:
+Do not encode “Lightning Bolt prefers creature named X.” Encode the consequence conflict:
 
 | Factor | Bolt 3/3 | Bolt face |
 | --- | ---: | ---: |
-| threat value removed | high | zero |
-| opponent life loss | zero | 3 |
-| expected own life preserved | context-dependent | zero |
-| tempo | context-dependent | usually lower without lethal pressure |
-| face reach retained | zero after either cast | zero |
-| lethal probability | state-dependent | state-dependent |
+| Threat value removed | high | zero |
+| Opponent life loss | zero | 3 |
+| Expected own life preserved | context-dependent | zero |
+| Tempo | context-dependent | usually low without lethal pressure |
+| Lethal probability | state-dependent | state-dependent |
 
-At opponent life three, face is terminal. At opponent life fourteen with the 3/3 as the only clock, removing it may dominate. The same card/action template yields different preference labels because the state and consequence factors differ.
+At three opponent life, face is terminal. At fourteen life with the 3/3 as the only clock, removal may dominate. The action template is the same; the state and consequence vector change the label.
 
 ### Abrade versus Lightning Strike
 
 The immediate branch can be identical when both deal three to a creature. The strategic branch differs:
 
-- using Abrade can preserve Lightning Strike's face/planeswalker reach;
-- using Lightning Strike can preserve Abrade's artifact coverage;
-- the correct choice depends on revealed cards, matchup priors, hand texture, life totals, and future mana;
-- uncertainty about those beliefs should be recorded, not hidden in a card-name rule.
+- spending Abrade may preserve face or planeswalker reach;
+- spending Lightning Strike may preserve artifact coverage;
+- the choice depends on revealed cards, matchup priors, hand texture, life, and future mana;
+- uncertainty about those beliefs is recorded rather than hidden in a card-name rule.
 
-This is a direct test for whether the factor model represents functional equivalence and contextual exceptions.
+This is a direct test of functional equivalence plus contextual exceptions.
 
 ## Causal interpretation
 
 ### Exact intervention
 
-If XMage clones the same state and applies action A versus B while holding a deterministic response script/seed fixed, the immediate difference is an intervention under that simulator policy. Record:
-
-- cloned state hash;
-- action semantics;
-- random seed/chance stream;
-- response policy;
-- horizon;
-- variables measured;
-- branch failures.
+Clone the same XMage state, apply A versus B, and hold the chance stream and response script fixed. Record state hash, semantic action, seed, response policy, horizon, measured variables, and branch failures.
 
 ### Rollout-estimated effect
 
-With stochastic draws/opponent policies, estimate a distribution rather than one scalar. Prefer common random numbers/paired seeds between A and B. Store:
-
-- number of rollouts;
-- mean, variance, and quantiles;
-- belief model/checkpoint;
-- opponent policy/checkpoint;
-- sensitivity across policies and beliefs.
-
-The effect is conditional on those choices.
+Under stochastic draws or policies, estimate a distribution. Use common random numbers or paired seeds. Record rollout count, mean, variance, quantiles, belief checkpoint, opponent checkpoint, and sensitivity across policies.
 
 ### Observational association
 
-A factor derived from “players who made this action won more often” is confounded by state quality and player skill. It may be a useful predictive feature, but it should be labeled observational. Do not call it a do-effect without an identification argument.
+“Players making action A won more often” is confounded by state quality and player skill. It may be predictive, but it is not a do-effect without an identification argument.
 
-### Learned world-model counterfactual
+### Learned counterfactual
 
-A JEPA/RSSM/MuZero prediction is a model-based counterfactual. Validate it against held-out exact XMage branches before using it to generate preference factors. Report calibration by horizon and state slice; model uncertainty should increase when engine/card coverage is poor.
+A JEPA, RSSM, or MuZero prediction is a model-based counterfactual. Validate it against held-out exact XMage branches before using it as factor provenance. Report calibration by horizon and state slice.
 
 ## Deployment roles
 
 ### Auxiliary head
 
-Predict factor changes or expert utility from the shared state-action representation. This can shape representation learning while terminal value remains primary.
+Predict factor deltas or expert utility from a shared state-action representation while terminal value remains primary. This is the safest first training use because it limits direct reward-hacking paths and is easy to ablate.
 
-Advantages:
+### Offline reranker or diagnostic
 
-- no direct reward hacking path;
-- easy calibration and ablation;
-- explanations available at inference.
+Annotate saved candidate lines, retain raw policy/search scores, and use factor contributions for expert review and active learning. This does not alter the data-collection policy.
 
-### Offline reranker
+### Search prior or tie-breaker
 
-Use the cost model to annotate or rerank saved candidate lines. Keep raw policy/search scores alongside cost scores.
-
-Advantages:
-
-- safest first deployment;
-- supports expert review and active learning;
-- does not alter data collection policy.
-
-### Search tie-breaker or prior
-
-Use only after exact search values and factor provenance are available. Cap the contribution and test adversarial scenarios where the expert model conflicts with terminal search value.
+Use only after exact search values and factor provenance exist. Cap its contribution and include scenarios where expert utility conflicts with terminal search value.
 
 ### Potential-based shaping
 
@@ -428,42 +308,34 @@ Use:
 R_total = R_terminal + alpha * (gamma * Phi(next) - Phi(current))
 ```
 
-where `Phi` is the expert utility over a perspective-consistent information state. Sweep `alpha`; include terminal-only and equal-weight controls. The validator requires the exact `gamma_phi_next_minus_phi` form for experiments labeled `potential_shaping`.
+`Phi` must consume the same perspective-consistent information state as the policy, not privileged hidden state. Sweep `alpha` and retain terminal-only and equal-weight controls. The experiment validator requires the exact `gamma_phi_next_minus_phi` form for plans labeled `potential_shaping`.
 
-Partial observability and approximation matter: two histories with the same public snapshot can have different beliefs and value. `Phi` should therefore consume the same information state as the policy, not privileged state.
-
-### Evaluation-only diagnostic
-
-Use factor contributions to explain why two policies differ, even when no cost enters training. This is valuable when scalar win-rate intervals overlap.
-
-## Active learning loop
+## Active learning
 
 After an initial model:
 
-1. score held-out or newly collected legal pairs;
-2. select high-entropy comparisons near 0.5 preference probability;
-3. prioritize model-versus-human and model-versus-search disagreement;
-4. stratify by underrepresented prompt types, matchups, and factor conflicts;
-5. avoid repeatedly sampling near-duplicate states;
-6. collect independent expert labels;
-7. refit only after preserving a frozen benchmark set;
-8. publish before/after agreement and calibration.
-
-Keep a permanent audit set that is never selected adaptively.
+1. score held-out and newly collected pairs;
+2. select high-entropy comparisons near 0.5;
+3. prioritize model/human/search disagreement;
+4. stratify underrepresented prompt types and factor conflicts;
+5. avoid near-duplicate states;
+6. collect independent labels;
+7. preserve a permanent non-adaptive audit set;
+8. refit and publish agreement/calibration changes.
 
 ## Versioning and provenance
 
 Version separately:
 
-- ontology schema and semantic version;
-- annotation UI version;
-- candidate generator/search checkpoint;
+- ontology and semantic version;
+- annotation UI;
+- candidate generator and search checkpoint;
 - state/decision schema;
-- card database/rules engine commit;
+- card database and XMage commit;
 - expert cohort;
 - factor estimator checkpoints;
-- fitted cost model hash;
-- train/holdout split manifest.
+- fitted model hash;
+- train/holdout manifest.
 
 Changing a factor definition without changing ontology version invalidates comparisons.
 
@@ -476,34 +348,40 @@ From `python/` after editable installation:
 magic-cabt-research validate-plan \
   ../examples/research/experiment_matrix_v1.json --strict
 
-# Fit a monotone preference model with a whole-context holdout.
+# Fit with a whole-context holdout.
 magic-cabt-research fit-cost \
   --factors ../examples/research/causal_factors_v1.json \
   --preferences ../examples/research/expert_preferences.example.jsonl \
-  --out runs/expert-cost-v1 \
+  --out runs/expert-cost-v1.json \
   --holdout-fraction 0.25 \
   --seed 7
 
 # Inspect one factor vector.
 magic-cabt-research score-cost \
-  --model runs/expert-cost-v1/model.json \
-  --factors '{"opponent_threat_value_removed":3,"tempo_delta":1}'
+  --model runs/expert-cost-v1.json \
+  --factors-json '{"opponent_threat_value_removed":3,"tempo_delta":1}'
 ```
 
-`fit-cost` writes a model, train/holdout diagnostics, source hashes, and fit metadata. The example annotations are illustrative schema fixtures, not a validated strategic dataset.
+`fit-cost` writes model weights, train/holdout diagnostics, expert agreement, source hashes, and fit metadata. The example annotations are schema fixtures, not a validated strategic dataset.
 
 ## Acceptance criteria for proof of method
 
-A first expert-cost result is credible only when:
+A first result is credible only when:
 
 - the ontology is frozen before final holdout scoring;
-- all candidate actions are legal and perspective-correct;
+- all candidates are legal and perspective-correct;
 - at least two simple weight baselines are reported;
-- pair annotations stay grouped by context;
-- duplicated experts/pairs do not cross partitions;
+- pair annotations remain grouped by context;
+- duplicated experts or pairs do not cross partitions;
 - disagreement and uncertainty are retained;
-- held-out log loss/calibration improves, not only train accuracy;
+- held-out log loss or calibration improves, not only train accuracy;
 - factor contributions survive expert review;
 - terminal-only RL remains the primary control;
-- any causal wording identifies the intervention source and assumptions;
-- the model, data, ontology, and split hashes are published.
+- causal wording names the intervention source and assumptions;
+- model, data, ontology, and split hashes are published.
+
+## References
+
+- Ng, Harada, and Russell. *Policy invariance under reward transformations: theory and application to reward shaping*. ICML, 1999.
+- LeCun. *A Path Towards Autonomous Machine Intelligence*. 2022.
+- Bebbington et al. *Game-Generated Data: An Untapped Resource for Advanced AI Training*. arXiv:2504.16591.
