@@ -6,6 +6,7 @@ from magic_cabt.analysis.baselines import (
     GenericActionHeuristicScorer,
     make_baseline,
 )
+from magic_cabt.analysis.suite import validate_entries
 
 
 def record():
@@ -42,6 +43,13 @@ class BaselineScorerTest(unittest.TestCase):
                               GenericActionHeuristicScorer)
         with self.assertRaises(ValueError):
             make_baseline("oracle")
+
+    def test_suite_rejects_duplicate_display_names(self):
+        with self.assertRaisesRegex(ValueError, "duplicate model name"):
+            validate_entries([
+                ("control", "baseline:first-legal"),
+                ("control", "baseline:random"),
+            ])
 
 
 if __name__ == "__main__":
