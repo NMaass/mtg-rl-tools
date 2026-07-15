@@ -1,7 +1,9 @@
 import unittest
+from unittest.mock import patch
 
 from magic_cabt.training.train_reliable import merge_best
-from magic_cabt.training.train_structured_bc import build_parser
+from magic_cabt.training.train_structured_bc import (
+    build_parser, collect_decision_data)
 
 
 class FakeModel:
@@ -17,9 +19,7 @@ class ResumeSelectionTest(unittest.TestCase):
         metrics = {"bestEpoch": 4, "bestSelectionMetric": 0.4}
         previous = {"trainingState": {
             "bestStateDict": {"weight": "previous"},
-            "bestEpoch": 2,
-            "bestSelectionMetric": 0.2,
-        }}
+            "bestEpoch": 2, "bestSelectionMetric": 0.2}}
         merge_best(model, metrics, previous)
         self.assertEqual({"weight": "previous"}, model._best_state_dict)
         self.assertEqual(2, metrics["bestEpoch"])
@@ -32,9 +32,7 @@ class ResumeSelectionTest(unittest.TestCase):
         metrics = {"bestEpoch": 4, "bestSelectionMetric": 0.1}
         previous = {"trainingState": {
             "bestStateDict": {"weight": "previous"},
-            "bestEpoch": 2,
-            "bestSelectionMetric": 0.2,
-        }}
+            "bestEpoch": 2, "bestSelectionMetric": 0.2}}
         merge_best(model, metrics, previous)
         self.assertEqual({"weight": "current"}, model._best_state_dict)
         self.assertEqual(0.1, model._training_state["bestSelectionMetric"])
@@ -48,6 +46,20 @@ class StructuredBCCommandTest(unittest.TestCase):
         self.assertEqual("tiny", args.preset)
         self.assertEqual(2, args.epochs)
         self.assertEqual(["decisions.jsonl"], args.input)
+
+    def test_collection_uses_decision_stream_only(self):
+        decision = {"select": {"option": [{"index": 0}]},
+                    "selectedIndices": [0]}
+        with patch(
+                "magic_cabt.training.train_structured_bc.core._iter_all_decisions",
+                return_value=iter([decision])) as decisions, patch(
+                "magic_cabt.training.train_structured_bc.core._iter_all_transitions",
+                side_effect=AssertionError("transition stream was traversed")):
+            rows, cards = collect_decision_data(
+                ["not-a-directory.jsonl"], max_decisions=10, seed=1)
+        self.assertEqual([decision], rows)
+        self.assertEqual({}, cards)
+        decisions.assert_called_once()
 
 
 if __name__ == "__main__":
