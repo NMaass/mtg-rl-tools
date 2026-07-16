@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "description": "Strategically defined binary opponent-holding labels. Labels are oracle-only training targets and are never model inputs.",
+  "labels": [
+    "spot_removal",
+    "counterspell",
+    "combat_trick",
+    "sweeper",
+    "artifact_enchantment_answer",
+    "instant_speed_interaction",
+    "lethal_burn"
+  ]
+}
