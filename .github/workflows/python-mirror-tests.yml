@@ -29,7 +29,21 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install package in editable mode
         working-directory: python
-        run: python -m pip install -e .
+        run: python -m pip install --quiet -e .
       - name: Run mirror + package unit tests
+        id: package-tests
+        continue-on-error: true
         working-directory: python
-        run: python -m unittest discover -s tests -v
+        run: python -m unittest discover -s tests -v > test-output-${{ matrix.python-version }}.txt 2>&1
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-output-${{ matrix.python-version }}
+          path: python/test-output-${{ matrix.python-version }}.txt
+      - name: Fail when tests failed
+        if: steps.package-tests.outcome == 'failure'
+        working-directory: python
+        run: |
+          tail -n 200 test-output-${{ matrix.python-version }}.txt
+          exit 1
