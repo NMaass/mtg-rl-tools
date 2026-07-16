@@ -1,8 +1,9 @@
 """Offline analysis backfill for recorded bundles.
 
 Stateful scorers are advanced through every decision, including rows whose
-analysis is already cached. This preserves recurrent information state while
-retaining idempotent checkpoint-specific cache writes.
+analysis is already cached. Recurrent scorers can also provide a per-decision
+analysis context so identical public states at different history positions do
+not collide in the cache.
 """
 from __future__ import annotations
 
@@ -35,7 +36,13 @@ def backfill_bundle(bundle_dir, checkpoint, device=None, top_k=5,
     records = list(_iter_raw_jsonl(decisions_path))
     scored, cached = 0, 0
     for index, record in enumerate(records):
-        key = analysis_cache_key(record, scorer.model_info)
+        model_info = dict(scorer.model_info)
+        context_method = getattr(scorer, "cache_context", None)
+        if context_method is not None:
+            context = context_method(record)
+            if context:
+                model_info["analysisContext"] = context
+        key = analysis_cache_key(record, model_info)
         existing = cache.get(key)
         if existing is not None:
             cached += 1
@@ -48,7 +55,7 @@ def backfill_bundle(bundle_dir, checkpoint, device=None, top_k=5,
             latency = int((time.perf_counter() - started) * 1000)
             value_method = getattr(scorer, "state_value", None)
             cache.add(make_analysis_record(
-                record, scores, scorer.model_info, top_k=top_k,
+                record, scores, model_info, top_k=top_k,
                 latency_ms=latency,
                 value=value_method(record) if value_method else None,
                 source=source), persist=True)
