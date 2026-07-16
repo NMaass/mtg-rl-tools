@@ -44,6 +44,14 @@ class CompleteGameCollectorTest(unittest.TestCase):
         self.assertEqual(4, len(accepted))
         self.assertFalse(metadata["truncatedAtGameBoundary"])
 
+    def test_reopened_game_is_rejected(self):
+        rows = [decision(1, 1), decision(2, 1), decision(1, 2)]
+        with patch.object(sequence_data.core, "_iter_all_decisions",
+                          return_value=iter(rows)):
+            with self.assertRaisesRegex(ValueError, "reopens completed game"):
+                sequence_data.collect_complete_decision_games(
+                    ["unused"], game_key, max_decisions=100)
+
 
 if __name__ == "__main__":
     unittest.main()

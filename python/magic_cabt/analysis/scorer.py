@@ -121,7 +121,8 @@ class RecurrentInformationStateScorer:
             "checkpointId": "sha256:" + self._digest,
             "checkpointPath": self.checkpoint,
             "embeddingBackend": self.model.config.embedding_backend,
-            "trainingState": "trained" if metrics.get("decisionExamples") else "untrained",
+            "trainingState": "trained" if metrics.get("decisionExamples")
+                else "untrained",
             "decisionExamples": metrics.get("decisionExamples"),
             "sequenceLength": metrics.get("sequenceLength"),
             "visibilityPolicy": metrics.get(
@@ -259,6 +260,11 @@ def load_checkpoint_scorer(checkpoint, device=None, card_cache=None,
             arena_card_db=arena_card_db)
     if kind == "magic-recurrent-information-state-v1":
         return RecurrentInformationStateScorer(
+            checkpoint, device=device, card_cache=card_cache,
+            arena_card_db=arena_card_db)
+    if kind == "magic-belief-information-state-v1":
+        from .belief_scorer import BeliefInformationStateScorer
+        return BeliefInformationStateScorer(
             checkpoint, device=device, card_cache=card_cache,
             arena_card_db=arena_card_db)
     return RankerScorer(checkpoint, device=device)
