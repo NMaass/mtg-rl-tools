@@ -14,7 +14,8 @@ from contextlib import nullcontext
 from magic_cabt.models.information_state import (
     TORCH_AVAILABLE, RecurrentInformationStateModel)
 from magic_cabt.models.structured_jepa import (
-    CardTextResolver, StructuredJEPAConfig, StructuredTensorizer)
+    CardTextResolver, StructuredJEPAConfig)
+from magic_cabt.models.visibility import VisibilitySafeTensorizer
 from . import train_jepa as core
 from .train_structured_bc import collect_decision_data
 
@@ -69,7 +70,7 @@ def split_sequences(sequences, eval_fraction=0.1, seed=0):
     rng.shuffle(rows)
     eval_count = 0
     if eval_fraction > 0.0 and len(rows) > 1:
-        eval_count = max(1, round(len(rows) * float(eval_fraction)))
+        eval_count = max(1, int(round(len(rows) * float(eval_fraction))))
         eval_count = min(eval_count, len(rows) - 1)
     return rows[eval_count:], rows[:eval_count]
 
@@ -162,7 +163,8 @@ def _loss_and_metrics(model, tensorizer, windows, device, batch_size,
                 for step, record in enumerate(window["records"]):
                     denominator = torch.logsumexp(logits[row, step], dim=0)
                     members = record["_groups"][record["_chosenGroup"]]
-                    numerator = torch.logsumexp(logits[row, step, members], dim=0)
+                    numerator = torch.logsumexp(
+                        logits[row, step, members], dim=0)
                     losses.append(denominator - numerator)
                     probabilities = torch.softmax(logits[row, step], dim=0)
                     masses = [float(probabilities[group].sum().detach())
@@ -219,7 +221,7 @@ def train(decisions, config=None, resolver=None, epochs=5, batch_size=8,
     config = config or StructuredJEPAConfig.preset("local")
     model = RecurrentInformationStateModel(config, memory_layers=memory_layers)
     model.to(device)
-    tensorizer = StructuredTensorizer(config, card_resolver=resolver)
+    tensorizer = VisibilitySafeTensorizer(config, card_resolver=resolver)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr,
                                   weight_decay=weight_decay)
     scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled)
@@ -241,7 +243,8 @@ def train(decisions, config=None, resolver=None, epochs=5, batch_size=8,
                 if eval_windows else {"examples": 0, "loss": None,
                                       "policyTop1": None, "policyTop3": None,
                                       "policyMRR": None}
-        selection = eval_metrics["loss"] if eval_metrics["examples"] else train_metrics["loss"]
+        selection = eval_metrics["loss"] if eval_metrics["examples"] \
+            else train_metrics["loss"]
         history.append({"epoch": epoch, "train": train_metrics,
                         "eval": eval_metrics, "selectionMetric": selection})
         if selection < best_metric:
@@ -271,17 +274,25 @@ def train(decisions, config=None, resolver=None, epochs=5, batch_size=8,
         "bestEpoch": best_epoch,
         "bestSelectionMetric": best_metric,
         "wallSeconds": elapsed,
-        "examplesPerSecond": sum(item["train"]["examples"] for item in history) / elapsed,
-        "split": {"unit": "game", "seed": seed,
-                  "evalFraction": float(eval_fraction),
-                  "evalGameIds": [item["gameKey"] for item in eval_sequences]},
+        "examplesPerSecond": sum(
+            item["train"]["examples"] for item in history) / elapsed,
+        "visibilityPolicy": "public-history-and-perspective-state-v1",
+        "split": {
+            "unit": "game",
+            "seed": seed,
+            "evalFraction": float(eval_fraction),
+            "trainGameIds": [item["gameKey"] for item in train_sequences],
+            "evalGameIds": [item["gameKey"] for item in eval_sequences],
+        },
     }
     model._best_state_dict = best_state
-    model._training_state = {"optimizer": optimizer.state_dict(),
-                             "completedEpochs": len(history),
-                             "bestStateDict": best_state,
-                             "bestEpoch": best_epoch,
-                             "bestSelectionMetric": best_metric}
+    model._training_state = {
+        "optimizer": optimizer.state_dict(),
+        "completedEpochs": len(history),
+        "bestStateDict": best_state,
+        "bestEpoch": best_epoch,
+        "bestSelectionMetric": best_metric,
+    }
     return model, metrics
 
 
@@ -323,7 +334,8 @@ def _write_outputs(model, metrics, out_dir):
                       "metric": metrics["bestSelectionMetric"]}})
     metrics["checkpoint"] = os.path.abspath(checkpoint)
     metrics["bestCheckpoint"] = os.path.abspath(best_path)
-    with open(os.path.join(out_dir, "metrics.json"), "w", encoding="utf-8") as handle:
+    with open(os.path.join(out_dir, "metrics.json"), "w",
+              encoding="utf-8") as handle:
         json.dump(metrics, handle, indent=2, sort_keys=True)
         handle.write("\n")
 
