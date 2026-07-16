@@ -1,0 +1,25 @@
+name: rebuild-rssm-branch
+on:
+  push:
+    branches: [models/rssm-latent-dynamics]
+permissions:
+  contents: write
+jobs:
+  rebuild:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: models/rssm-latent-dynamics
+          fetch-depth: 0
+      - name: Rebuild clean RSSM diff
+        run: |
+          git fetch origin b537e6fb688cee8688a5b91f344898067bc82be8 b24496e638e9f4c318d3f2e0bf8ab0d4c5b82cbb ace8a54a6768d67e4b267b57e57c106361513c71
+          git reset --hard b537e6fb688cee8688a5b91f344898067bc82be8
+          git diff --binary b24496e638e9f4c318d3f2e0bf8ab0d4c5b82cbb ace8a54a6768d67e4b267b57e57c106361513c71 | git apply --index --3way
+          rm -f .github/workflows/rebuild-rssm-branch.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'Rebuild RSSM changes on merged belief-state base'
+          git push --force-with-lease origin HEAD:models/rssm-latent-dynamics
