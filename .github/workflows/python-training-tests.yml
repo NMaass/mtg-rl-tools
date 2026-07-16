@@ -5,8 +5,11 @@ on:
     paths:
       - "python/magic_cabt/models/**"
       - "python/magic_cabt/training/**"
+      - "python/magic_cabt/analysis/**"
       - "python/tests/test_structured_jepa.py"
       - "python/tests/test_train_jepa_reliable.py"
+      - "python/tests/test_information_state.py"
+      - "python/tests/test_recurrent_backfill.py"
       - "python/pyproject.toml"
       - ".github/workflows/python-training-tests.yml"
   push:
@@ -14,8 +17,11 @@ on:
     paths:
       - "python/magic_cabt/models/**"
       - "python/magic_cabt/training/**"
+      - "python/magic_cabt/analysis/**"
       - "python/tests/test_structured_jepa.py"
       - "python/tests/test_train_jepa_reliable.py"
+      - "python/tests/test_information_state.py"
+      - "python/tests/test_recurrent_backfill.py"
       - "python/pyproject.toml"
 
 jobs:
@@ -38,3 +44,5 @@ jobs:
           python -m unittest -v
           tests.test_structured_jepa
           tests.test_train_jepa_reliable
+          tests.test_information_state
+          tests.test_recurrent_backfill
