@@ -13,6 +13,7 @@ on:
       - "python/tests/test_visibility.py"
       - "python/tests/test_sequence_data.py"
       - "python/tests/test_belief_state.py"
+      - "python/tests/test_rssm.py"
       - "python/pyproject.toml"
       - ".github/workflows/python-training-tests.yml"
   push:
@@ -28,6 +29,7 @@ on:
       - "python/tests/test_visibility.py"
       - "python/tests/test_sequence_data.py"
       - "python/tests/test_belief_state.py"
+      - "python/tests/test_rssm.py"
       - "python/pyproject.toml"
 
 jobs:
@@ -57,6 +59,7 @@ jobs:
           tests.test_visibility
           tests.test_sequence_data
           tests.test_belief_state
+          tests.test_rssm
           > training-test-output.txt 2>&1
       - name: Upload training test output
         if: always()
