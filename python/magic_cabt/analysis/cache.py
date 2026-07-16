@@ -31,8 +31,13 @@ class AnalysisCache:
         checkpoint = model.get("checkpointId") or model.get("modelId")
         decision = record.get("decisionFingerprint")
         version = record.get("schemaVersion")
-        return "%s|%s|%s" % (version, decision, checkpoint) \
-            if decision and checkpoint else None
+        if not decision or not checkpoint:
+            return None
+        parts = [str(version), str(decision), str(checkpoint)]
+        context = model.get("analysisContext")
+        if context:
+            parts.append(str(context))
+        return "|".join(parts)
 
     def get(self, key):
         with self._lock:
