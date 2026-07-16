@@ -1,12 +1,13 @@
 """Offline analysis backfill for recorded bundles.
 
 Stateful scorers are advanced through every decision, including rows whose
-analysis is already cached. Recurrent scorers can also provide a per-decision
+analysis is already cached. Recurrent scorers also receive a per-decision
 analysis context so identical public states at different history positions do
 not collide in the cache.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -40,8 +41,12 @@ def backfill_bundle(bundle_dir, checkpoint, device=None, top_k=5,
         context_method = getattr(scorer, "cache_context", None)
         if context_method is not None:
             context = context_method(record)
-            if context:
-                model_info["analysisContext"] = context
+        elif getattr(scorer, "observe", None) is not None:
+            context = _default_recurrent_context(record)
+        else:
+            context = None
+        if context:
+            model_info["analysisContext"] = context
         key = analysis_cache_key(record, model_info)
         existing = cache.get(key)
         if existing is not None:
@@ -67,6 +72,19 @@ def backfill_bundle(bundle_dir, checkpoint, device=None, top_k=5,
     return {"bundle": bundle_dir, "checkpoint": checkpoint,
             "scored": scored, "alreadyCached": cached,
             "model": scorer.model_info}
+
+
+def _default_recurrent_context(record):
+    observation = record.get("observation") or {}
+    current = observation.get("current") or record.get("current") or {}
+    payload = [
+        record.get("matchId") or record.get("gameId") or current.get("matchId"),
+        record.get("gameNumber", current.get("gameNumber")),
+        record.get("gameInstance") or current.get("gameInstance"),
+        record.get("sequenceNumber", record.get("sequence", current.get("seq"))),
+    ]
+    encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _iter_raw_jsonl(path):
