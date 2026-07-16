@@ -11,13 +11,16 @@ def collect_complete_decision_games(inputs, game_key,
                                     max_decisions=100000):
     """Collect compiled decisions without truncating or sampling inside games.
 
-    Input streams are expected in chronological game order, as produced by the
-    repository bundle writers. The limit is a soft upper bound: the first game
-    and the final accepted game are retained whole.
+    Input streams must be chronological and game-contiguous. A game that
+    reappears after another game has started is rejected rather than silently
+    reconstructed after a collection limit may already have cut its prefix.
+    The limit is a soft upper bound: the first and final accepted games are
+    retained whole.
     """
     accepted = []
     current = []
     current_key = None
+    closed = set()
     unknown = 0
     limit = int(max_decisions) if max_decisions is not None else -1
     stopped = False
@@ -40,6 +43,10 @@ def collect_complete_decision_games(inputs, game_key,
             flush()
             if stopped:
                 break
+            closed.add(current_key)
+            if key in closed:
+                raise ValueError(
+                    "decision stream reopens completed game %s" % key)
             current = []
         current_key = key
         current.append(record)
@@ -51,6 +58,7 @@ def collect_complete_decision_games(inputs, game_key,
         "acceptedDecisions": len(accepted),
         "truncatedAtGameBoundary": stopped,
         "unknownGameRecords": unknown,
+        "contiguousGamesRequired": True,
     }
 
 
