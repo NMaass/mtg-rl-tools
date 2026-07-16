@@ -1,0 +1,137 @@
+name: patch-trust-audit
+on:
+  push:
+    branches: [audit/training-trust-gates]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audit/training-trust-gates
+      - name: Integrate restricted loading and hard gates
+        run: |
+          cat > python/magic_cabt/research/trust_audit_cli.py <<'PY'
+          """Public trust-audit CLI over raw decision records.
+
+          The training compiler intentionally drops non-single-choice or invalid
+          rows. The audit inspects raw decisions before compilation and forces
+          PyTorch's restricted checkpoint loader for every checkpoint read.
+          """
+          from __future__ import annotations
+
+          import json
+          import os
+
+          from . import trust_audit as core_audit
+          from .trust_hardening import harden_report, safe_load_context
+
+
+          def iter_raw_decisions(inputs):
+              for path in inputs:
+                  path = os.path.abspath(os.path.expanduser(path))
+                  if os.path.isdir(path):
+                      path = os.path.join(path, "decisions.jsonl")
+                      if not os.path.isfile(path):
+                          continue
+                  elif os.path.basename(path) in (
+                          "mirror_states.jsonl", "transitions.jsonl"):
+                      continue
+                  yield from core_audit.core._decision_reader(path)
+
+
+          def audit(inputs, checkpoints=None, strict=False, max_records=0,
+                    visibility_samples=32):
+              checkpoints = checkpoints or []
+              original = core_audit.core._iter_all_decisions
+              core_audit.core._iter_all_decisions = iter_raw_decisions
+              try:
+                  with safe_load_context():
+                      result = core_audit.audit(
+                          inputs, checkpoints=checkpoints, strict=strict,
+                          max_records=max_records,
+                          visibility_samples=visibility_samples)
+              finally:
+                  core_audit.core._iter_all_decisions = original
+              return harden_report(result, checkpoints)
+
+
+          def main(argv=None):
+              args = core_audit.build_parser().parse_args(argv)
+              result = audit(
+                  args.input, checkpoints=args.checkpoint, strict=args.strict,
+                  max_records=max(0, args.max_records),
+                  visibility_samples=max(0, args.visibility_samples))
+              output = os.path.abspath(os.path.expanduser(args.out))
+              os.makedirs(os.path.dirname(output), exist_ok=True)
+              temporary = output + ".tmp"
+              with open(temporary, "w", encoding="utf-8") as handle:
+                  json.dump(result, handle, indent=2, sort_keys=True)
+                  handle.write("\n")
+              os.replace(temporary, output)
+              print(json.dumps(result["summary"], indent=2, sort_keys=True))
+              return 0 if result["summary"]["trusted"] else 1
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
+          PY
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('python/tests/test_trust_audit.py')
+          text = path.read_text()
+          text = text.replace(
+              '"collection": {"unit": "complete-game"},',
+              '"collection": {"unit": "complete-game",\n                           "contiguousGamesRequired": True},')
+          marker = '''    def test_rssm_missing_rollout_diagnostics_fails(self):
+          '''
+          addition = '''    def test_nonfinite_held_out_metric_fails(self):
+              metrics = self.metrics()
+              metrics["history"][0]["eval"]["policyTop1"] = float("nan")
+              with tempfile.TemporaryDirectory() as scratch:
+                  bundle = os.path.join(scratch, "bundle")
+                  write_bundle(bundle, [decision()])
+                  path = os.path.join(scratch, "nonfinite-metric.pt")
+                  self.checkpoint(path, metrics=metrics)
+                  result = audit([bundle], checkpoints=[path])
+              self.assertEqual("fail", check(
+                  result, "checkpoint.finite-diagnostics",
+                  "checkpoint:nonfinite-metric.pt")["status"])
+
+              def test_incomplete_sequence_collection_contract_fails(self):
+                  metrics = self.metrics()
+                  metrics["collection"] = {"unit": "complete-game"}
+                  with tempfile.TemporaryDirectory() as scratch:
+                      bundle = os.path.join(scratch, "bundle")
+                      write_bundle(bundle, [decision()])
+                      path = os.path.join(scratch, "collection.pt")
+                      self.checkpoint(path, metrics=metrics)
+                      result = audit([bundle], checkpoints=[path])
+                  self.assertEqual("fail", check(
+                      result, "checkpoint.sequence-collection-contract",
+                      "checkpoint:collection.pt")["status"])
+
+              def test_rssm_missing_rollout_diagnostics_fails(self):
+          '''
+          # Correct indentation after embedding the replacement block.
+          addition = addition.replace('\n              def test_', '\n    def test_')
+          if marker not in text:
+              raise SystemExit('test insertion marker not found')
+          path.write_text(text.replace(marker, addition, 1))
+          PY
+      - name: Run focused trust-audit tests
+        working-directory: python
+        run: |
+          python -m pip install --quiet -e '.[jepa]'
+          python -m unittest -v tests.test_trust_audit
+      - name: Commit patch and remove one-shot workflow
+        run: |
+          rm .github/workflows/patch-trust-audit.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Use restricted checkpoint loading and finite trust gates'
+          git push origin HEAD:audit/training-trust-gates
