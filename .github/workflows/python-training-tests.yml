@@ -11,6 +11,7 @@ on:
       - "python/tests/test_information_state.py"
       - "python/tests/test_recurrent_backfill.py"
       - "python/tests/test_visibility.py"
+      - "python/tests/test_sequence_data.py"
       - "python/pyproject.toml"
       - ".github/workflows/python-training-tests.yml"
   push:
@@ -24,6 +25,7 @@ on:
       - "python/tests/test_information_state.py"
       - "python/tests/test_recurrent_backfill.py"
       - "python/tests/test_visibility.py"
+      - "python/tests/test_sequence_data.py"
       - "python/pyproject.toml"
 
 jobs:
@@ -51,6 +53,7 @@ jobs:
           tests.test_information_state
           tests.test_recurrent_backfill
           tests.test_visibility
+          tests.test_sequence_data
           > training-test-output.txt 2>&1
       - name: Upload training test output
         if: always()
