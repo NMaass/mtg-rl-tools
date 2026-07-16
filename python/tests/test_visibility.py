@@ -25,7 +25,7 @@ def record(hidden_name, mana_value):
 class VisibilitySafeTensorizerTest(unittest.TestCase):
     def test_hidden_identity_and_numeric_fields_do_not_change_rows(self):
         config = StructuredJEPAConfig(
-            text_dim=16, numeric_dim=40, d_model=16, nhead=4,
+            text_dim=32, numeric_dim=40, d_model=16, nhead=4,
             encoder_layers=1, predictor_layers=1, ff_dim=32,
             dropout=0.0, max_objects=16, causal_dim=18,
             horizon_buckets=8, embedding_backend="hash")
