@@ -24,16 +24,19 @@ def decision(sequence=1, selected=0, oracle_in_observation=False):
                 "name": "Secret", "manaValue": 7,
                 "power": 8, "toughness": 8}]}}
         },
-        "select": {"type": "PRIORITY", "option": options},
         "publicHistory": [],
     }
     if oracle_in_observation:
         observation["beliefLabels"] = {"removal": 1}
     return {
+        "schemaVersion": 1,
+        "source": "fixture",
         "matchId": "m", "gameNumber": 1,
         "sequenceNumber": sequence,
+        "perspectiveSeat": 1,
         "selectedIndices": [selected],
         "observation": observation,
+        "select": {"type": "PRIORITY", "option": options},
     }
 
 
