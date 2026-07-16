@@ -6,6 +6,7 @@ on:
       - "python/magic_cabt/models/**"
       - "python/magic_cabt/training/**"
       - "python/magic_cabt/analysis/**"
+      - "python/magic_cabt/research/**"
       - "python/tests/test_structured_jepa.py"
       - "python/tests/test_train_jepa_reliable.py"
       - "python/tests/test_information_state.py"
@@ -14,6 +15,7 @@ on:
       - "python/tests/test_sequence_data.py"
       - "python/tests/test_belief_state.py"
       - "python/tests/test_rssm.py"
+      - "python/tests/test_trust_audit.py"
       - "python/pyproject.toml"
       - ".github/workflows/python-training-tests.yml"
   push:
@@ -22,6 +24,7 @@ on:
       - "python/magic_cabt/models/**"
       - "python/magic_cabt/training/**"
       - "python/magic_cabt/analysis/**"
+      - "python/magic_cabt/research/**"
       - "python/tests/test_structured_jepa.py"
       - "python/tests/test_train_jepa_reliable.py"
       - "python/tests/test_information_state.py"
@@ -30,6 +33,7 @@ on:
       - "python/tests/test_sequence_data.py"
       - "python/tests/test_belief_state.py"
       - "python/tests/test_rssm.py"
+      - "python/tests/test_trust_audit.py"
       - "python/pyproject.toml"
 
 jobs:
@@ -60,6 +64,7 @@ jobs:
           tests.test_sequence_data
           tests.test_belief_state
           tests.test_rssm
+          tests.test_trust_audit
           > training-test-output.txt 2>&1
       - name: Upload training test output
         if: always()
