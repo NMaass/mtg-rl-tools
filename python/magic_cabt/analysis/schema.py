@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 SCHEMA_VERSION = 1
 _ID_KEYS = frozenset(("id", "objectId", "instanceId", "targetId",
-                     "targetInstanceId", "sourceId", "eventId", "requestId"))
+                      "targetInstanceId", "sourceId", "eventId", "requestId"))
 _VOLATILE_KEYS = frozenset(("timestamp", "rawTime"))
 _UUID_RE = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
@@ -32,10 +32,15 @@ def decision_fingerprint(record):
 
 
 def analysis_cache_key(record, model_info):
-    return "%s|%s|%s" % (
-        SCHEMA_VERSION,
+    parts = [
+        str(SCHEMA_VERSION),
         decision_fingerprint(record),
-        model_info.get("checkpointId") or model_info.get("modelId") or "unknown")
+        model_info.get("checkpointId") or model_info.get("modelId") or "unknown",
+    ]
+    context = model_info.get("analysisContext")
+    if context:
+        parts.append(str(context))
+    return "|".join(parts)
 
 
 def make_analysis_record(record, scores, model_info, top_k=5,
@@ -124,8 +129,6 @@ def format_analysis(record, max_rows=None):
         suffix = "%.1f%%" % (100.0 * probability) if probability is not None \
             else "%.4f" % row.get("score", 0.0)
         lines.append("%d. %s  %s" % (position, row.get("label"), suffix))
-    # Latency stays in the record but out of the readout — a viewer cares
-    # whether the play matched the model, not how long inference took.
     rank = analysis.get("chosenRank")
     if rank == 1:
         lines.append("✓ Played rank: 1 — the model's top pick")
