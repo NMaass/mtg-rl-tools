@@ -7,6 +7,7 @@ import os
 
 from magic_cabt.models.structured_jepa import (
     CardTextResolver, MagicJEPA, StructuredTensorizer, TORCH_AVAILABLE)
+from magic_cabt.models.visibility import VisibilitySafeTensorizer
 
 
 class StructuredJEPAScorer:
@@ -104,7 +105,7 @@ class RecurrentInformationStateScorer:
         self.model, self.extra = RecurrentInformationStateModel.load_checkpoint(
             checkpoint, map_location=self.device)
         self.model.to(self.device).eval()
-        self.tensorizer = StructuredTensorizer(
+        self.tensorizer = VisibilitySafeTensorizer(
             self.model.config, card_resolver=resolver)
         self.name = "recurrent-information-state"
         self._digest = _sha256_file(self.checkpoint)
@@ -123,6 +124,9 @@ class RecurrentInformationStateScorer:
             "trainingState": "trained" if metrics.get("decisionExamples") else "untrained",
             "decisionExamples": metrics.get("decisionExamples"),
             "sequenceLength": metrics.get("sequenceLength"),
+            "visibilityPolicy": metrics.get(
+                "visibilityPolicy",
+                "public-history-and-perspective-state-v1"),
         }
 
     def reset(self):
