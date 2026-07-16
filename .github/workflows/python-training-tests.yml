@@ -41,6 +41,8 @@ jobs:
         working-directory: python
         run: python -m pip install --quiet -e ".[jepa]"
       - name: Run structured-model and training smoke tests
+        id: training-tests
+        continue-on-error: true
         working-directory: python
         run: >-
           python -m unittest -v
@@ -49,3 +51,16 @@ jobs:
           tests.test_information_state
           tests.test_recurrent_backfill
           tests.test_visibility
+          > training-test-output.txt 2>&1
+      - name: Upload training test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-test-output
+          path: python/training-test-output.txt
+      - name: Fail when tests failed
+        if: steps.training-tests.outcome == 'failure'
+        working-directory: python
+        run: |
+          tail -n 200 training-test-output.txt
+          exit 1
