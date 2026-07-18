@@ -16,3 +16,4 @@ mtgo-runs/
 
 # python editable-install artifacts
 *.egg-info/
+.openrouter_key
