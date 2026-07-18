@@ -136,6 +136,13 @@ def _preprocess(image: np.ndarray, config: Dict[str, object]) -> np.ndarray:
     if scale != 1.0:
         image = cv2.resize(image, None, fx=scale, fy=scale,
                            interpolation=cv2.INTER_CUBIC)
+    if config.get("white_text"):
+        # Isolate bright white glyphs (e.g. life totals rendered white over busy
+        # avatar art in the modern client) and render them black-on-white for OCR.
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        threshold = int(config.get("white_threshold", 180))
+        _, mask = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+        return cv2.cvtColor(255 - mask, cv2.COLOR_GRAY2BGR)
     if config.get("grayscale", True):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         if config.get("threshold") == "otsu":
@@ -153,13 +160,28 @@ def _preprocess(image: np.ndarray, config: Dict[str, object]) -> np.ndarray:
 
 def _read_integer(spans: List[OCRSpan]):
     candidates = []
+    digit_spans = []
     for span in spans:
-        normalized = span.text.replace("O", "0").replace("o", "0")
+        normalized = span.text.replace("O", "0").replace("o", "0").strip()
         for match in re.findall(r"-?\d+", normalized):
             try:
                 candidates.append((int(match), span.confidence))
             except ValueError:
                 pass
+        if re.fullmatch(r"\d+", normalized):
+            x = span.bbox[0] if span.bbox else 0
+            digit_spans.append((x, normalized, span.confidence))
+    # A multi-digit value (e.g. a two-digit life total over busy avatar art) is
+    # often split by OCR into separate single-digit spans. Recombine pure-digit
+    # spans in left-to-right order and prefer that reading when present.
+    if len(digit_spans) > 1:
+        digit_spans.sort(key=lambda row: row[0])
+        joined = "".join(row[1] for row in digit_spans)
+        confidence = sum(row[2] for row in digit_spans) / len(digit_spans)
+        try:
+            candidates.append((int(joined), min(1.0, confidence + 0.001)))
+        except ValueError:
+            pass
     return max(candidates, key=lambda row: row[1]) if candidates else (None, 0.0)
 
 

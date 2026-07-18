@@ -1,0 +1,76 @@
+name: mtgo-modern-rawclient
+metadata:
+  description: >-
+    Calibrated layout for a RAW modern MTGO client capture at 1920x1080 (no
+    tournament-broadcast overlay), as used by many solo content creators. Same
+    structural family as the old client — player panels + life in the LEFT
+    sidebar (opponent top, local bottom), phase step bar across the top of the
+    play area (~0.71 height) with the turn indicator at its left, battlefields
+    centre. Differs from mocs_2016_oldclient in exact proportions (wider
+    sidebar, higher phase bar). Calibrated against youtube 0roqwJmsyz8 (ethanmtg,
+    Modern league). NOTE: this creator keeps no persistent game-log pane visible,
+    so no game_log region is defined — action capture from this source needs a
+    native MTGO GameLog (see mtgo_native_logs) or a creator who shows the log.
+  reference_resolution: [1920, 1080]
+regions:
+  opponent_life:
+    x: 0.072
+    y: 0.114
+    width: 0.060
+    height: 0.076
+    kind: integer
+    config: {scale: 3.0, white_text: true, white_threshold: 185}
+  local_life:
+    x: 0.072
+    y: 0.688
+    width: 0.060
+    height: 0.074
+    kind: integer
+    config: {scale: 3.0, white_text: true, white_threshold: 215}
+  opponent_hand_count:
+    x: 0.100
+    y: 0.004
+    width: 0.024
+    height: 0.028
+    kind: integer
+    config: {scale: 4.0, grayscale: true}
+  local_hand_count:
+    x: 0.101
+    y: 0.579
+    width: 0.023
+    height: 0.032
+    kind: integer
+    config: {scale: 4.0, grayscale: true}
+  turn_number:
+    x: 0.246
+    y: 0.706
+    width: 0.082
+    height: 0.030
+    kind: integer
+    config: {scale: 3.0, grayscale: true}
+  phase:
+    x: 0.245
+    y: 0.706
+    width: 0.746
+    height: 0.030
+    kind: phase_bar
+    config:
+      steps: [UNTAP, UPKEEP, DRAW, MAIN1, BEGIN_COMBAT, ATTACKERS, BLOCKERS, DAMAGE, END_COMBAT, MAIN2, END, CLEANUP]
+      centers: [0.164, 0.234, 0.301, 0.362, 0.431, 0.505, 0.573, 0.647, 0.725, 0.811, 0.881, 0.951]
+      min_center: 0.12
+      hsv_low: [8, 80, 120]
+      hsv_high: [28, 255, 255]
+  opponent_battlefield:
+    x: 0.245
+    y: 0.010
+    width: 0.746
+    height: 0.320
+    kind: card_zone
+    config: {zone: battlefield, controller: '2', recognize_names: true, empty_confidence: 0.25}
+  local_battlefield:
+    x: 0.245
+    y: 0.345
+    width: 0.746
+    height: 0.355
+    kind: card_zone
+    config: {zone: battlefield, controller: '1', recognize_names: true, empty_confidence: 0.25}
