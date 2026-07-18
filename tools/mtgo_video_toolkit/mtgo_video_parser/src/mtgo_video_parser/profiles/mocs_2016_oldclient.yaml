@@ -55,6 +55,22 @@ regions:
     height: 0.021
     kind: integer
     config: {scale: 3.0, grayscale: true}
+  # --- Phase step bar (bottom): active step is a colour highlight, not text.
+  # `centers` are x-fractions within this region, derived by clustering the
+  # orange-highlight centroid across the clip. Two "Main" steps disambiguate
+  # by position (MAIN1 precombat, MAIN2 postcombat). ---
+  phase:
+    x: 0.078
+    y: 0.905
+    width: 0.917
+    height: 0.025
+    kind: phase_bar
+    config:
+      steps: [UNTAP, UPKEEP, DRAW, MAIN1, BEGIN_COMBAT, ATTACKERS, BLOCKERS, DAMAGE, END_COMBAT, MAIN2, END, CLEANUP]
+      centers: [0.105, 0.185, 0.255, 0.329, 0.414, 0.497, 0.571, 0.656, 0.782, 0.844, 0.919, 0.985]
+      min_center: 0.07
+      hsv_low: [8, 80, 120]
+      hsv_high: [28, 255, 255]
   # --- Scrolling game log (left text box) ---
   game_log:
     x: 0.004

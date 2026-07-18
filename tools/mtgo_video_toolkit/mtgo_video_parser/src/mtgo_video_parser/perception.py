@@ -52,7 +52,15 @@ class FramePerceiver:
                 "kind": region.kind,
                 "imageQuality": region_quality,
             }
-            if region.kind in {"integer", "text", "log", "phase"}:
+            if region.kind == "phase_bar":
+                # The old MTGO client marks the active step with a colour
+                # highlight on a fixed step bar, not distinct text, so this is a
+                # colour detector rather than OCR. Its confidence reflects the
+                # highlight, not text sharpness, so it bypasses region_quality.
+                value, score = _read_phase_bar(crop, region.config)
+                fields[region.name] = value
+                confidence[region.name] = score
+            elif region.kind in {"integer", "text", "log", "phase"}:
                 prepared = _preprocess(crop, region.config)
                 spans = self.ocr.read(prepared, hint=region.name)
                 if region.kind == "integer":
@@ -153,6 +161,40 @@ def _read_integer(spans: List[OCRSpan]):
             except ValueError:
                 pass
     return max(candidates, key=lambda row: row[1]) if candidates else (None, 0.0)
+
+
+def _read_phase_bar(image: np.ndarray, config: Dict[str, object]):
+    """Locate the colour-highlighted active step on a fixed MTGO phase bar.
+
+    config keys: `steps` (ordered canonical phase names, left to right),
+    `centers` (matching x-fractions of each step within the crop), optional
+    `hsv_low`/`hsv_high` (highlight colour range) and `min_center` (ignore
+    highlights left of this fraction, e.g. the active-player turn label).
+    Returns (canonical_phase, confidence) or (None, 0.0) when no step is lit.
+    """
+    steps = list(config.get("steps") or [])
+    centers = [float(value) for value in (config.get("centers") or [])]
+    if not steps or len(steps) != len(centers) or image.size == 0:
+        return None, 0.0
+    low = np.array(config.get("hsv_low", [8, 80, 120]), dtype=np.uint8)
+    high = np.array(config.get("hsv_high", [28, 255, 255]), dtype=np.uint8)
+    min_center = float(config.get("min_center", 0.07))
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, low, high)
+    columns = mask.sum(axis=0).astype(np.float64)
+    if columns.max() <= 0:
+        return None, 0.0
+    lit = np.where(columns > columns.max() * 0.3)[0]
+    if lit.size == 0:
+        return None, 0.0
+    center = float((lit.min() + lit.max()) / 2 / image.shape[1])
+    if center < min_center:
+        return None, 0.0
+    distances = [abs(center - value) for value in centers]
+    index = int(np.argmin(distances))
+    proximity = max(0.0, 1.0 - distances[index] / 0.06)
+    score = max(0.0, min(1.0, 0.6 + 0.4 * proximity))
+    return steps[index], score
 
 
 def _join(spans: List[OCRSpan]):
