@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mtgo-video-acquisition"
+version = "0.1.0"
+description = "Local source manifest and yt-dlp coordinator for user-authorized MTGO video corpora."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "NMaass / mtg-rl-tools contributors"}]
+dependencies = []
+
+[project.optional-dependencies]
+yt-dlp = ["yt-dlp>=2025.1.0"]
+
+[project.scripts]
+mtgo-video-source = "mtgo_video_acquisition.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

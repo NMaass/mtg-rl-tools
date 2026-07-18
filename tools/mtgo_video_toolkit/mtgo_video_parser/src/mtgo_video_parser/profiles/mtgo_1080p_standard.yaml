@@ -1,0 +1,85 @@
+name: mtgo-1080p-standard-starting-point
+metadata:
+  description: >-
+    Conservative normalized starting profile for the standard 16:9 MTGO duel
+    scene. MTGO zones are resizable; calibrate this profile against each channel
+    or exported MTGO layout before bulk processing.
+  reference_resolution: [1920, 1080]
+regions:
+  opponent_life:
+    x: 0.905
+    y: 0.055
+    width: 0.055
+    height: 0.050
+    kind: integer
+    config: {scale: 3.0, grayscale: true, threshold: otsu}
+  local_life:
+    x: 0.905
+    y: 0.810
+    width: 0.055
+    height: 0.050
+    kind: integer
+    config: {scale: 3.0, grayscale: true, threshold: otsu}
+  opponent_hand_count:
+    x: 0.820
+    y: 0.045
+    width: 0.055
+    height: 0.040
+    kind: integer
+    config: {scale: 3.0, grayscale: true, threshold: otsu}
+  local_hand_count:
+    x: 0.820
+    y: 0.895
+    width: 0.055
+    height: 0.040
+    kind: integer
+    config: {scale: 3.0, grayscale: true, threshold: otsu}
+  turn_number:
+    x: 0.440
+    y: 0.015
+    width: 0.120
+    height: 0.035
+    kind: integer
+    config: {scale: 3.0, grayscale: true}
+  phase:
+    x: 0.380
+    y: 0.930
+    width: 0.240
+    height: 0.045
+    kind: phase
+    config: {scale: 2.5, grayscale: true}
+  game_log:
+    x: 0.735
+    y: 0.115
+    width: 0.255
+    height: 0.590
+    kind: log
+    config: {scale: 2.0, grayscale: true}
+  opponent_battlefield:
+    x: 0.050
+    y: 0.115
+    width: 0.665
+    height: 0.315
+    kind: card_zone
+    config: {zone: battlefield, controller: '2', recognize_names: true, empty_confidence: 0.25}
+  local_battlefield:
+    x: 0.050
+    y: 0.455
+    width: 0.665
+    height: 0.315
+    kind: card_zone
+    config: {zone: battlefield, controller: '1', recognize_names: true, empty_confidence: 0.25}
+  local_hand:
+    x: 0.050
+    y: 0.785
+    width: 0.665
+    height: 0.145
+    kind: card_zone
+    config: {zone: hand, controller: '1', recognize_names: true, empty_confidence: 0.20}
+  stack:
+    x: 0.610
+    y: 0.325
+    width: 0.110
+    height: 0.220
+    kind: card_zone
+    config: {zone: stack, recognize_names: true, empty_confidence: 0.25}

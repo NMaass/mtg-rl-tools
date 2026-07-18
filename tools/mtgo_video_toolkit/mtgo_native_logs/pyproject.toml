@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mtgo-native-logs"
+version = "0.1.0"
+description = "Conservative MTGO GameLog/DraftLog discovery and event extraction."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "NMaass / mtg-rl-tools contributors"}]
+dependencies = [
+  "mtg-state-contract>=0.1.0",
+  "mtgo-video-parser>=0.1.0",
+]
+
+[project.scripts]
+mtgo-native-log = "mtgo_native_logs.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

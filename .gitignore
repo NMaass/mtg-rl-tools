@@ -7,3 +7,12 @@ __pycache__/
 arena-mirror-runs/
 
 python/magic_cabt.egg-info/
+
+# python venv for the vendored mtgo_video_toolkit
+.venv/
+
+# local MTGO video corpus + extraction bundles (may contain copyrighted media)
+mtgo-runs/
+
+# python editable-install artifacts
+*.egg-info/

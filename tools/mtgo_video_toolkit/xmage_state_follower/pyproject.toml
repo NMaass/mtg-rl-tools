@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xmage-state-follower"
+version = "0.1.0"
+description = "Replay perceived MTGO actions through XMage and compare canonical states."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "NMaass / mtg-rl-tools contributors"}]
+dependencies = [
+  "mtg-state-contract>=0.1.0",
+  "rapidfuzz>=3",
+]
+
+[project.scripts]
+xmage-follow = "xmage_state_follower.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

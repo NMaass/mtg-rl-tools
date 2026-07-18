@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mtgo-pipeline-coordinator"
+version = "0.1.0"
+description = "Local coordinator for MTGO video extraction, XMage replay validation, and repo assembly."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "NMaass / mtg-rl-tools contributors"}]
+dependencies = [
+  "mtg-state-contract>=0.1.0",
+  "mtgo-video-acquisition>=0.1.0",
+  "mtgo-video-parser>=0.1.0",
+  "mtgo-native-logs>=0.1.0",
+  "xmage-state-follower>=0.1.0",
+]
+
+[project.scripts]
+mtgo-pipeline = "mtgo_pipeline_coordinator.cli:main"
+mtgo-toolkit-assemble = "mtgo_pipeline_coordinator.assemble:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

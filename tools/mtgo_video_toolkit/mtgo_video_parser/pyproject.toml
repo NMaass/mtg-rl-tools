@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mtgo-video-parser"
+version = "0.1.0"
+description = "Headless MTGO video perception and canonical-state extraction pipeline."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "NMaass / mtg-rl-tools contributors"}]
+dependencies = [
+  "mtg-state-contract>=0.1.0",
+  "numpy>=1.26",
+  "opencv-python-headless>=4.9",
+  "Pillow>=10",
+  "PyYAML>=6",
+  "rapidfuzz>=3",
+  "requests>=2.31",
+  "pytesseract>=0.3.10",
+]
+
+[project.optional-dependencies]
+paddle = ["paddleocr>=3.0"]
+
+[project.scripts]
+mtgo-video = "mtgo_video_parser.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mtgo_video_parser = ["profiles/*.yaml"]
