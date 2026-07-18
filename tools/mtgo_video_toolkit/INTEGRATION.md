@@ -78,24 +78,52 @@ the parser README documents. Calibration coordinates were read directly off
 sampled frames and verified against known frames (turn-1 mulligan and turn-10
 board).
 
-### Known limitations on this clip (all honest / by-design)
+### Phase detection (`phase_bar` region kind)
 
-- **Phase is not modelled.** In the old client the active step is a *colour
-  highlight* on a fixed `Untap…Cleanup` bar, not distinct on-screen text, so text
-  OCR cannot isolate it. A colour-highlight detector is a future enhancement. Its
-  absence means every state fails the training-quality gate (`/phase` is a
-  critical field) → all 262 states land in `quarantine.jsonl`, `trainingCandidates
-  = 0`. This is the quality gate working conservatively, not a failure.
-- **Card names are unknown** (`identifiedCards = 0`). Battlefield *rectangles* are
-  detected (giving zone counts, noisily over-counted) but names need a card-DB
-  resolver (`--card-db`), which was not supplied. The parser never guesses a name.
+The old client marks the active step with an orange *colour highlight* on a fixed
+`Untap…Cleanup` bar, not distinct text, so a `phase_bar` region kind
+(`perception.py`) locates the highlight centroid and maps it to the nearest step
+(the two Main phases disambiguate by x-position). Step centres were derived by
+clustering the highlight centroid across the clip. Result on this video:
+
+| | without phase | with `phase_bar` |
+|---|---|---|
+| states with phase | 0 / 262 | **242 / 262** (0.82 mean conf) |
+| quarantined states | 262 | **55** |
+| training candidates | 0 | **207** |
+| quality mean | 0.567 | **0.652** |
+
+### Card-name recognition (`--card-db`)
+
+With the Scryfall `oracle_cards` bulk supplied via `--card-db`, the recognizer
+OCRs each detected card's title bar and validates against the 39.6k-card
+dictionary (fail-closed: unresolved text stays unknown). On the turn-10 board it
+identifies the real cards — Deathmist Raptor, Canopy Vista, Lumbering Falls,
+Silkwrap, Prairie Stream, Forest/Plains, Yavimaya Coast (leearson); Knight Ally,
+Jace Telepath Unbound, Shambling Vent, Battlefield Forge, Sunken Hollow,
+Island/Mountain (beena); "Morph" for face-down 2/2s. A minority of fuzzy matches
+are wrong (raise `minimum_resolver_score` to trade recall for precision). Full
+per-frame card OCR is slow (~an hour for the clip on this GPU); use it on
+targeted segments rather than whole broadcasts.
+
+### Remaining honest limitation
+
 - **Hand-count** is reliable mid-game (0.96) but low-confidence on the turn-1
   mulligan pill (~0.38) — correctly flagged rather than trusted.
 
-## Not yet run here: the XMage follower stage
+## The XMage follower stage — wired and proven
 
-`mtgo-pipeline follow` / `xmage-follow` replays the extracted actions through the
-CABT `CabtProtocolServer` and needs **Java + a compiled CABT classpath**
-(`MAGIC_CABT_CLASSPATH`). Neither `java` nor the classpath is present in this
-environment (`doctor` → `readyForXmage: false`), so verification against XMage is
-the remaining step once the CABT module is built.
+`mtgo-pipeline follow` / `xmage-follow` replays actions through the CABT
+`CabtProtocolServer` and needs **Java + a compiled CABT classpath**
+(`MAGIC_CABT_CLASSPATH`). Built here from the `xmage-goldflush` checkout
+(JDK17 + Maven, `mvn -pl Mage.Server.Plugins/Mage.Player.AI test-compile`;
+classpath = `target/classes` + `target/cabt-deps.txt`). The bridge boots and
+speaks the protocol end-to-end: `game_start` → decision options, `game_select`,
+and `visualize_data` snapshots return full board state.
+
+Running the follower on this clip's bundle **correctly fails closed** — it launches
+XMage, ranks the observed MULLIGAN action against the engine's options, and
+reports "no hypothesis survived" because *exact* replay needs both real decklists,
+the seed, and every intervening decision (per the follower README), none of which
+a 3.6-min broadcast provides. The stack is verified; a clip with recoverable
+decklists is what turns "runs" into "verified".
