@@ -48,7 +48,8 @@ magic-cabt-build-transitions = "magic_cabt.training.build_transitions:main"
 magic-cabt-build-macro-actions = "magic_cabt.training.build_macro_actions:main"
 magic-cabt-replay-search = "magic_cabt.search.replay_search_cli:main"
 magic-cabt-train-structured-bc = "magic_cabt.training.train_structured_bc:main"
-magic-cabt-compare-models = "magic_cabt.analysis.compare:main"
+# Compatibility alias: compare-suite supports checkpoints and nonlearned baselines.
+magic-cabt-compare-models = "magic_cabt.analysis.suite:main"
 magic-cabt-compare-suite = "magic_cabt.analysis.suite:main"
 
 # Experimental research hypotheses. Entry points are retained for reproducibility;
