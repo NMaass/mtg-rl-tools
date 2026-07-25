@@ -70,6 +70,14 @@ magic-cabt-compare-suite \
   --model structured-bc=runs/structured-bc/best.pt \
   --out runs/comparison.html
 
+magic-cabt-research extract-scenario \
+  --input <bundle-or-decisions.jsonl> \
+  --decision-index 42 \
+  --suite core-tactics-v1 \
+  --scenario-id tactical-root-042 \
+  --history 16 \
+  --out review/tactical-root-042.jsonl
+
 magic-cabt-research benchmark-scenarios \
   --suite <tactical-suite.jsonl> \
   --model first=baseline:first-legal \
@@ -78,6 +86,8 @@ magic-cabt-research benchmark-scenarios \
 ```
 
 `magic-cabt-compare-models` remains as a compatibility alias to the same suite entry point. New scripts and documentation should use `magic-cabt-compare-suite`.
+
+The tactical extraction command copies a retained public decision, bounded same-game public history, semantic candidate actions, source hashes, and the recorded choice into a review draft. It deliberately leaves `acceptableActionKeys` empty unless an expert supplies `--acceptable`; the recorded human play is never assumed correct. Only approved rows may be appended to an existing suite.
 
 The tactical benchmark scores captured replay-root decisions against expert-authored acceptable semantic action groups. It supports prior public history for recurrent scorers and reports coverage, top-1, top-k, MRR, prohibited top-1, tag groups, and prompt groups. See [`../docs/TACTICAL_SCENARIOS.md`](../docs/TACTICAL_SCENARIOS.md).
 
