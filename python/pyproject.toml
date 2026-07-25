@@ -33,6 +33,7 @@ semantic = ["torch>=2.2", "numpy", "sentence-transformers"]
 [project.scripts]
 # Supported capture, validation, dataset, baseline, evaluation, and search path.
 magic-cabt-validate = "magic_cabt.training.validate_dataset:main"
+magic-cabt-training-audit = "magic_cabt.research.trust_audit:main"
 magic-cabt-compile-il = "magic_cabt.training.compile_il:main"
 magic-cabt-train-bc = "magic_cabt.training.train_bc:main"
 magic-cabt-eval-play = "magic_cabt.eval.play:main"
