@@ -19,14 +19,15 @@ from .expert_cost import (
     load_preferences,
     split_preferences_by_context,
 )
+from .tactical import evaluate_scenarios, load_scenarios
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="magic-cabt-research",
         description=(
-            "Fit expert cost models, benchmark checkpoint analyses, and "
-            "validate reproducible MTG learning plans."))
+            "Fit expert cost models, benchmark checkpoints and tactical "
+            "scenarios, and validate reproducible MTG learning plans."))
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     fit = subparsers.add_parser(
@@ -79,6 +80,26 @@ def build_parser() -> argparse.ArgumentParser:
     matches.add_argument("--seed", type=int, default=0)
     matches.add_argument("--out", required=True, help="report JSON")
 
+    scenarios = subparsers.add_parser(
+        "benchmark-scenarios",
+        help="score a versioned replay-root tactical scenario suite")
+    scenarios.add_argument("--suite", required=True,
+                           help="tactical scenario JSONL")
+    scenarios.add_argument(
+        "--model", action="append", required=True,
+        metavar="NAME=CHECKPOINT_OR_BASELINE",
+        help="checkpoint path or baseline:first-legal|random|heuristic")
+    scenarios.add_argument("--out", required=True, help="report JSON")
+    scenarios.add_argument("--top-k", type=int, default=3)
+    scenarios.add_argument("--seed", type=int, default=0,
+                           help="deterministic-random baseline seed")
+    scenarios.add_argument("--device", default=None)
+    scenarios.add_argument("--card-cache", default=None)
+    scenarios.add_argument("--arena-card-db", default=None)
+    scenarios.add_argument(
+        "--strict", action="store_true",
+        help="return nonzero on suite warnings as well as scorer errors")
+
     validate = subparsers.add_parser(
         "validate-plan", help="validate a declarative experiment plan")
     validate.add_argument("plan", help="experiment plan JSON")
@@ -100,6 +121,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _benchmark_analysis(args)
         if args.command == "benchmark-matches":
             return _benchmark_matches(args)
+        if args.command == "benchmark-scenarios":
+            return _benchmark_scenarios(args)
         if args.command == "validate-plan":
             return _validate_plan(args)
         parser.error("unknown command")
@@ -206,6 +229,52 @@ def _benchmark_matches(args: argparse.Namespace) -> int:
         "sha256": file_sha256(args.input),
     }
     _write_json(args.out, report)
+    return 0
+
+
+def _benchmark_scenarios(args: argparse.Namespace) -> int:
+    from magic_cabt.analysis.baselines import make_baseline
+
+    specs = _name_path_map(args.model, "model")
+    scenarios, _warnings = load_scenarios(args.suite)
+    scorers = []
+    model_inputs = {}
+    for name, spec in specs.items():
+        if spec.startswith("baseline:"):
+            baseline = spec.split(":", 1)[1]
+            scorers.append((name, make_baseline(baseline, seed=args.seed)))
+            model_inputs[name] = {"spec": spec, "seed": args.seed}
+            continue
+        from magic_cabt.analysis.scorer import load_checkpoint_scorer
+        checkpoint = os.path.abspath(os.path.expanduser(spec))
+        if not os.path.isfile(checkpoint):
+            raise ValueError("checkpoint not found: %s" % checkpoint)
+        scorers.append((name, load_checkpoint_scorer(
+            checkpoint, device=args.device, card_cache=args.card_cache,
+            arena_card_db=args.arena_card_db)))
+        model_inputs[name] = {
+            "spec": spec,
+            "path": checkpoint,
+            "sha256": file_sha256(checkpoint),
+        }
+    report = evaluate_scenarios(scenarios, scorers, top_k=args.top_k)
+    suite_path = os.path.abspath(os.path.expanduser(args.suite))
+    report["input"] = {
+        "path": suite_path,
+        "sha256": file_sha256(suite_path),
+    }
+    for name, value in model_inputs.items():
+        report["models"][name]["input"] = value
+    _write_json(args.out, report)
+    summary = {
+        name: model["metrics"]
+        for name, model in report["models"].items()
+    }
+    sys.stdout.write(json.dumps(summary, sort_keys=True) + "\n")
+    has_errors = any(
+        model["metrics"]["errors"] for model in report["models"].values())
+    if has_errors or (args.strict and report["warnings"]):
+        return 1
     return 0
 
 

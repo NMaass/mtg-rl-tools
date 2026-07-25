@@ -69,9 +69,17 @@ magic-cabt-compare-suite \
   --model ranker=runs/ranker/checkpoint.pt \
   --model structured-bc=runs/structured-bc/best.pt \
   --out runs/comparison.html
+
+magic-cabt-research benchmark-scenarios \
+  --suite <tactical-suite.jsonl> \
+  --model first=baseline:first-legal \
+  --model structured=runs/structured-bc/best.pt \
+  --out runs/tactical-report.json
 ```
 
 `magic-cabt-compare-models` remains as a compatibility alias to the same suite entry point. New scripts and documentation should use `magic-cabt-compare-suite`.
+
+The tactical benchmark scores captured replay-root decisions against expert-authored acceptable semantic action groups. It supports prior public history for recurrent scorers and reports coverage, top-1, top-k, MRR, prohibited top-1, tag groups, and prompt groups. See [`../docs/TACTICAL_SCENARIOS.md`](../docs/TACTICAL_SCENARIOS.md).
 
 ### Exact counterfactual data
 
@@ -94,7 +102,8 @@ These share the core data and evaluation contracts but are not promoted as stron
 magic-cabt-train-jepa
 magic-cabt-train-information-state
 magic-cabt-train-belief-state
-magic-cabt-research
+magic-cabt-research fit-cost
+magic-cabt-research score-cost
 ```
 
 Use them only with capacity-matched baselines, whole-game splits, held-out downstream metrics, and explicit promotion gates. Training or latent loss alone is not sufficient evidence.
