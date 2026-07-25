@@ -31,6 +31,7 @@ This is active research software, not a complete competitive Magic agent platfor
 | Canonical data contract | Implemented for Arena, XMage self-play, engine-human play, and search records. |
 | Strategic action grouping | Implemented. Low-level target/mode/payment callbacks can be compiled into auditable macro actions. |
 | Transition datasets | Implemented for state streams, decisions, and complete macro actions. |
+| Training trust audit | Implemented for raw datasets, whole-game assumptions, provenance, and optional checkpoint evidence. |
 | Baseline policies | Implemented: first/random controls, behavior cloning, hashed ranking, and structured behavior cloning. |
 | Model comparison | Implemented for recorded decisions and agent-vs-agent engine games. |
 | Counterfactual search | Implemented through deterministic replay search. It is exact but slower than native cloning. |
@@ -91,6 +92,10 @@ Detailed Arena instructions: [docs/RUNNING.md](docs/RUNNING.md).
 ```sh
 magic-cabt-validate arena-mirror-runs/run-001/decisions.jsonl
 
+magic-cabt-training-audit \
+  --input arena-mirror-runs/run-001 \
+  --out runs/run-001/trust-audit.json
+
 magic-cabt-build-manifest \
   --input arena-mirror-runs/run-001/decisions.jsonl \
   --out runs/run-001/manifest.json
@@ -100,6 +105,8 @@ magic-cabt-build-macro-actions \
   --out runs/run-001/macro_actions.jsonl \
   --transitions-out runs/run-001/macro_transitions.jsonl
 ```
+
+The audit records input hashes and checks raw decision legality, visible-state boundaries, game sequencing, transition and macro-action integrity, split assumptions, and optional checkpoint evidence. See [docs/TRUST_GATES.md](docs/TRUST_GATES.md).
 
 ### 5. Establish the baseline ladder
 
@@ -157,7 +164,7 @@ Replay search rebuilds the decision from the recorded action prefix, verifies th
 
 - XMage bridge and legal-option protocol;
 - Arena capture and replay inspection;
-- DecisionRecord validation and manifests;
+- DecisionRecord validation, trust auditing, and manifests;
 - macro actions and transitions;
 - minimal policy baselines;
 - whole-game evaluation and comparison;
@@ -203,13 +210,12 @@ docs/                                   user and research documentation
 
 ## Current roadmap
 
-1. Extract the narrow training trust audit tracked in issue #43.
-2. Inventory real datasets by games, nontrivial root decisions, complete transitions, prompt coverage, card/deck coverage, and capture confidence.
-3. Build a versioned tactical scenario suite.
-4. Run scaling curves for BC, hashed ranker, and structured BC.
-5. Generate replay-search labels for a bounded tactical subset.
-6. Resume world-model or belief experiments only when a fixed benchmark identifies the failure they are intended to solve.
-7. Implement native XMage cloning only when replay-search throughput becomes the measured bottleneck.
+1. Inventory real datasets by games, nontrivial root decisions, complete transitions, prompt coverage, card/deck coverage, and capture confidence.
+2. Build a versioned tactical scenario suite.
+3. Run scaling curves for BC, hashed ranker, and structured BC.
+4. Generate replay-search labels for a bounded tactical subset.
+5. Resume world-model or belief experiments only when a fixed benchmark identifies the failure they are intended to solve.
+6. Implement native XMage cloning only when replay-search throughput becomes the measured bottleneck.
 
 ## Tests
 
