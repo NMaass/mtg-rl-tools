@@ -35,9 +35,9 @@ This is active research software, not a complete competitive Magic agent platfor
 | Training trust audit | Implemented for raw datasets, whole-game assumptions, provenance, and optional checkpoint evidence. |
 | Baseline policies | Implemented: first/random controls, behavior cloning, hashed ranking, and structured behavior cloning. |
 | Model comparison | Implemented for recorded decisions and agent-vs-agent engine games. |
+| Tactical benchmark evaluator | Implemented for versioned replay-root scenarios, semantic acceptable actions, public history, and grouped metrics. A curated expert-reviewed suite is not yet committed. |
 | Counterfactual search | Implemented through deterministic replay search. It is exact but slower than native cloning. |
 | Native cloned-game search | Not implemented. This is a throughput improvement, not a missing data contract. |
-| Tactical benchmark suite | Incomplete and now a higher priority than another model family. |
 | Broad competitive agent | Not demonstrated. |
 
 ## Supported workflow
@@ -148,7 +148,21 @@ magic-cabt-compare-suite \
   --out runs/comparisons/run-001.html
 ```
 
-### 7. Generate exact counterfactual branches
+### 7. Evaluate fixed tactical roots
+
+```sh
+magic-cabt-research benchmark-scenarios \
+  --suite examples/research/core_tactics_v1.jsonl \
+  --model first=baseline:first-legal \
+  --model heuristic=baseline:heuristic \
+  --model structured=runs/structured-bc/best.pt \
+  --top-k 3 \
+  --out runs/tactical/core-tactics-v1.json
+```
+
+Tactical scenarios preserve captured public observations and legal choices, annotate one or more acceptable semantic action groups, and may include prior public history for recurrent scorers. The evaluator reports coverage, top-1, top-k, MRR, prohibited top-1, tags, and prompt groups. The repository currently provides the schema and evaluator; curating the first immutable expert-reviewed suite remains work. See [docs/TACTICAL_SCENARIOS.md](docs/TACTICAL_SCENARIOS.md).
+
+### 8. Generate exact counterfactual branches
 
 ```sh
 magic-cabt-replay-search \
@@ -172,7 +186,7 @@ Replay search rebuilds the decision from the recorded action prefix, verifies th
 - DecisionRecord validation, trust auditing, and corpus manifests;
 - macro actions and transitions;
 - minimal policy baselines;
-- whole-game evaluation and comparison;
+- whole-game, replay-root tactical, and comparison evaluation;
 - deterministic replay search.
 
 ### Experimental
@@ -215,7 +229,7 @@ docs/                                   user and research documentation
 
 ## Current roadmap
 
-1. Build a versioned tactical scenario suite.
+1. Curate and freeze the first expert-reviewed `core-tactics-v1` scenario corpus from retained replay roots.
 2. Run scaling curves for BC, hashed ranker, and structured BC using committed corpus manifests.
 3. Generate replay-search labels for a bounded tactical subset.
 4. Resume world-model or belief experiments only when a fixed benchmark identifies the failure they are intended to solve.
