@@ -112,6 +112,8 @@ magic-cabt-draft-outlook
 
 Substantial work in these areas should begin with an extraction or package-boundary plan.
 
+The parked local-model GUI never trains automatically by default. Use `magic-cabt-local-model gui --auto-train` to opt into experimental between-game fine-tuning. The legacy `--no-auto-train` flag remains accepted for compatibility.
+
 ## Model promotion rule
 
 Before adding or promoting a model family, compare it on the same whole-game split against:
