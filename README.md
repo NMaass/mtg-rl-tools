@@ -31,6 +31,7 @@ This is active research software, not a complete competitive Magic agent platfor
 | Canonical data contract | Implemented for Arena, XMage self-play, engine-human play, and search records. |
 | Strategic action grouping | Implemented. Low-level target/mode/payment callbacks can be compiled into auditable macro actions. |
 | Transition datasets | Implemented for state streams, decisions, and complete macro actions. |
+| Corpus inventory | Implemented in dataset manifests: games, strategic decisions, semantic options, next-state coverage, duplicates, cards, decks, capture confidence, and input hashes. |
 | Training trust audit | Implemented for raw datasets, whole-game assumptions, provenance, and optional checkpoint evidence. |
 | Baseline policies | Implemented: first/random controls, behavior cloning, hashed ranking, and structured behavior cloning. |
 | Model comparison | Implemented for recorded decisions and agent-vs-agent engine games. |
@@ -97,8 +98,10 @@ magic-cabt-training-audit \
   --out runs/run-001/trust-audit.json
 
 magic-cabt-build-manifest \
-  --input arena-mirror-runs/run-001/decisions.jsonl \
-  --out runs/run-001/manifest.json
+  --input arena-mirror-runs/run-001 \
+  --input arena-mirror-runs/run-002 \
+  --name arena-standard-corpus \
+  --out runs/arena-standard-manifest.json
 
 magic-cabt-build-macro-actions \
   --input arena-mirror-runs/run-001/decisions.jsonl \
@@ -107,6 +110,8 @@ magic-cabt-build-macro-actions \
 ```
 
 The audit records input hashes and checks raw decision legality, visible-state boundaries, game sequencing, transition and macro-action integrity, split assumptions, and optional checkpoint evidence. See [docs/TRUST_GATES.md](docs/TRUST_GATES.md).
+
+The manifest accepts repeated JSONL files or bundle directories. Its `inventory` section reports whole games, strategic root decisions, deduplicated semantic choices, trainable single-choice rows, non-terminal next-state coverage, duplicate public fingerprints, observed card identifiers, deck identifiers, and capture-confidence distributions. Duplicate tracking is exact until its declared memory bound is reached and then reports `trackingTruncated: true`.
 
 ### 5. Establish the baseline ladder
 
@@ -164,7 +169,7 @@ Replay search rebuilds the decision from the recorded action prefix, verifies th
 
 - XMage bridge and legal-option protocol;
 - Arena capture and replay inspection;
-- DecisionRecord validation, trust auditing, and manifests;
+- DecisionRecord validation, trust auditing, and corpus manifests;
 - macro actions and transitions;
 - minimal policy baselines;
 - whole-game evaluation and comparison;
@@ -210,12 +215,11 @@ docs/                                   user and research documentation
 
 ## Current roadmap
 
-1. Inventory real datasets by games, nontrivial root decisions, complete transitions, prompt coverage, card/deck coverage, and capture confidence.
-2. Build a versioned tactical scenario suite.
-3. Run scaling curves for BC, hashed ranker, and structured BC.
-4. Generate replay-search labels for a bounded tactical subset.
-5. Resume world-model or belief experiments only when a fixed benchmark identifies the failure they are intended to solve.
-6. Implement native XMage cloning only when replay-search throughput becomes the measured bottleneck.
+1. Build a versioned tactical scenario suite.
+2. Run scaling curves for BC, hashed ranker, and structured BC using committed corpus manifests.
+3. Generate replay-search labels for a bounded tactical subset.
+4. Resume world-model or belief experiments only when a fixed benchmark identifies the failure they are intended to solve.
+5. Implement native XMage cloning only when replay-search throughput becomes the measured bottleneck.
 
 ## Tests
 
