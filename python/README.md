@@ -63,6 +63,8 @@ magic-cabt-compare-suite \
   --out runs/comparison.html
 ```
 
+`magic-cabt-compare-models` remains as a compatibility alias to the same suite entry point. New scripts and documentation should use `magic-cabt-compare-suite`.
+
 ### Exact counterfactual data
 
 ```sh
