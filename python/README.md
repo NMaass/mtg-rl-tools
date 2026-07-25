@@ -33,12 +33,15 @@ magic-cabt-eval-play --deck0 ../examples/basic_deck.txt --deck1 ../examples/basi
 
 ```sh
 magic-cabt-validate <records.jsonl>
+magic-cabt-training-audit --input <bundle-or-jsonl> --out <audit.json>
 magic-cabt-build-manifest --input <records.jsonl> --out <manifest.json>
 magic-cabt-compile-il --input <records.jsonl> --out <single_choice.jsonl>
 magic-cabt-build-transitions --input <bundle-or-jsonl> --out <transitions.jsonl>
 magic-cabt-build-macro-actions --input <records.jsonl> --out <macro_actions.jsonl>
 magic-cabt-analyze-actions --input <records.jsonl>
 ```
+
+The trust audit checks raw decision legality, hidden-information markers, sequence and split assumptions, transition/macro-action integrity, provenance hashes, and optional checkpoint evidence. See [`../docs/TRUST_GATES.md`](../docs/TRUST_GATES.md).
 
 ### Baselines
 
