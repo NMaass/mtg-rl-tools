@@ -42,7 +42,13 @@ def build_parser():
     gui.add_argument("--epochs-per-game", type=int, default=1)
     gui.add_argument("--replay-bundles", type=int, default=20)
     gui.add_argument("--top-k", type=int, default=5)
-    gui.add_argument("--no-auto-train", action="store_true")
+    training = gui.add_mutually_exclusive_group()
+    training.add_argument(
+        "--auto-train", action="store_true",
+        help="explicitly fine-tune the experimental local model between games")
+    training.add_argument(
+        "--no-auto-train", action="store_true",
+        help="compatibility flag; automatic training is already disabled")
 
     replay = commands.add_parser("replay")
     _add_common(replay)
@@ -64,7 +70,7 @@ def build_parser():
 
 
 def _make_evolver(args, epochs=1, replay_bundles=20,
-                  arena_card_db=None):
+                   arena_card_db=None):
     return LocalEvolver(
         model_dir=args.model_dir,
         preset=getattr(args, "preset", "local"),
@@ -147,9 +153,12 @@ def main(argv=None):
             print(json.dumps(json.load(handle), indent=2, sort_keys=True))
         return 0
 
-    _configure_environment(
-        args, auto_train=(args.command == "gui" and
-                          not args.no_auto_train))
+    auto_train = (
+        args.command == "gui"
+        and bool(getattr(args, "auto_train", False))
+        and not bool(getattr(args, "no_auto_train", False))
+    )
+    _configure_environment(args, auto_train=auto_train)
     from magic_cabt.arena_mirror.local_model_hooks import (
         install_local_model_gui_hooks, install_local_model_hooks)
     install_local_model_hooks()
