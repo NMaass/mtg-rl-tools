@@ -160,7 +160,7 @@ class TacticalSuiteTest(unittest.TestCase):
             self.assertEqual(0, exit_code)
             with open(output, encoding="utf-8") as handle:
                 report = json.load(handle)
-        self.assertEqual(64, len(report["input"]["sha256"]))
+        self.assertRegex(report["input"]["sha256"], r"^sha256:[0-9a-f]{64}$")
         self.assertEqual(
             "baseline:first-legal",
             report["models"]["first"]["input"]["spec"])
