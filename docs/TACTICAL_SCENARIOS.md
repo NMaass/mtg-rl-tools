@@ -4,7 +4,57 @@ The tactical benchmark evaluates a model on fixed, annotated decision roots capt
 
 It does **not** synthesize an arbitrary board inside XMage. The current bridge can start games and replay action prefixes, but it cannot load a complete hand-authored engine state. Until native state loading exists, a scenario must preserve the recorded public observation and legal-option set at the decision boundary.
 
-## Command
+## Extract a review draft
+
+Create a standalone draft from a retained decision by zero-based normalized record index:
+
+```bash
+magic-cabt-research extract-scenario \
+  --input arena-mirror-runs/run-001 \
+  --decision-index 42 \
+  --suite core-tactics-v1 \
+  --scenario-id hold-removal-001 \
+  --history 16 \
+  --tag combat \
+  --tag removal \
+  --out review/hold-removal-001.jsonl
+```
+
+You may select by exact `--fingerprint` instead. A fingerprint that occurs more than once is rejected as ambiguous; use the record index to disambiguate.
+
+An unlabelled extraction is intentionally **not** a valid benchmark row. It contains:
+
+- the cleaned public decision and bounded earlier records from the same game;
+- every canonical semantic candidate action and its concrete engine indices;
+- the action recorded in the source trajectory, listed only as context;
+- an empty `acceptableActionKeys` list;
+- `annotation.reviewStatus = needs-expert-review`;
+- source filename, source SHA-256, decision index, source line, and decision fingerprint.
+
+The recorded human action is never promoted automatically to an acceptable benchmark answer.
+
+After review, either edit the draft or produce an approved row directly:
+
+```bash
+magic-cabt-research extract-scenario \
+  --input arena-mirror-runs/run-001 \
+  --fingerprint sha256:... \
+  --suite core-tactics-v1 \
+  --scenario-id hold-removal-001 \
+  --history 16 \
+  --acceptable 'CAST_SPELL|cast:lightning-strike:target:attacker-7' \
+  --prohibited 'PASS_PRIORITY|pass' \
+  --reviewer expert-1 \
+  --rationale 'Removal before damage prevents the known pump line.' \
+  --append \
+  --out examples/research/core_tactics_v1.jsonl
+```
+
+`--append` requires at least one `--acceptable` label. If the destination already exists, the combined suite is validated before writing, preventing duplicate scenario IDs or mixed immutable suite versions. Drafts must be written to separate review files.
+
+History extraction requires a recoverable game identity and includes only earlier records from that same game. Obvious private/oracle observation fields are rejected. The committed row records only the source filename, not an absolute local path.
+
+## Benchmark command
 
 ```bash
 magic-cabt-research benchmark-scenarios \
@@ -61,19 +111,32 @@ Each line is one scenario:
   "prohibitedActionKeys": [
     "PASS_PRIORITY|pass"
   ],
+  "candidateActions": [
+    {
+      "actionKey": "PASS_PRIORITY|pass",
+      "label": "Pass",
+      "type": "PASS_PRIORITY",
+      "canonicalKey": "pass",
+      "concreteIndices": [0]
+    }
+  ],
   "annotation": {
+    "reviewStatus": "approved",
+    "recordedActionKeys": ["PASS_PRIORITY|pass"],
     "reviewers": ["expert-1", "expert-2"],
-    "agreement": "unanimous",
     "rationale": "Removal before damage prevents the known pump line."
   },
   "provenance": {
-    "datasetSha256": "...",
+    "sourceFile": "decisions.jsonl",
+    "sourceSha256": "sha256:...",
+    "decisionIndex": 42,
+    "sourceLine": 43,
     "decisionFingerprint": "sha256:..."
   }
 }
 ```
 
-Only `schemaVersion`, `suite`, `scenarioId`, `decision`, and a non-empty `acceptableActionKeys` list are required by the evaluator. `tags`, `history`, `prohibitedActionKeys`, `annotation`, and `provenance` are strongly recommended.
+Only `schemaVersion`, `suite`, `scenarioId`, `decision`, and a non-empty `acceptableActionKeys` list are required by the evaluator. `tags`, `history`, `prohibitedActionKeys`, `candidateActions`, `annotation`, and `provenance` are strongly recommended.
 
 ## Semantic action keys
 
