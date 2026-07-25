@@ -19,15 +19,20 @@ from .expert_cost import (
     load_preferences,
     split_preferences_by_context,
 )
-from .tactical import evaluate_scenarios, load_scenarios
+from .tactical import evaluate_scenarios, load_scenarios, validate_scenarios
+from .tactical_extract import (
+    extract_scenario,
+    load_decision_records,
+    write_scenario_row,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="magic-cabt-research",
         description=(
-            "Fit expert cost models, benchmark checkpoints and tactical "
-            "scenarios, and validate reproducible MTG learning plans."))
+            "Fit expert cost models, curate and benchmark tactical scenarios, "
+            "benchmark checkpoints, and validate reproducible MTG learning plans."))
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     fit = subparsers.add_parser(
@@ -80,6 +85,33 @@ def build_parser() -> argparse.ArgumentParser:
     matches.add_argument("--seed", type=int, default=0)
     matches.add_argument("--out", required=True, help="report JSON")
 
+    extract = subparsers.add_parser(
+        "extract-scenario",
+        help="extract a reviewable tactical scenario from DecisionRecords")
+    extract.add_argument("--input", required=True,
+                         help="DecisionRecord JSONL or bundle directory")
+    selector = extract.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--decision-index", type=int,
+                          help="zero-based normalized record index")
+    selector.add_argument("--fingerprint",
+                          help="exact decision fingerprint")
+    extract.add_argument("--suite", required=True,
+                         help="immutable tactical suite version")
+    extract.add_argument("--scenario-id", required=True)
+    extract.add_argument("--history", type=int, default=0,
+                         help="number of earlier same-game records to include")
+    extract.add_argument("--tag", action="append", default=[])
+    extract.add_argument("--acceptable", action="append", default=[],
+                         help="approved semantic action key; repeatable")
+    extract.add_argument("--prohibited", action="append", default=[],
+                         help="prohibited semantic action key; repeatable")
+    extract.add_argument("--reviewer", action="append", default=[])
+    extract.add_argument("--rationale", default="")
+    extract.add_argument("--out", required=True,
+                         help="output JSONL path or - for stdout")
+    extract.add_argument("--append", action="store_true",
+                         help="append an approved row to an existing suite")
+
     scenarios = subparsers.add_parser(
         "benchmark-scenarios",
         help="score a versioned replay-root tactical scenario suite")
@@ -121,12 +153,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _benchmark_analysis(args)
         if args.command == "benchmark-matches":
             return _benchmark_matches(args)
+        if args.command == "extract-scenario":
+            return _extract_scenario(args)
         if args.command == "benchmark-scenarios":
             return _benchmark_scenarios(args)
         if args.command == "validate-plan":
             return _validate_plan(args)
         parser.error("unknown command")
-    except (OSError, ValueError) as exc:
+    except (ImportError, OSError, ValueError) as exc:
         sys.stderr.write("research command failed: %s\n" % exc)
         return 2
     return 2
@@ -229,6 +263,47 @@ def _benchmark_matches(args: argparse.Namespace) -> int:
         "sha256": file_sha256(args.input),
     }
     _write_json(args.out, report)
+    return 0
+
+
+def _extract_scenario(args: argparse.Namespace) -> int:
+    if args.append and not args.acceptable:
+        raise ValueError(
+            "--append requires at least one --acceptable expert label")
+    if args.append and args.out == "-":
+        raise ValueError("--append requires a file output")
+    source, records = load_decision_records(args.input)
+    scenario = extract_scenario(
+        records,
+        suite=args.suite,
+        scenario_id=args.scenario_id,
+        decision_index=args.decision_index,
+        fingerprint=args.fingerprint,
+        history_limit=args.history,
+        tags=args.tag,
+        acceptable=args.acceptable,
+        prohibited=args.prohibited,
+        rationale=args.rationale,
+        reviewers=args.reviewer,
+        source_path=source,
+        source_sha256=file_sha256(source),
+    )
+    if args.append and os.path.isfile(args.out):
+        existing, _warnings = load_scenarios(args.out)
+        errors, _warnings = validate_scenarios(existing + [scenario])
+        if errors:
+            raise ValueError("cannot append scenario: " + "; ".join(errors[:10]))
+    result = write_scenario_row(args.out, scenario, append=args.append)
+    if args.out == "-":
+        sys.stdout.write(result)
+    else:
+        sys.stdout.write(json.dumps({
+            "out": os.path.abspath(args.out),
+            "scenarioId": scenario["scenarioId"],
+            "reviewStatus": scenario["annotation"]["reviewStatus"],
+            "decisionFingerprint": scenario["provenance"]["decisionFingerprint"],
+            "candidateActions": scenario["candidateActions"],
+        }, sort_keys=True) + "\n")
     return 0
 
 
