@@ -1,148 +1,122 @@
 # magic-cabt
 
-Python tooling for CABT-style Magic: The Gathering reinforcement-learning,
-imitation-learning, Arena-log recording, replay annotation, and local agent
-experiments.
+Python tooling for the supported `mtg-rl-tools` play-recommendation workflow.
 
-This package is the Python layer of `mtg-rl-tools`. The live XMage bridge still
-requires the Java overlay to be copied into and built inside an XMage checkout;
-see the repository root README for the full bridge setup.
+The package also contains experimental and adjacent modules. A console script existing does not, by itself, mean the feature is promoted. See [`../docs/SCOPE.md`](../docs/SCOPE.md).
 
-## Editable install
-
-From the repository root:
+## Install
 
 ```sh
 cd python
 python -m pip install -e .
 ```
 
-For PyTorch ranker and JEPA training:
+For maintained PyTorch baselines:
 
 ```sh
-python -m pip install -e ".[jepa]"
+python -m pip install -e ".[torch]"
 ```
 
-Then the import surface is available from any working directory:
+The XMage-backed commands require `MAGIC_CABT_CLASSPATH` or an explicit `--classpath` pointing at a built XMage+CABT classpath.
 
-```python
-from magic_cabt import CabtBridge, load_decklist
+## Supported command path
+
+### Capture and engine evaluation
+
+```sh
+magic-cabt-arena-mirror live --no-display
+magic-cabt-play --deck0 ../examples/basic_deck.txt --deck1 ../examples/basic_deck.txt --agent1 random
+magic-cabt-eval-play --deck0 ../examples/basic_deck.txt --deck1 ../examples/basic_deck.txt
 ```
 
-## Console commands
-
-The package exposes the common research/data commands as console scripts:
+### Validate and build datasets
 
 ```sh
 magic-cabt-validate <records.jsonl>
-magic-cabt-compile-il --input <records.jsonl> --out <single_choice.jsonl>
 magic-cabt-build-manifest --input <records.jsonl> --out <manifest.json>
+magic-cabt-compile-il --input <records.jsonl> --out <single_choice.jsonl>
+magic-cabt-build-transitions --input <bundle-or-jsonl> --out <transitions.jsonl>
+magic-cabt-build-macro-actions --input <records.jsonl> --out <macro_actions.jsonl>
+magic-cabt-analyze-actions --input <records.jsonl>
+```
+
+### Baselines
+
+```sh
 magic-cabt-train-bc --input <single_choice.jsonl> --out runs/bc
 magic-cabt-eval-bc --input <single_choice.jsonl> --policy first
-magic-cabt-analyze-actions --input <records.jsonl>
-magic-cabt-eval-play --deck0 ../examples/basic_deck.txt --deck1 ../examples/basic_deck.txt
-magic-cabt-play --deck0 ../examples/basic_deck.txt --deck1 ../examples/basic_deck.txt --agent1 random
+magic-cabt-train-ranker --input <bundle-or-jsonl> --out runs/ranker
+magic-cabt-train-structured-bc --input <bundle-or-jsonl> --out runs/structured-bc
+```
+
+### Analysis and comparison
+
+```sh
 magic-cabt-replay-annotate --input <records-or-bundle> --policy first
-magic-cabt-arena-mirror live --no-display
+
+magic-cabt-compare-suite \
+  --bundle <bundle> \
+  --model first=baseline:first-legal \
+  --model random=baseline:random \
+  --model ranker=runs/ranker/checkpoint.pt \
+  --model structured-bc=runs/structured-bc/best.pt \
+  --out runs/comparison.html
 ```
 
-`magic-cabt-eval-play`, `CabtBridge`, and display-backed Arena mirror commands
-need `MAGIC_CABT_CLASSPATH` or `--classpath` pointing at a built XMage+CABT
-classpath.
-
-## Reliable JEPA training
-
-The structured trainer splits transitions and decisions on whole-game IDs,
-reports held-out policy/world-model metrics and collapse diagnostics, supports
-CUDA mixed precision and gradient accumulation, and writes both:
-
-- `checkpoint.pt`: final model plus optimizer, scaler, RNG, and epoch state for
-  exact continuation;
-- `best.pt`: lowest held-out-loss model for analysis or deployment.
-
-Example:
+### Exact counterfactual data
 
 ```sh
-magic-cabt-train-jepa \
-  --input ../arena-mirror-runs/run-001 \
-  --input ../arena-mirror-runs/run-002 \
-  --out runs/jepa-local \
-  --preset local \
-  --device cuda \
-  --amp auto \
-  --batch-size 16 \
-  --grad-accum-steps 2 \
-  --epochs 10 \
-  --eval-fraction 0.1
+magic-cabt-replay-search \
+  --input <selfplay-records.jsonl> \
+  --decision-index 42 \
+  --deck0 ../examples/basic_deck.txt \
+  --deck1 ../examples/basic_deck.txt \
+  --seed 7 \
+  --out runs/search/decision-42.json \
+  --transitions-out runs/search/transitions.jsonl
 ```
 
-Resume the final training state:
+## Experimental commands
 
-```sh
-magic-cabt-train-jepa \
-  --input ../arena-mirror-runs/run-001 \
-  --out runs/jepa-local-resumed \
-  --resume runs/jepa-local/checkpoint.pt \
-  --device cuda \
-  --epochs 5
+These share the core data and evaluation contracts but are not promoted as stronger-play solutions:
+
+```text
+magic-cabt-train-jepa
+magic-cabt-train-information-state
+magic-cabt-train-belief-state
+magic-cabt-research
 ```
 
-`metrics.json` records whole-game split identities, train/eval losses, canonical
-policy top-k/MRR, latent effective rank, throughput, peak CUDA allocation, input
-hashes, and the selected best epoch.
+Use them only with capacity-matched baselines, whole-game splits, held-out downstream metrics, and explicit promotion gates. Training or latent loss alone is not sufficient evidence.
 
-## Head-to-head model analysis
+The RSSM implementation is also experimental. Its merged implementation and documentation should be reviewed before restoring or advertising a public console entry point.
 
-Score the same recorded decisions with multiple checkpoints and generate a
-self-contained HTML comparison plus a machine-readable JSON artifact:
+## Adjacent or parked commands
 
-```sh
-magic-cabt-compare-models \
-  --bundle ../arena-mirror-runs/run-001 \
-  --model hashed-ranker=runs/ranker/checkpoint.pt \
-  --model structured-jepa=runs/jepa/best.pt \
-  --out runs/comparisons/run-001.html \
-  --device cuda
+These are retained for existing users and experiments but are outside the supported play-recommendation path:
+
+```text
+magic-cabt-upload
+magic-cabt-agent-service
+magic-cabt-local-evolve
+magic-cabt-local-model
+magic-cabt-build-draft-dataset
+magic-cabt-train-draft
+magic-cabt-draft-outlook
 ```
 
-Agreement and human-play rank use canonical action groups when XMage identifies
-fungible options. Options without a canonical key retain concrete option
-identity; equal display labels are never treated as strategically equivalent.
+Substantial work in these areas should begin with an extraction or package-boundary plan.
 
-## Research experiment commands
+## Model promotion rule
 
-`magic-cabt-research` provides dependency-free guardrails and reports shared by
-imitation, JEPA/world-model, search, and causal-factor experiments:
+Before adding or promoting a model family, compare it on the same whole-game split against:
 
-```sh
-# Reject split/hidden-information/statistical leakage in an experiment manifest.
-magic-cabt-research validate-plan \
-  ../examples/research/experiment_matrix_v1.json --strict
+1. first/random controls;
+2. the dependency-free BC baseline where applicable;
+3. the hashed ranker;
+4. structured behavior cloning at matched capacity.
 
-# Fit a monotone Bradley-Terry expert-preference cost model.
-magic-cabt-research fit-cost \
-  --factors ../examples/research/causal_factors_v1.json \
-  --preferences ../examples/research/expert_preferences.example.jsonl \
-  --out runs/expert-cost-v1.json
-
-# Benchmark model analysis caches against held-out decisions.
-magic-cabt-research benchmark-analysis \
-  --decisions heldout.decisions.jsonl \
-  --analysis ranker=runs/ranker/analysis.jsonl \
-  --analysis jepa=runs/jepa/analysis.jsonl \
-  --out runs/analysis-benchmark.json
-
-# Benchmark paired match scenarios with clustered intervals and Holm correction.
-magic-cabt-research benchmark-matches \
-  --input ../examples/research/match_results.example.jsonl \
-  --out runs/match-benchmark.json
-```
-
-The research rationale, model ladder, data layers, benchmark protocol, and
-expert-annotation procedure are documented in:
-
-- `../docs/RESEARCH_ARCHITECTURE.md`
-- `../docs/EXPERT_COST_PROTOCOL.md`
+Report coverage, failures, compute, and a downstream metric. World-model, belief, or recurrent objectives are auxiliary hypotheses until they improve action ranking, calibration, search consistency, tactical scenarios, or paired engine games.
 
 ## Tests
 
@@ -151,7 +125,4 @@ cd python
 python -m unittest discover -s tests -v
 ```
 
-The dedicated `python-training-tests` GitHub Actions workflow installs the
-PyTorch extra and executes a real forward/backward/checkpoint smoke run. This
-prevents the optional training path from passing CI only because torch-gated
-tests were skipped.
+The root repository README describes the full XMage overlay setup and supported end-to-end workflow.
