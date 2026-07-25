@@ -219,7 +219,9 @@ def _start_group(record, classification, identity, player):
         "groupId": group_id,
         "gameId": record.get("gameId"),
         "matchId": metadata.get("matchId") or record.get("matchId"),
-        "gameNumber": metadata.get("gameNumber") or record.get("gameNumber"),
+        "gameNumber": (metadata.get("gameNumber")
+                       if metadata.get("gameNumber") is not None
+                       else record.get("gameNumber")),
         "playerIndex": player,
         "rootSequenceNumber": record.get("sequenceNumber"),
         "lastSequenceNumber": record.get("sequenceNumber"),
