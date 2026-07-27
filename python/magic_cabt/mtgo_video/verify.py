@@ -32,6 +32,60 @@ def fold(name: Optional[str]) -> str:
     return _fold(name or "")
 
 
+CARD_DB = os.path.join("db", "cards.h2.mv.db")
+
+
+def find_card_database(classpath: str) -> Optional[str]:
+    """The directory XMage's card database sits in, if it is on the classpath.
+
+    XMage opens its card database relative to the working directory, so a JVM
+    started anywhere else builds every card as null -- which surfaces as an
+    empty library rather than as an error. Finding it here means callers do
+    not have to know that.
+    """
+    for entry in classpath.split(os.pathsep):
+        directory = os.path.abspath(entry)
+        if os.path.isfile(directory):
+            directory = os.path.dirname(directory)
+        for _ in range(4):
+            if os.path.exists(os.path.join(directory, CARD_DB)):
+                return directory
+            parent = os.path.dirname(directory)
+            if parent == directory:
+                break
+            directory = parent
+    return None
+
+
+def resolve_cwd(classpath: str, cwd: Optional[str]) -> Optional[str]:
+    """Where to start the JVM: what the caller asked for, or where the DB is."""
+    if cwd:
+        return cwd
+    return find_card_database(classpath)
+
+
+def assert_card_database(states: List[dict], summaries: List[dict],
+                         classpath: str, cwd: Optional[str]) -> None:
+    """Fail loudly when XMage ran without its card database.
+
+    Without it every card resolves to null, so libraries and hands come back
+    empty and *every* comparison disagrees -- which reads like a broken
+    decode rather than a missing file. Say which it is.
+    """
+    claimed = any((player.get("libraryCount") or 0) > 0
+                  for state in states for player in state.get("players", []))
+    reported = any((player.get("libraryCount") or 0) > 0
+                   for summary in summaries
+                   for player in summary.get("players", []))
+    if claimed and not reported:
+        raise RuntimeError(
+            "XMage reported an empty library for every state, which means it "
+            "could not open its card database (%s). Start the JVM in the "
+            "directory that holds it: pass --cwd <Mage.Client dir>. Looked "
+            "from classpath, ran in %r."
+            % (CARD_DB, cwd or os.getcwd()))
+
+
 def run_mirror_verify(
     states_path: str,
     classpath: str,
@@ -40,6 +94,7 @@ def run_mirror_verify(
     heap: str = "-Xmx2g",
 ) -> List[dict]:
     """Apply every state in XMage and return one GameView summary per state."""
+    cwd = resolve_cwd(classpath, cwd)
     proc = subprocess.run(
         [java, heap, "-Dfile.encoding=UTF-8", "-Djava.awt.headless=true",
          "-cp", classpath, VERIFY_MAIN_CLASS, states_path, "--all"],
@@ -146,6 +201,7 @@ def verify_bundle(
     if len(summaries) != len(states):
         raise RuntimeError("XMage returned %d summaries for %d states"
                            % (len(summaries), len(states)))
+    assert_card_database(states, summaries, classpath, cwd)
 
     mismatches = []
     for i, (state, summary) in enumerate(zip(states, summaries)):

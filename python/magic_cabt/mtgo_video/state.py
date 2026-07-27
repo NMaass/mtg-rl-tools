@@ -152,6 +152,32 @@ class GameSimulator:
 
     # -- event application -------------------------------------------------
 
+    # Events that still belong to combat, so pending damage must not be dealt
+    # before them: a block, and the two lines ninjutsu writes -- the attacker
+    # going back to hand and the ninja arriving in its place. Both happen
+    # after attackers are declared and before damage.
+    _BEFORE_DAMAGE = frozenset(("BLOCK", "RETURN_HAND", "ACTIVATE"))
+
+    def _targets_an_attacker(self, event: dict) -> bool:
+        """Whether this event is a spell or ability aimed at an attacker.
+
+        Removal cast while attackers are declared resolves *before* damage,
+        so the damage must not be dealt at the cast. Noting which attackers
+        were targeted is also what lets the creature's death withdraw its
+        damage: an attacker killed by a spell deals none, while one that dies
+        *to* combat damage has already dealt its own, and the log writes both
+        the same way ("X is destroyed").
+        """
+        pending = self.pending_combat
+        if not pending or event.get("type") not in ("CAST", "ACTIVATE"):
+            return False
+        aimed = [t for t in (event.get("targets") or [])
+                 if _loose(t) in pending["attackers"]]
+        if not aimed:
+            return False
+        pending.setdefault("targeted", set()).update(_loose(t) for t in aimed)
+        return True
+
     def apply(self, event: dict) -> List[dict]:
         """Apply one event; returns the snapshots it produced, in order.
 
@@ -162,7 +188,7 @@ class GameSimulator:
         """
         kind = event["type"]
         snapshots = []
-        if kind != "BLOCK":
+        if kind not in self._BEFORE_DAMAGE and not self._targets_an_attacker(event):
             damage = self._flush_combat()
             if damage is not None:
                 snapshots.append(damage)
@@ -172,8 +198,12 @@ class GameSimulator:
         if handler:
             changed = handler(event)
         elif kind in ("ROLL", "JOIN", "CHAT", "UNPARSED", "REVEAL", "CYCLE",
-                      "TRIGGER", "SHUFFLE", "SCRY_BOTTOM", "PUT_TOP", "ACTIVATE",
-                      "PLAY_FIRST", "SKIP_DRAW", "LEADS_MATCH", "PUTS_TOP_N"):
+                      "TRIGGER", "SHUFFLE", "SCRY_BOTTOM", "PUT_TOP",
+                      "PLAY_FIRST", "SKIP_DRAW", "LEADS_MATCH", "PUTS_TOP_N",
+                      # Recognised but not modelled: they reorder or annotate
+                      # hidden information the board snapshot does not carry.
+                      "SCRY", "CHOICE", "COUNTERS_ON", "TRIGGER_FAILED",
+                      "TRIGGER_FIZZLED", "LEAVE"):
             changed = False
         if changed:
             self.seq += 1
@@ -214,11 +244,29 @@ class GameSimulator:
         self.battlefield.append(self._new_object(e["card"], p.seat))
         return True
 
+    def _names_a_player(self, card: str) -> bool:
+        """Whether a "card" is really one of the two players' names.
+
+        MTGO sometimes prints a player's name where a card's belongs -- seen
+        in a real capture as "MarshFlats casts Mafuhsa targeting Tolarian
+        Terror", with the name drawn in the plain black it uses for text
+        rather than the blue it uses for cards. Whatever was cast, it was not
+        a card called Mafuhsa, so the board must not gain one: an invented
+        permanent would be mirrored, rendered and verified as though it were
+        real.
+        """
+        return any(_loose(card) == _loose(name) for name in self.players)
+
     def _on_cast(self, e):
         p = self._player(e["player"])
         p.hand = max(0, p.hand - 1)
         if self.phase == "Phase_Beginning":
             self.phase, self.step = "Phase_Main1", None
+        if self._names_a_player(e["card"]):
+            self.warnings.append(
+                "cast of an unnamed card: MTGO logged the player name %r "
+                "where the card's should be" % e["card"])
+            return True
         info = self.card_info(e["card"])
         if cardinfo.is_permanent(info):
             self.battlefield.append(self._new_object(e["card"], p.seat))
@@ -378,6 +426,7 @@ class GameSimulator:
         return False
 
     def _on_dies(self, e):
+        self._leave_combat(e["card"], only_if_targeted=True)
         if not self._remove_to_graveyard(e["card"]):
             self.warnings.append("dies: %s not on battlefield" % e["card"])
             return False
@@ -397,6 +446,24 @@ class GameSimulator:
         # put it on the battlefield, pull it back to its owner's graveyard.
         return self._remove_to_graveyard(e["card"]) or True
 
+    def _leave_combat(self, card: str, only_if_targeted: bool = False):
+        """Withdraw a card's pending combat damage; it is no longer attacking.
+
+        `only_if_targeted` is for the removal case: a creature that dies
+        while combat is pending either was killed by a spell before damage
+        (no damage) or died to the damage it was part of dealing (damage
+        stands). The log spells both the same way, so the difference is
+        whether something was logged as targeting it first.
+        """
+        pending = self.pending_combat
+        if not pending:
+            return
+        if only_if_targeted and _loose(card) not in pending.get("targeted", ()):
+            return
+        powers = pending["attackers"].get(_loose(card))
+        if powers:
+            powers.pop()
+
     def _on_return_hand(self, e):
         obj = self._find_battlefield(e["card"])
         if not obj:
@@ -404,9 +471,40 @@ class GameSimulator:
             return False
         self.battlefield.remove(obj)
         self.players_by_seat()[obj["ownerSeat"]].hand += 1
+        # An attacker pulled out of combat -- by ninjutsu, or by anything
+        # that bounces it after attackers are declared -- deals no damage.
+        # Without this its damage is still applied, and every life total
+        # after it is wrong by that much for the rest of the game.
+        self._leave_combat(e["card"])
+        return True
+
+    def _on_activate(self, e):
+        """Ninjutsu is the one activated ability that changes the board here.
+
+        It swaps an unblocked attacker for a ninja from hand, which arrives
+        tapped and attacking. MTGO logs the swap as two lines -- the return,
+        then this -- and modelling only the first leaves the attack short by
+        the ninja's power.
+        """
+        text = e.get("text") or ""
+        if "ninjutsu" not in text.lower():
+            return False
+        card = e.get("card")
+        player = self._player(e["player"])
+        player.hand = max(0, player.hand - 1)
+        obj = self._new_object(card, player.seat)
+        obj["tapped"] = True
+        self.battlefield.append(obj)
+        pending = self.pending_combat
+        power = obj.get("power")
+        if pending is not None and power is not None:
+            pending["attackers"].setdefault(_loose(card), []).append(power)
+        elif pending is not None:
+            self.warnings.append("ninja has unknown power: %s" % card)
         return True
 
     def _on_exile_card(self, e):
+        self._leave_combat(e["card"], only_if_targeted=True)
         obj = self._find_battlefield(e["card"])
         if not obj:
             return False

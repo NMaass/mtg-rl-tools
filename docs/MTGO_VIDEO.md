@@ -2,18 +2,18 @@
 
 Turns MTGO gameplay footage into a replay file — board states in the same
 schema the Arena mirror produces — then replays it in XMage and verifies it
-three independent ways.
+four independent ways.
 
 ```text
 MTGO footage
-  -> layout       locate the UI in this capture, at whatever resolution
+  -> layout       locate the UI in this capture, however it is arranged
   -> extract      crop the game-log pane, normalized to a fixed OCR scale
   -> ocr          read each frame
   -> reconstruct  merge the scrolling windows; vote across repeated sightings
   -> parse        MTGO's log grammar, tolerant of how OCR mangles it
   -> catalog      resolve card names offline, or refuse to
   -> simulate     fold events into board snapshots
-  -> verify       against XMage, against MTGO's own HUD, across captures
+  -> verify       against XMage, against the board, against the HUD, across captures
 ```
 
 ## Design
@@ -32,10 +32,10 @@ actually organised around:
 for a dozen frames or more, and OCR does not fail identically on each,
 because subpixel differences change the rasterisation. So the reconstructor
 does not trust any single reading: it keeps every sighting of a line and
-takes the majority. The same redundancy fixes the layout — the detected
-pane drifts with the log's content (the scrollbar only exists once the log
-overflows), so the bounds are a consensus across several frames rather than
-one. And it settles questions that would otherwise be judgement calls: a
+takes the majority. The same redundancy fixes the layout — the text column
+measured in any one frame is only as wide as that frame's longest line, so
+the pane's bounds are the union across several frames rather than one
+frame's guess. And it settles questions that would otherwise be judgement calls: a
 run of identical lines is capped at how many were ever on screen *at the
 same time*, because MTGO really does log one sentence twice in a row, and
 that is the difference between a real repeat and a misread.
@@ -44,12 +44,24 @@ that is the difference between a real repeat and a misread.
 catalog's margin gate is reported unresolved, not resolved to whatever it
 resembles. A layout that cannot be read back is a hard failure with a
 message, not a confident wrong log. A repaired verb has to actually parse.
-An attacker whose power is unknown is flagged rather than assumed.
+An attacker whose power is unknown is flagged rather than assumed. And when
+MTGO prints a player's name where a card's belongs — which it really does —
+no permanent named after a player reaches the board.
 
 **Derived facts are checked against the video.** Life totals are a
 derivation — the log has no line for combat damage — so they are compared
 against the life MTGO itself prints on screen, and the moment a derived
 change actually happened is *located* in the footage rather than assumed.
+Where the footage contradicts the derivation outright, the footage wins:
+the observed life is adopted, and the fact that it was is recorded on the
+state, so nothing downstream mistakes it for an independent confirmation.
+
+**Each event is checked against the board it happens on.** The pipeline
+derives the rules of the game by watching a log describe it, so a decoded
+stream can be internally consistent and still describe an impossible game.
+Running it through XMage one step ahead of itself — asking, before each
+event, whether the board can support what it is about to claim — is what
+catches a line that OCR damaged into something the game could not do.
 
 ### What changed, and why
 
@@ -60,48 +72,113 @@ turned out to be a real defect rather than a simplification:
 | Was | Failure it caused | Now |
 | --- | --- | --- |
 | Hardcoded 1080p crop | Nothing but 1080p worked at all | Detect the pane by brightness; consensus across frames; validate by reading it back |
+| Regions as fractions of a default 1080p duel scene | Only one client arrangement worked; a streamed capture read a mana pip as a life total | Anchor on text MTGO draws — the phase bar, the names under each seat — and read every located region back |
 | Fixed 3x upscale before OCR | Glyph size drifted with capture size, so results drifted too | Resample to a fixed target width, so tesseract sees the same thing at every resolution |
 | Longest reading wins | One bad frame could define a line | Majority vote across every sighting of that line |
 | Append on failed alignment | Noise produced duplicate entries (240 for a 75-line game at 576p) | Collapse duplicates, using frame co-occurrence to tell a misread apart from a genuine repeat |
 | Alignment scored on similarity alone | A game log repeats every turn, so a window could match the wrong occurrence — duplicating or dropping a whole pane of lines | The pane scrolls one way, so a frame may not align behind the frame before it |
 | Strict log grammar | A misread colon glued two lines into one unparsable entry | Tolerant clock shape, count from the noun not the article, self-validating verb repair |
 | Live Scryfall fuzzy lookups | Rate-limited, non-deterministic, 404s on names the log spells correctly elsewhere | Offline catalog, run vocabulary, margin gate |
+| Grammar fitted to one recording | A second capture used a dozen ordinary log forms it had never seen — including the blocker-first "X blocks Y", so blocks were invisible and blocked damage was still dealt | Those forms parse; parse coverage on that capture went from 77% to 97% |
+| Combat resolved at the next log line | Ninjutsu bounces the attacker and swaps in a ninja *before* damage; the bounced creature's damage was dealt anyway and the ninja's was not | The lines that belong to combat do not resolve it, and a creature pulled out of combat withdraws its damage |
 
-## Resolution independence
+## Layout independence
 
-`layout.py` owns the entire dependency on capture size. It finds the
-game-log pane by brightness — a near-white panel against a dark board,
-separable at any resolution — trims the scrollbar band at its right edge,
-and derives the HUD regions proportionally from the detected client area.
-Letterboxing is removed first, so a padded or windowed capture works too.
+`layout.py` owns the entire dependency on how the capture looks. That is a
+larger job than resolution, because MTGO's duel scene is not a fixed
+picture: panes are dockable and resizable, the whole UI can be scaled, the
+client is often not full-screen, extra zone panes can be docked beside the
+seats, and a streamed VOD wraps all of it in a facecam, a scoreboard and a
+sponsor banner. Anything measured as "x percent across the frame" is a
+guess about one recording rather than a fact about the client.
 
-Three things make this trustworthy rather than merely plausible:
+So nothing is measured that way. Every region is found from **text MTGO
+itself draws**:
 
-- **Consensus.** The pane is detected on several frames spread through the
-  clip and each edge is the median. A single frame is a poor witness: early
-  in a game the log has not overflowed, so there is no scrollbar and the
-  pane reads wider than it is.
+- **The phase bar.** A row of step labels — Untap, Upkeep, Draw, Main …
+  Cleanup — appears in every duel and nowhere else. Finding that row is both
+  the test for "is this a duel scene" and the anchor that separates the play
+  area from the margins the seat panels sit in. It replaced the old
+  duel-frame test, which read for both life totals — that is, it depended on
+  already knowing where the seats were.
+- **The seat panels.** Life is a large numeral and the player's name is
+  ordinary small text centred under the avatar. Both are searched for, in
+  both margins; the pair that sits one per half of the frame, in the same
+  column, at the same size, wins. A candidate is only believed once its life
+  box actually reads back as a number, which is what stops a scoreboard
+  ("0 – 0") or a mana pip from being adopted as a seat.
+- **The log pane.** Brightness finds candidates — but a facecam and a
+  sponsor graphic are bright too, and "the rightmost bright panel" is
+  whichever one the streamer put on the right. So every candidate is read,
+  and the one whose text scans as timestamped log lines wins. Reading it is
+  also how its text column is measured, which is what keeps the scrollbar
+  out of the crop without assuming how wide a scrollbar is.
+
+Three further things make this trustworthy rather than merely plausible:
+
+- **Consensus.** Each region is detected on several frames spread through
+  the clip and each edge is the median. A single frame is a poor witness:
+  early in a game the log has not overflowed, so there is no scrollbar and
+  the pane reads wider than it is, and a card dragged over a seat hides its
+  life total for a second.
 - **The right frames.** A league VOD spends much of its length in the deck
   editor and sideboarding, screens that carry a game log of their own in a
-  different place. Samples are filtered to duel frames first, by reading for
-  both players' life totals — a menu can show a numeral where one life total
-  would be, but only a duel shows two.
-- **Validation.** The located regions are read back before use. The log
-  pane must contain timestamped lines; the life positions must contain
-  small integers. If not, ingestion stops with a message instead of
-  producing a confident wrong log. Tested against an unrelated recording
-  with a different client arrangement, that is exactly what happens: the log
-  pane is still found, and the capture is refused rather than decoded
-  wrongly.
+  different place. Samples are filtered to duel frames first.
+- **Validation.** The located regions are read back before use. The log pane
+  must contain timestamped lines, and *both* seats must yield a life total —
+  one used to be enough, which let a layout pass while the other seat
+  pointed at a mana pip. Numerals are read by majority vote across several
+  thresholds and segmentation modes, because no single setting reads a white
+  numeral over both a dark avatar and a bright one.
 
 `layout` also measures the log's glyph height *in source pixels* and warns
 when it is below the point where OCR is dependable. Upscaling cannot add
 detail the capture never had, so this is a property of the recording, not
-of how hard the pipeline tries.
+of how hard the pipeline tries — and when nothing at all can be located, it
+distinguishes "the UI is somewhere unexpected" from "this capture is drawn
+too small to read", which call for opposite responses.
 
 ```sh
 python3 -m magic_cabt.mtgo_video layout --video match.mp4
 ```
+
+### Measured against real captures
+
+Four public league VODs, each a different arrangement, none of which the
+previous detector handled:
+
+| Capture | Arrangement | Log pane | Seats | Names |
+| --- | --- | --- | --- | --- |
+| Modern client, facecam right | client inset to 1620px, log docked right | found | 16 / 20 | Mafuhsa / MarshFlats |
+| Modern client, scaled up | extra zone panes docked beside the seats, larger UI scale | found | 20 / 16 | marcomartinelli999 / impact36inc |
+| Modern client, circular facecam over the log | facecam overlaps the log pane's lower half | found | 20 / 20 | Flexi98 / DB_ThatMillGuy |
+| Windowed client in a 1920x810 stream frame | client ~1620x650 inside overlays and a banner | refused | — | — |
+
+The fourth is the intended outcome, not a gap: its log text is about five
+source pixels tall, below what OCR can read at any magnification, and the
+pipeline says so — "recorded too small to read, whatever the frame size is"
+— rather than producing a confident wrong log.
+
+### End to end on a capture the old detector could not open
+
+Ten minutes of the first of those VODs (a Pauper league match, client inset
+to 1620px with a facecam beside it), ingested and put through all four
+checks:
+
+| | |
+| --- | --- |
+| Log entries reconstructed | 106 |
+| Parse coverage | 97% (3 unparsed, all glued by an unreadable timestamp) |
+| `verify` — log vs XMage | 78/78 states |
+| `rules` — events vs the board | 67 checked, 2 flagged (both real: MTGO printed a player's name where a card's belonged) |
+| `crosscheck` — vs the on-screen life | 152/156 readings agree (97%), 2 of which came from the HUD and are counted apart |
+| `align` — derived combat damage | 9 of 9 located in the footage: 8 confirmed, 1 corrected from the screen |
+
+Getting there turned up four defects worth naming, each found by a check
+rather than by inspection: the log crop was a few pixels narrow and clipped
+the last character of full-width lines; a dozen ordinary MTGO log forms had
+no grammar; ninjutsu's attacker swap was not modelled; and an attacker
+killed by a spell mid-combat still dealt its damage.
 
 ### Measured behaviour
 
@@ -135,7 +212,11 @@ warns before spending the time.
 
 - `ffmpeg`, `ffprobe` and `tesseract` on `PATH`, and Python `Pillow`
 - A built `Mage.Client` with the `cabtmirror` overlay, and
-  `MAGIC_CABT_CLASSPATH` pointing at its classpath
+  `MAGIC_CABT_CLASSPATH` pointing at its classpath. XMage opens its card
+  database relative to the working directory, so the JVM has to start where
+  `db/cards.h2.mv.db` lives; the verifications find that directory from the
+  classpath themselves, and say so plainly if it is missing rather than
+  reporting every library as empty
 - Network access once, to build the card catalog
 
 ## Usage
@@ -151,8 +232,10 @@ python3 -m magic_cabt.mtgo_video ingest match.mp4 --out bundle \
 # Locate inferred changes (combat damage) in the footage
 python3 -m magic_cabt.mtgo_video align bundle/game1 --video match.mp4
 
-# Verify: against XMage, and against MTGO's own on-screen life totals
+# Verify: against XMage, against the board each event happens on, and
+# against MTGO's own on-screen life totals
 python3 -m magic_cabt.mtgo_video verify bundle/game1
+python3 -m magic_cabt.mtgo_video rules bundle/game1
 python3 -m magic_cabt.mtgo_video crosscheck bundle/game1 --video match.mp4
 
 # Verify two captures of the same match decoded to the same game
@@ -166,7 +249,7 @@ python3 -m magic_cabt.mtgo_video render bundle/game1 --out replay.mp4 \
 `rebuild` re-runs parsing and simulation from a bundle's cached
 `mtgo_log.json` without redoing OCR — use it while iterating.
 
-## The three verifications
+## The four verifications
 
 **`verify` — log vs XMage.** Feeds every snapshot through XMage's real
 `MirrorStateApplier` and `GameView` and diffs turn, life, library and hand
@@ -174,12 +257,45 @@ counts, and the exact multiset of battlefield and graveyard cards. Proves
 the mirror reproduces the decoded game. It cannot prove the decoding is
 right: XMage renders whatever the log claimed.
 
+**`rules` — each event vs the board it happens on.** MTGO's log is a stream
+of assertions, and each one presupposes something about the board: a
+creature cannot be destroyed unless it is on the battlefield, a player
+cannot discard from an empty hand, a card cannot attack from a graveyard.
+This walks the game one step ahead of itself, checking each decoded event
+against the board XMage holds the moment before it.
+
+That is what catches damage the other checks structurally cannot. A missed
+"casts X" line leaves the later "X is destroyed" with nothing to destroy —
+and `verify` still passes (XMage renders what it is told) and `crosscheck`
+still passes (destroying a creature changes nobody's life). Run against the
+reference bundle it found four real decode defects that both other checks
+had passed: three log lines whose player was read as `Buz2Caldera`, and a
+spell whose target was read as `BuzzCaldera. 2` with a scrollbar glyph stuck
+to it.
+
+It reports which event types it *cannot* check as well as which it can, so
+the coverage is visible rather than assumed. What it is not: XMage is not
+being asked to play the game, so this does not prove the original match was
+legal — it proves the decoded event stream is coherent against the board the
+mirror actually built, which is where OCR and parse damage shows up.
+
 **`crosscheck` — log vs the footage's own HUD.** OCRs MTGO's on-screen life
 totals and compares them with the life the simulator derived. Independent
 evidence from the same frames, and it catches what the first check
 structurally cannot. It found two real bugs: combat damage missing entirely
 (MTGO logs no line for it), and a transformed double-faced creature keeping
 its front-face power.
+
+**`crosscheck` also corrects.** Combat damage is the one quantity the log
+does not state, and MTGO's silence goes further than that: it prints nothing
+when an attacker is killed by a spell mid-combat, so an attack it describes
+in full can still deal less than the attackers' total power. Where `align`
+cannot find the derived life anywhere in the footage, the life the screen
+settles on — before anything else that could change it — is adopted instead,
+the difference carried into every later state, and the correction recorded.
+The state is marked `lifeSource: "hud"`, and `crosscheck` counts readings
+that came from the screen apart from readings that agreed with it on their
+own, so a corrected state cannot inflate the agreement rate it fed.
 
 **`compare` — capture vs capture.** Two recordings of the same match must
 decode to the same game. This is what makes resolution independence a
@@ -200,6 +316,7 @@ bundle/
     mtgo_events.jsonl   this game's events
     summary.json
     verification.json   log vs XMage
+    rules_check.json    each event vs the board it happens on
     hud_crosscheck.json log vs MTGO's on-screen life totals
 ```
 
@@ -230,6 +347,14 @@ than resolved to whatever it resembles.
 
 - Hand contents are never known: MTGO does not log them, so hands are
   rendered face-down at the right count.
+- The stack is not modelled, so `rules` cannot check what a spell targeted:
+  a counterspell legally targets something that is on the stack rather than
+  the battlefield, and "not on the battlefield" would fire on ordinary play.
+  It checks the targets it *can* judge — a target that is a garbled version
+  of a player's name — and leaves the rest alone.
+- MTGO sometimes prints a player's name where a card's belongs. Nothing can
+  recover which card that was, so the cast is recorded, reported, and left
+  off the board rather than becoming a permanent named after a player.
 - Library counts are derived from draws and mills starting at `--deck-size`,
   not read from the client.
 - Combat damage is inferred from the attack, since MTGO logs no damage line.

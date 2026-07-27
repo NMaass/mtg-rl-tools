@@ -24,6 +24,20 @@ def probe_frame_size(video_path: str, ffprobe: str = "ffprobe") -> Tuple[int, in
     return int(width), int(height)
 
 
+def probe_duration(video_path: str, ffprobe: str = "ffprobe") -> Optional[float]:
+    """The capture's length in seconds, or None if the container omits it."""
+    proc = subprocess.run(
+        [ffprobe, "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=nk=1:nw=1", video_path],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    text = proc.stdout.decode().strip().splitlines()
+    try:
+        return float(text[0])
+    except (IndexError, ValueError):
+        return None
+
+
 def grab_frame(video_path: str, timestamp: float, out_path: str,
                ffmpeg: str = "ffmpeg") -> str:
     """Extract a single full frame, for layout detection."""

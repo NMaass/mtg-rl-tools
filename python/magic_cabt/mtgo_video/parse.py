@@ -82,6 +82,9 @@ _PATTERNS = [
         "DRAW",
         re.compile(r"^(?P<player>\S+) draws (?P<count>\S+) (?P<plural>cards?)\.?$"),
     ),
+    # "draws their next card" -- the wording MTGO uses for a draw-step draw
+    # when a replacement effect is involved. One card, whatever the phrasing.
+    ("DRAW", re.compile(r"^(?P<player>\S+) draws their next card\.?$")),
     ("MILL", re.compile(r"^(?P<player>\S+) mills (?P<cards>.+?)\.?$")),
     (
         "REVEAL",
@@ -96,16 +99,35 @@ _PATTERNS = [
         re.compile(r"^(?P<card>.+?) transforms into (?P<into>.+?)\.?$"),
     ),
     (
+        # MTGO writes this both with and without an article ("puts a
+        # triggered ability", "puts triggered ability"), and may name a
+        # target after the stack.
         "TRIGGER",
         re.compile(
-            r"^(?P<player>\S+) puts \w triggered ability from (?P<card>.+?) "
-            r"onto the stack\b.*$"
+            r"^(?P<player>\S+) puts (?:\w+ )?triggered ability from "
+            r"(?P<card>.+?) onto the stack\b.*$"
         ),
     ),
     (
+        "TRIGGER_FAILED",
+        re.compile(
+            r"^Couldn'?t put (?:\w+ )?triggered ability from (?P<card>.+?) "
+            r"on the stack\.?$"
+        ),
+    ),
+    (
+        "TRIGGER_FIZZLED",
+        re.compile(
+            r"^(?P<player>\S+?)'s [Tt]riggered ability from (?P<card>.+?) "
+            r"is removed from the stack\b.*$"
+        ),
+    ),
+    (
+        # "activates an ability of X", and also named abilities:
+        # "activates Ninjutsu ability of Moon-Circuit Hacker".
         "ACTIVATE",
         re.compile(
-            r"^(?P<player>\S+) \wctivates an ability of (?P<card>.+?)"
+            r"^(?P<player>\S+) \wctivates (?:an|the|\S+) ability of (?P<card>.+?)"
             r"(?: targeting (?P<targets>.+?))?(?: \(.*)?\.?$"
         ),
     ),
@@ -116,6 +138,14 @@ _PATTERNS = [
     (
         "BLOCK",
         re.compile(r"^(?P<player>\S+) blocks (?P<attacker>.+?) with (?P<blocker>.+?)\.?$"),
+    ),
+    (
+        # The form MTGO actually uses most: the blocker is the subject, and
+        # no player is named. Missing this made every block invisible, which
+        # meant a blocked attacker's damage was still dealt to the defending
+        # player.
+        "BLOCK",
+        re.compile(r"^(?P<blocker>[A-Z][^:]*?) blocks (?P<attacker>.+?)\.?$"),
     ),
     (
         "DAMAGE",
@@ -152,6 +182,39 @@ _PATTERNS = [
             r"^(?P<player>\S+) puts (?P<card>.+?) on top of (?P<whose>.+?) library\.?$"
         ),
     ),
+    (
+        # A permanent leaving the battlefield by a player's own effect, as
+        # opposed to "X is exiled" / "X is returned to Y's hand", which MTGO
+        # writes when something else did it.
+        "EXILE_CARD",
+        re.compile(r"^(?P<player>\S+) exiles (?P<card>.+?)"
+                   r"(?: with (?P<source>.+?))?\.?$"),
+    ),
+    (
+        # The doubled "with with" is MTGO's own, not a misread.
+        "RETURN_HAND",
+        re.compile(r"^(?P<player>\S+) returns (?P<card>.+?) to its owner'?s "
+                   r"hand(?: (?:with )+(?P<source>.+?))?\.?$"),
+    ),
+    (
+        "SCRY",
+        re.compile(r"^(?P<player>\S+) scr[yi]e?s (?P<count>\d+)"
+                   r"(?: \((?P<top>\d+) top, (?P<bottom>\d+) bottom\))?\.?$"),
+    ),
+    (
+        # Counters on permanents and players are not modelled, but the lines
+        # are recognised so they are not counted as decoding damage.
+        "COUNTERS_ON",
+        re.compile(r"^(?P<player>\S+) (?:puts|removes) (?P<count>\S+) "
+                   r"(?P<kind>.+?) counters? on (?P<target>.+?)\.?$"),
+    ),
+    ("CHOICE", re.compile(r"^Chosen mode: (?P<mode>.+?)\.?$")),
+    (
+        "CHOICE",
+        re.compile(r"^(?P<player>\S+) chooses not to use (?P<card>.+?)'?s "
+                   r"ability\.?$"),
+    ),
+    ("LEAVE", re.compile(r"^(?P<player>\S+) has left the game\.?.*$")),
     ("CONCEDE", re.compile(r"^(?P<player>\S+) has conceded\.?.*$")),
     ("WIN", re.compile(r"^(?P<player>\S+) wins the game\.?$")),
     ("LOSE_GAME", re.compile(r"^(?P<player>\S+) has lost the game\.?.*$")),

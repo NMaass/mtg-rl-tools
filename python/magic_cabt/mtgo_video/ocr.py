@@ -1,8 +1,11 @@
 """OCR of MTGO log-pane frames via tesseract."""
 
+import csv
 import os
 import re
 import subprocess
+import tempfile
+from dataclasses import dataclass
 from typing import List, Optional
 
 # MTGO log entries start with a clock timestamp like "7:07 AM:". OCR mangles
@@ -65,6 +68,85 @@ def ocr_image(
         return []
     text = proc.stdout.decode("utf-8", errors="replace")
     return [line.rstrip() for line in text.splitlines() if line.strip()]
+
+
+@dataclass(frozen=True)
+class Word:
+    """One OCR'd word and where it sat, in the coordinates of the image read."""
+
+    text: str
+    x: int
+    y: int
+    width: int
+    height: int
+    conf: float
+
+    @property
+    def right(self) -> int:
+        return self.x + self.width
+
+    @property
+    def bottom(self) -> int:
+        return self.y + self.height
+
+    def scaled(self, factor: float, dx: int = 0, dy: int = 0) -> "Word":
+        """This word in another coordinate frame."""
+        return Word(text=self.text,
+                    x=int(round(self.x / factor)) + dx,
+                    y=int(round(self.y / factor)) + dy,
+                    width=max(1, int(round(self.width / factor))),
+                    height=max(1, int(round(self.height / factor))),
+                    conf=self.conf)
+
+
+def ocr_words(
+    png_path: str,
+    tesseract: str = "tesseract",
+    psm: int = 11,
+    whitelist: Optional[str] = None,
+    min_conf: float = 0.0,
+) -> List[Word]:
+    """Every word tesseract can see, with its bounding box.
+
+    Where `ocr_image` reads a region whose meaning is already known, this
+    reads a whole frame to find out *where* things are: the phase bar, the
+    life numerals, the text column inside a panel. Position-independent, so
+    it does not care how the client's panes have been arranged.
+
+    psm 11 ("sparse text") is the mode that finds scattered UI labels; psm 12
+    adds orientation detection and picks up numerals psm 11 loses, so callers
+    that need digits usually run both.
+    """
+    png_path = os.path.realpath(png_path)
+    env = dict(os.environ)
+    env.setdefault("OMP_THREAD_LIMIT", "1")
+    with tempfile.TemporaryDirectory() as work:
+        stem = os.path.join(work, "words")
+        command = [tesseract, png_path, stem, "--psm", str(psm)]
+        if whitelist:
+            command += ["-c", "tessedit_char_whitelist=" + whitelist]
+        command += ["tsv"]
+        proc = subprocess.run(command, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, env=env)
+        if proc.returncode != 0 or not os.path.exists(stem + ".tsv"):
+            return []
+        out = []
+        with open(stem + ".tsv", newline="") as handle:
+            for row in csv.DictReader(handle, delimiter="\t",
+                                      quoting=csv.QUOTE_NONE):
+                text = (row.get("text") or "").strip()
+                if not text:
+                    continue
+                try:
+                    conf = float(row["conf"])
+                except (KeyError, TypeError, ValueError):
+                    conf = -1.0
+                if conf < min_conf:
+                    continue
+                out.append(Word(text=text, x=int(row["left"]), y=int(row["top"]),
+                                width=int(row["width"]), height=int(row["height"]),
+                                conf=conf))
+    return out
 
 
 def strip_junk(text: str) -> str:

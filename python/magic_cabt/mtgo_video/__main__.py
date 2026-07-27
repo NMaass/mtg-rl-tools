@@ -27,7 +27,7 @@ import tempfile
 from typing import Optional
 
 from .catalog import CardCatalog, DEFAULT_CATALOG, build_catalog
-from .extract import extract_log_frames, grab_frame
+from .extract import extract_log_frames, grab_frame, probe_duration
 from .layout import (
     Layout,
     detect_layout,
@@ -174,7 +174,13 @@ def sample_layout_frames(video, out_dir, start, end, count=5, at=None):
     if at is not None:
         return [grab_frame(video, at, os.path.join(out_dir, "layout_frame.png"))]
     begin = start or 0.0
-    finish = end if end is not None else begin + 300.0
+    # Sample within the footage that exists: a clip shorter than the assumed
+    # window would have most of its samples seek past the end, and ffmpeg
+    # writes no file for those.
+    finish = end
+    if finish is None:
+        duration = probe_duration(video)
+        finish = min(begin + 300.0, duration) if duration else begin + 300.0
     span = max(1.0, finish - begin)
     paths = []
     for index in range(count):
@@ -373,6 +379,22 @@ def run_verify(args):
         raise SystemExit(1)
 
 
+def run_rules(args):
+    """Check each decoded event against XMage's board at that moment."""
+    from .rules import check_bundle
+
+    classpath = args.classpath or os.environ.get("MAGIC_CABT_CLASSPATH")
+    if not classpath:
+        raise SystemExit("pass --classpath or set $MAGIC_CABT_CLASSPATH")
+    report = check_bundle(args.bundle, classpath, java=args.java, cwd=args.cwd)
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(report, f, indent=2)
+    print(json.dumps(report, indent=2))
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
 def bundle_layout(bundle: str) -> Optional[Layout]:
     """The layout recorded when this bundle was ingested, if any.
 
@@ -390,11 +412,7 @@ def bundle_layout(bundle: str) -> Optional[Layout]:
         raw = data.get("layout")
         if not raw:
             continue
-        fields = dict(raw)
-        for key in ("content", "log_pane", "life_top", "life_bottom",
-                    "name_top", "name_bottom"):
-            fields[key] = Region(**fields[key])
-        return Layout(**fields)
+        return Layout.from_dict(raw)
     return None
 
 
@@ -545,6 +563,17 @@ def build_parser():
                         help="working directory for the JVM (the Mage.Client dir)")
     verify.add_argument("--out", default=None, help="write the report here too")
     verify.set_defaults(func=run_verify)
+
+    rules = sub.add_parser(
+        "rules",
+        help="check each decoded event against XMage's board at that moment")
+    rules.add_argument("bundle")
+    rules.add_argument("--classpath", default=None)
+    rules.add_argument("--java", default="java")
+    rules.add_argument("--cwd", default=None,
+                       help="working directory for the JVM (the Mage.Client dir)")
+    rules.add_argument("--out", default=None, help="write the report here too")
+    rules.set_defaults(func=run_rules)
 
     compare_cmd = sub.add_parser(
         "compare",

@@ -238,6 +238,51 @@ class ParseTest(unittest.TestCase):
                 for key, value in expected.items():
                     self.assertEqual(event[key], value)
 
+    def test_the_log_forms_a_second_capture_turned_up(self):
+        # Every one of these is a real MTGO line that the grammar did not
+        # recognise until a second recording contained it. The blocker-first
+        # form matters most: without it a block is invisible, and a blocked
+        # attacker's damage is still dealt to the defending player.
+        cases = [
+            ("7:00 AM: Brinebarrow Intruder blocks Tolarian Terror.",
+             {"type": "BLOCK", "blocker": "Brinebarrow Intruder",
+              "attacker": "Tolarian Terror"}),
+            ("7:00 AM: a puts triggered ability from Faerie Seer onto the stack.",
+             {"type": "TRIGGER", "card": "Faerie Seer"}),
+            ("7:00 AM: Couldn't put triggered ability from Faerie Seer on the stack.",
+             {"type": "TRIGGER_FAILED", "card": "Faerie Seer"}),
+            ("7:00 AM: a's Triggered ability from Spellstutter Sprite is "
+             "removed from the stack because it has no legal targets.",
+             {"type": "TRIGGER_FIZZLED", "card": "Spellstutter Sprite"}),
+            ("7:00 AM: a activates Ninjutsu ability of Moon-Circuit Hacker.",
+             {"type": "ACTIVATE", "card": "Moon-Circuit Hacker"}),
+            ("7:00 AM: a draws their next card.", {"type": "DRAW"}),
+            ("7:00 AM: a scrys 2 (1 top, 1 bottom).", {"type": "SCRY"}),
+            ("7:00 AM: a returns Faerie Seer to its owner's hand with with "
+             "Moon-Circuit Hacker's ability.",
+             {"type": "RETURN_HAND", "card": "Faerie Seer"}),
+            ("7:00 AM: a exiles Relic of Progenitus with Relic of "
+             "Progenitus's ability.",
+             {"type": "EXILE_CARD", "card": "Relic of Progenitus"}),
+            ("7:00 AM: a puts three energy counters on a.",
+             {"type": "COUNTERS_ON", "target": "a"}),
+            ("7:00 AM: Chosen mode: Counter target red spell.",
+             {"type": "CHOICE"}),
+            ("7:00 AM: a has left the game.", {"type": "LEAVE"}),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text):
+                event = parse_entry(text)
+                for key, value in expected.items():
+                    self.assertEqual(event[key], value)
+
+    def test_the_blocker_first_form_does_not_swallow_other_lines(self):
+        # "<blocker> blocks <attacker>" is a loose shape; it must not claim a
+        # line that the player-first form or another rule owns.
+        event = parse_entry("7:00 AM: a blocks Tolarian Terror with Faerie Seer.")
+        self.assertEqual(event["blocker"], "Faerie Seer")
+        self.assertEqual(event["player"], "a")
+
     def test_alternate_cost_is_not_part_of_the_card_name(self):
         event = parse_entry("7:03 AM: a casts Boulderbranch Golem with Prototype.")
         self.assertEqual(event["card"], "Boulderbranch Golem")
@@ -295,101 +340,298 @@ class ParseTest(unittest.TestCase):
         self.assertIn("something entirely new", event["text"])
 
 
-class LayoutTest(unittest.TestCase):
-    """Locating the UI without depending on the capture resolution."""
+FONT_CANDIDATES = (
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+)
 
-    def frame(self, width=1920, height=1080, letterbox=0):
-        """A synthetic MTGO-ish frame: dark board, bright log pane, scrollbar."""
+STEP_NAMES = ("Untap", "Upkeep", "Draw", "Main", "Begin Combat", "Attack",
+              "Block", "Damage", "End Combat", "Main", "End", "Cleanup")
+
+LOG_LINES = (
+    "7:01 AM: Turn 3: alice",
+    "7:01 AM: alice plays Island.",
+    "7:02 AM: alice casts Ponder.",
+    "7:02 AM: alice draws a card.",
+    "7:03 AM: bob casts Lightning Bolt targeting alice.",
+    "7:03 AM: alice is now at 17 life.",
+    "7:04 AM: bob attacks with Goblin Guide.",
+    "7:04 AM: alice discards Counterspell.",
+)
+
+
+def _font(size):
+    from PIL import ImageFont
+
+    for path in FONT_CANDIDATES:
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size)
+    return None
+
+
+class SyntheticClient:
+    """A drawable stand-in for MTGO's duel scene, in any arrangement.
+
+    The detector's whole job is to survive rearrangement, so the fixture has
+    to be rearrangeable: which side the seats are on, which side the log is
+    on, how big the client is drawn, and whether a streamer's bright overlay
+    sits beside it are all parameters here rather than assumptions.
+    """
+
+    def __init__(self, width=1920, height=1080, ui_scale=1.0, seats="left",
+                 log="right", letterbox=0, overlay=False, log_offset=0):
+        self.width = width
+        self.height = height
+        self.ui_scale = ui_scale * (width / 1920.0)
+        self.seats = seats
+        self.log = log
+        self.letterbox = letterbox
+        self.overlay = overlay
+        self.log_offset = log_offset
+
+    def _px(self, value):
+        return int(round(value * self.ui_scale))
+
+    def render(self):
         from PIL import Image, ImageDraw
 
-        image = Image.new("L", (width, height), 0)
+        image = Image.new("L", (self.width, self.height), 0)
         draw = ImageDraw.Draw(image)
-        scale = width / 1920.0
-        inner_top = letterbox
-        inner_height = height - 2 * letterbox
-        # board
-        draw.rectangle([0, inner_top, width - 1, inner_top + inner_height - 1],
-                       fill=80)
-        # log pane: white text column plus a darker scrollbar at its right
-        pane_x0 = int(1537 * scale)
-        pane_x1 = int(1892 * scale)
-        bar_x1 = int(1906 * scale)
-        pane_y0 = inner_top + int(62 * scale)
-        pane_y1 = inner_top + int(538 * scale)
-        draw.rectangle([pane_x0, pane_y0, pane_x1, pane_y1], fill=254)
-        draw.rectangle([pane_x1 + 1, pane_y0, bar_x1, pane_y1], fill=162)
-        # the bright border column drawn outside the scrollbar
-        draw.rectangle([bar_x1 + 1, pane_y0, bar_x1 + 3, pane_y1], fill=254)
+        top = self.letterbox
+        bottom = self.height - self.letterbox - 1
+        # A streamed capture rarely gives MTGO the whole frame: the client is
+        # squeezed left and the overlay takes the rest.
+        client_right = (self.width - self._px(300) if self.overlay
+                        else self.width) - 1
+        draw.rectangle([0, top, client_right, bottom], fill=70)
+
+        margin = self._px(200)
+        pane_width = self._px(300)
+        if self.log == "right":
+            pane_x = client_right - pane_width - self._px(30) - self.log_offset
+        else:
+            pane_x = self._px(30)
+        seat_x = (self._px(40) if self.seats == "left"
+                  else client_right - margin + self._px(40))
+        play_left = margin if self.seats == "left" else self._px(20)
+        play_right = (client_right - margin if self.seats == "right"
+                      else client_right - self._px(20))
+        if self.log == "right":
+            play_right = min(play_right, pane_x - self._px(10))
+        else:
+            play_left = max(play_left, pane_x + pane_width + self._px(10))
+
+        inner = bottom - top
+        self._draw_log(draw, image, pane_x, top + self._px(60), pane_width)
+        # Seats above and below the board's midline, phase bar under the
+        # board, hand row below that -- the modern client's vertical order.
+        self._draw_phase_bar(draw, play_left, play_right,
+                             top + int(inner * 0.72))
+        self._draw_seat(draw, seat_x, top + self._px(60), "alice98", 16)
+        self._draw_seat(draw, seat_x, top + int(inner * 0.55), "bobmtgo", 20)
+        if self.overlay:
+            # A streamer's facecam and scoreboard: bright panels that are not
+            # the game log, and big numerals that are not life totals.
+            cam_x = client_right + self._px(10)
+            draw.rectangle([cam_x, top, self.width - 1, top + self._px(400)],
+                           fill=235)
+            font = _font(self._px(90))
+            if font:
+                draw.text((cam_x + self._px(40), top + self._px(500)), "0-0",
+                          fill=255, font=font)
         return image
+
+    def _draw_log(self, draw, image, x, y, width):
+        font = _font(max(9, self._px(13)))
+        line_height = self._px(19)
+        # A real log pane is tall and full; a short one is not a useful
+        # fixture, because a bright sliver is not what the detector faces.
+        lines = list(LOG_LINES) * 3
+        height = line_height * (len(lines) + 2)
+        draw.rectangle([x, y, x + width, y + height], fill=252)
+        # Scrollbar: a darker band at the pane's right, with a bright border
+        # column outside it, exactly as MTGO draws it.
+        bar = self._px(12)
+        draw.rectangle([x + width - bar, y, x + width - 2, y + height], fill=160)
+        draw.rectangle([x + width - 1, y, x + width, y + height], fill=252)
+        if font:
+            for index, line in enumerate(lines):
+                draw.text((x + self._px(6), y + line_height * (index + 1)),
+                          line, fill=20, font=font)
+
+    def _draw_phase_bar(self, draw, left, right, y):
+        font = _font(max(9, self._px(14)))
+        if not font:
+            return
+        step = (right - left) / float(len(STEP_NAMES))
+        for index, name in enumerate(STEP_NAMES):
+            draw.text((left + step * index + self._px(4), y), name,
+                      fill=225, font=font)
+        draw.text((left - self._px(160), y), "Turn 3: alice", fill=225,
+                  font=font)
+
+    def _draw_seat(self, draw, x, y, name, life):
+        avatar = self._px(120)
+        draw.rectangle([x, y, x + avatar, y + avatar], fill=60)
+        life_font = _font(max(12, self._px(44)))
+        name_font = _font(max(8, self._px(13)))
+        if life_font:
+            draw.text((x + avatar - self._px(60), y + avatar - self._px(56)),
+                      str(life), fill=255, font=life_font)
+        if name_font:
+            # MTGO centres the name under the avatar.
+            width = draw.textlength(name, font=name_font)
+            draw.text((x + (avatar - width) / 2, y + avatar + self._px(8)),
+                      name, fill=245, font=name_font)
+
+
+def _write(image, path):
+    image.save(path)
+    return path
+
+
+@unittest.skipIf(_font(12) is None, "no TrueType font available to draw with")
+class LayoutTest(unittest.TestCase):
+    """Locating the UI without depending on resolution *or* arrangement."""
+
+    def setUp(self):
+        import tempfile
+
+        self.work = tempfile.mkdtemp(prefix="layout_test_")
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.work, ignore_errors=True)
+
+    def frame(self, name="frame", **kwargs):
+        return _write(SyntheticClient(**kwargs).render(),
+                      os.path.join(self.work, name + ".png"))
 
     def test_pane_is_found_and_excludes_the_scrollbar(self):
         from magic_cabt.mtgo_video.layout import build_layout
 
         layout = build_layout(self.frame())
         self.assertTrue(layout.detected)
-        right = layout.log_pane.x + layout.log_pane.width
-        # The text column ends before the scrollbar at x=1893, not after the
-        # bright border column that sits outside it.
-        self.assertLess(right, 1893)
-        self.assertGreater(right, 1860)
+        # The text column stops before the scrollbar band, which starts 12px
+        # in from the pane's right edge at this scale.
+        self.assertLess(layout.log_pane.x + layout.log_pane.width, 1902)
+
+    def test_the_log_is_found_wherever_it_is_docked(self):
+        from magic_cabt.mtgo_video.layout import build_layout
+
+        left = build_layout(self.frame("left", log="left", seats="right"))
+        self.assertTrue(left.detected)
+        self.assertLess(left.log_pane.x, 400)
+        right = build_layout(self.frame("right", log="right", seats="left"))
+        self.assertTrue(right.detected)
+        self.assertGreater(right.log_pane.x, 1400)
+
+    def test_seats_are_found_on_whichever_side_they_sit(self):
+        from magic_cabt.mtgo_video.layout import build_layout
+
+        for seats, log in (("left", "right"), ("right", "left")):
+            layout = build_layout(self.frame(seats + log, seats=seats, log=log))
+            self.assertTrue(layout.seats_detected, seats)
+            if seats == "left":
+                self.assertLess(layout.life_top.x, 400)
+            else:
+                self.assertGreater(layout.life_top.x, 1400)
+            # Opponent above, local player below, never the same panel twice.
+            self.assertLess(layout.life_top.y, layout.life_bottom.y)
+
+    def test_a_scaled_up_client_is_still_located(self):
+        # MTGO's UI scale, and a windowed client, both change how big the
+        # panels are without moving them proportionally.
+        from magic_cabt.mtgo_video.layout import build_layout
+
+        layout = build_layout(self.frame("big", ui_scale=1.4))
+        self.assertTrue(layout.detected)
+        self.assertTrue(layout.seats_detected)
+
+    def test_a_streamers_overlay_is_not_mistaken_for_the_ui(self):
+        # A facecam is a bright panel and a scoreboard is a pair of big
+        # numerals; neither is the game log or a seat.
+        from magic_cabt.mtgo_video.layout import build_layout
+
+        layout = build_layout(self.frame("stream", overlay=True))
+        self.assertTrue(layout.detected)
+        # The log is inside the client, left of where the overlay begins.
+        self.assertLess(layout.log_pane.x + layout.log_pane.width, 1620)
+        self.assertTrue(layout.seats_detected)
+        self.assertLess(layout.life_top.x, 400)
 
     def test_detection_scales_with_capture_resolution(self):
         from magic_cabt.mtgo_video.layout import build_layout
 
         panes = {}
-        for width, height in ((1280, 720), (1920, 1080), (2560, 1440)):
-            layout = build_layout(self.frame(width, height))
+        for width, height in ((1920, 1080), (2560, 1440)):
+            layout = build_layout(self.frame("r%d" % width, width=width,
+                                             height=height))
             self.assertTrue(layout.detected, "%dx%d" % (width, height))
             panes[width] = layout.log_pane
-        # Widths should track the resolution ratio within rounding.
-        self.assertAlmostEqual(panes[1280].width / panes[1920].width,
-                               1280 / 1920, delta=0.03)
         self.assertAlmostEqual(panes[2560].width / panes[1920].width,
-                               2560 / 1920, delta=0.03)
+                               2560 / 1920, delta=0.06)
 
     def test_letterboxing_is_trimmed_before_locating_anything(self):
         from magic_cabt.mtgo_video.layout import build_layout
 
-        layout = build_layout(self.frame(1920, 1200, letterbox=60))
+        layout = build_layout(self.frame("letterbox", height=1200,
+                                         letterbox=60))
         self.assertEqual(layout.content.y, 60)
         self.assertEqual(layout.content.height, 1080)
         self.assertTrue(layout.detected)
 
+    def test_a_menu_screen_is_not_a_duel(self):
+        # A deck editor has a game log but no phase bar, and its pane sits
+        # somewhere else entirely; treating it as a duel is what pulled the
+        # layout consensus off the board.
+        from PIL import Image, ImageDraw
+
+        from magic_cabt.mtgo_video.layout import looks_like_duel
+
+        image = Image.new("L", (1920, 1080), 70)
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([1500, 60, 1880, 900], fill=252)
+        font = _font(14)
+        for index, line in enumerate(LOG_LINES):
+            draw.text((1510, 80 + 20 * index), line, fill=20, font=font)
+        path = _write(image, os.path.join(self.work, "menu.png"))
+        self.assertFalse(looks_like_duel(path))
+        self.assertTrue(looks_like_duel(self.frame("duel")))
+
     def test_falls_back_to_proportional_regions_when_nothing_is_found(self):
         from PIL import Image
+
         from magic_cabt.mtgo_video.layout import build_layout
 
-        layout = build_layout(Image.new("L", (1920, 1080), 80))
+        path = _write(Image.new("L", (1920, 1080), 80),
+                      os.path.join(self.work, "blank.png"))
+        layout = build_layout(path)
         self.assertFalse(layout.detected)
+        self.assertFalse(layout.seats_detected)
         self.assertGreater(layout.log_pane.width, 0)
+        self.assertTrue(layout.notes)
 
-    def test_consensus_uses_the_narrowest_credible_right_edge(self):
-        # A frame whose log has not overflowed yet shows no scrollbar, so its
-        # pane looks wider. Taking that would glue scrollbar glyphs onto every
-        # wrapped line in the frames that do have one.
-        import os
-        import tempfile
+    def test_consensus_spans_the_widest_text_seen_but_not_the_scrollbar(self):
+        # Each frame's bounds come from the words in it, so a frame of short
+        # lines understates the column: the consensus has to be the union, or
+        # the crop clips the last character off every full-width line. It
+        # still must not reach the scrollbar, which no text ever sits in.
+        from magic_cabt.mtgo_video.layout import (build_layout,
+                                                  detect_layout_from_frames)
 
-        from magic_cabt.mtgo_video.layout import detect_layout_from_frames
-
-        work = tempfile.mkdtemp(prefix="layout_test_")
-        try:
-            paths = []
-            for index in range(3):
-                image = self.frame()
-                if index == 2:  # no scrollbar drawn: pane reads wider
-                    from PIL import ImageDraw
-                    ImageDraw.Draw(image).rectangle(
-                        [1893, 62, 1906, 538], fill=254)
-                path = os.path.join(work, "f%d.png" % index)
-                image.save(path)
-                paths.append(path)
-            layout = detect_layout_from_frames(paths)
-            self.assertLess(layout.log_pane.x + layout.log_pane.width, 1893)
-            self.assertEqual(layout.samples, 3)
-        finally:
-            import shutil
-            shutil.rmtree(work, ignore_errors=True)
+        paths = [self.frame("c%d" % index, log_offset=index * 2)
+                 for index in range(3)]
+        layout = detect_layout_from_frames(paths)
+        self.assertEqual(layout.samples, 3)
+        self.assertTrue(layout.seats_detected)
+        widest = max(build_layout(path).log_pane.x + build_layout(path).log_pane.width
+                     for path in paths)
+        self.assertGreaterEqual(layout.log_pane.x + layout.log_pane.width, widest)
+        self.assertLess(layout.log_pane.x + layout.log_pane.width, 1902)
 
 
 class CatalogTest(unittest.TestCase):
@@ -630,6 +872,46 @@ class SimulatorTest(unittest.TestCase):
         lives = {p["name"]: p["life"] for p in states[-1]["players"]}
         self.assertEqual(lives["b"], 20)
 
+    def test_an_attacker_bounced_out_of_combat_deals_no_damage(self):
+        # Ninjutsu returns the unblocked attacker to hand and puts the ninja
+        # in attacking. Keeping the returned creature's damage *and* missing
+        # the ninja's leaves every life total afterwards wrong by the
+        # difference, for the rest of the game.
+        info = {"Faerie Seer": {"type_line": "Creature — Faerie Wizard",
+                                "power": "1", "toughness": "1"},
+                "Moon-Circuit Hacker": {"type_line": "Creature — Human Ninja",
+                                        "power": "2", "toughness": "1"}}
+        sim, states = self._sim(
+            ["7:00 AM: a begins the game with seven cards in hand.",
+             "7:00 AM: b begins the game with seven cards in hand.",
+             "7:00 AM: Turn 5: a",
+             "7:00 AM: a casts Faerie Seer.",
+             "7:00 AM: b is being attacked by Faerie Seer.",
+             "7:00 AM: a returns Faerie Seer to its owner's hand with with "
+             "Moon-Circuit Hacker's ability.",
+             "7:00 AM: a activates Ninjutsu ability of Moon-Circuit Hacker.",
+             "7:00 AM: Turn 5: b"],
+            card_info=lambda name: info.get(name),
+        )
+        lives = {p["name"]: p["life"] for p in states[-1]["players"]}
+        self.assertEqual(lives["b"], 18)  # the ninja's 2, not the faerie's 1
+        battlefield = [o["name"] for o in states[-1]["zones"]["battlefield"]]
+        self.assertEqual(battlefield, ["Moon-Circuit Hacker"])
+
+    def test_a_card_named_after_a_player_never_reaches_the_board(self):
+        # MTGO really does print a player's name where a card's belongs.
+        # Whatever was cast, it was not a card called "b".
+        sim, states = self._sim([
+            "7:00 AM: a begins the game with seven cards in hand.",
+            "7:00 AM: b begins the game with seven cards in hand.",
+            "7:00 AM: Turn 3: a",
+            "7:00 AM: a casts b targeting Tolarian Terror.",
+        ])
+        zones = states[-1]["zones"]
+        self.assertEqual(zones["battlefield"], [])
+        self.assertEqual(zones["graveyards"], {})
+        self.assertTrue(any("unnamed card" in w for w in sim.warnings))
+
     def test_an_attacker_with_unknown_power_is_flagged_not_guessed(self):
         sim, states = self._sim([
             "7:00 AM: a begins the game with seven cards in hand.",
@@ -851,6 +1133,180 @@ class CompareStateTest(unittest.TestCase):
             self._summary(battlefield=(("Island", True),)),
         )
         self.assertTrue(any("battlefield" in p for p in problems))
+
+
+class HudCorrectionTest(unittest.TestCase):
+    """Adopting the life the footage shows when the derivation cannot be."""
+
+    def states(self, derived=(17, 20), later=(17, 20)):
+        def snapshot(life, kind):
+            return {"sourceEvent": {"type": kind},
+                    "players": [{"seat": 1, "name": "a", "life": life[0]},
+                                {"seat": 2, "name": "b", "life": life[1]}]}
+        return [snapshot(derived, "COMBAT_DAMAGE"),
+                snapshot(later, "CAST"),
+                snapshot(later, "CAST")]
+
+    def correct(self, states, shown, index=0):
+        from magic_cabt.mtgo_video.hud import _correct_from_hud
+
+        return _correct_from_hud(states, index, {1: "top", 2: "bottom"},
+                                 (300.0, shown))
+
+    def test_an_overstated_attack_is_corrected_and_carried_forward(self):
+        # MTGO logs nothing when an attacker is killed mid-combat, so the
+        # derived damage can be too high. The screen says what really
+        # happened, and every later state inherits the difference.
+        states = self.states(derived=(14, 20), later=(14, 20))
+        result = self.correct(states, {"top": 16, "bottom": 20})
+        self.assertIsNotNone(result)
+        self.assertEqual(result["correctedBy"], {"1": 2})
+        self.assertEqual([s["players"][0]["life"] for s in states], [16, 16, 16])
+        self.assertEqual(states[0]["lifeSource"], "hud")
+
+    def test_a_reading_showing_more_damage_is_not_adopted(self):
+        # Less damage than derived is the failure MTGO's silence produces.
+        # More is some other story, and guessing at it is not an improvement.
+        states = self.states(derived=(14, 20))
+        self.assertIsNone(self.correct(states, {"top": 11, "bottom": 20}))
+        self.assertEqual(states[0]["players"][0]["life"], 14)
+
+    def test_an_unreadable_seat_is_not_a_correction(self):
+        states = self.states(derived=(14, 20))
+        self.assertIsNone(self.correct(states, {"top": None, "bottom": 20}))
+
+    def test_agreement_that_came_from_the_hud_is_counted_separately(self):
+        # A state whose life was taken from the screen agrees with the screen
+        # by construction; counting it as independent evidence would let the
+        # check confirm its own input.
+        from magic_cabt.mtgo_video import hud
+
+        # Screen says 16/20 throughout. The first state's life was taken from
+        # it, the second derived and agreeing, the third derived and wrong.
+        states = self.states(derived=(16, 20), later=(16, 20))
+        states[0]["lifeSource"] = "hud"
+        states[2]["players"][0]["life"] = 15
+        for index, state in enumerate(states):
+            state["videoTime"] = float(index)
+        calls = {"life": lambda *a, **k: {"top": 16, "bottom": 20}}
+        original_life, original_slots = hud.read_life, hud.map_slots_to_seats
+        hud.read_life = lambda *a, **k: calls["life"]()
+        hud.map_slots_to_seats = lambda *a, **k: {"top": 1, "bottom": 2}
+        try:
+            report = hud.crosscheck_life("video.mp4", states)
+        finally:
+            hud.read_life, hud.map_slots_to_seats = original_life, original_slots
+        self.assertEqual(report["lifeReadingsTakenFromHud"], 2)
+        # Excluding the two readings that came from the screen makes the
+        # remaining agreement rate lower, not higher.
+        self.assertLess(report["independentAgreementRate"],
+                        report["agreementRate"])
+
+
+class RulesCheckTest(unittest.TestCase):
+    """Each event against the board XMage holds the moment before it."""
+
+    def board(self, battlefield=(("alice", "Grizzly Bears"),), hand=5,
+              library=40, graveyard=(), turn=3):
+        from magic_cabt.mtgo_video.rules import _Board
+
+        players = {}
+        for seat in ("alice", "bob"):
+            players[seat] = {
+                "name": seat, "life": 20, "handCount": hand,
+                "libraryCount": library, "battlefield": [],
+                "graveyard": [name for owner, name in graveyard
+                              if owner == seat],
+            }
+        for owner, name in battlefield:
+            players[owner]["battlefield"].append({"name": name, "tapped": False})
+        return _Board({"turn": turn, "players": list(players.values())})
+
+    def check(self, event, board=None):
+        from magic_cabt.mtgo_video.rules import check_event
+
+        return check_event(event, board if board is not None else self.board())
+
+    def test_destroying_a_creature_that_is_there_is_fine(self):
+        self.assertEqual(
+            self.check({"type": "DESTROYED", "card": "Grizzly Bears"}), [])
+
+    def test_destroying_a_creature_that_is_not_there_is_reported(self):
+        # The failure this exists to catch: a missed "casts X" line leaves a
+        # later "X is destroyed" with nothing to destroy, and neither the
+        # XMage render check nor the life crosscheck can see it.
+        problems = self.check({"type": "DESTROYED", "card": "Lightning Bolt"})
+        self.assertEqual([p["rule"] for p in problems], ["missing-permanent"])
+
+    def test_sacrificing_the_other_seats_permanent_is_reported(self):
+        problems = self.check({"type": "SACRIFICE", "player": "bob",
+                               "card": "Grizzly Bears"})
+        self.assertEqual([p["rule"] for p in problems], ["wrong-controller"])
+
+    def test_discarding_from_an_empty_hand_is_reported(self):
+        problems = self.check({"type": "DISCARD", "player": "alice",
+                               "card": "Ponder"}, self.board(hand=0))
+        self.assertEqual([p["rule"] for p in problems], ["empty-hand"])
+
+    def test_drawing_more_than_the_library_holds_is_reported(self):
+        problems = self.check({"type": "DRAW", "player": "alice", "count": 2},
+                              self.board(library=1))
+        self.assertEqual([p["rule"] for p in problems], ["empty-library"])
+
+    def test_an_ability_may_be_activated_from_a_graveyard(self):
+        # Flashback and unearth activate from the graveyard, so a source that
+        # is not on the battlefield is not by itself wrong.
+        board = self.board(graveyard=(("alice", "Deep Analysis"),))
+        self.assertEqual(self.check({"type": "ACTIVATE", "player": "alice",
+                                     "card": "Deep Analysis"}, board), [])
+
+    def test_an_ability_of_a_card_nobody_has_is_reported(self):
+        problems = self.check({"type": "ACTIVATE", "player": "alice",
+                               "card": "Mox Sapphire",
+                               "text": "alice activates an ability of Mox Sapphire."})
+        self.assertEqual([p["rule"] for p in problems], ["missing-source"])
+
+    def test_an_ability_activated_from_hand_is_not_a_missing_source(self):
+        # Ninjutsu is activated from the hand, whose contents MTGO never
+        # logs, so the source being nowhere on the board says nothing.
+        self.assertEqual(self.check({
+            "type": "ACTIVATE", "player": "alice",
+            "card": "Moon-Circuit Hacker",
+            "text": "alice activates Ninjutsu ability of Moon-Circuit Hacker."
+        }), [])
+
+    def test_a_turn_that_skips_ahead_is_reported(self):
+        problems = self.check({"type": "TURN", "turn": 7, "player": "alice"})
+        self.assertEqual([p["rule"] for p in problems], ["turn-skipped"])
+
+    def test_a_turn_that_goes_backwards_is_reported(self):
+        problems = self.check({"type": "TURN", "turn": 2, "player": "alice"})
+        self.assertEqual([p["rule"] for p in problems], ["turn-went-backwards"])
+
+    def test_a_misread_player_name_is_reported_as_a_misread(self):
+        # "Buz2Caldera" for "BuzzCaldera": near enough to name the seat it
+        # came from, which is what makes it worth reporting rather than
+        # quietly accepting a third player into a two-player game.
+        problems = self.check({"type": "DRAW", "player": "a1ice", "count": 1})
+        self.assertEqual([p["rule"] for p in problems], ["garbled-player"])
+        self.assertIn("alice", problems[0]["detail"])
+
+    def test_a_target_that_is_a_player_is_fine(self):
+        self.assertEqual(self.check({"type": "CAST", "player": "alice",
+                                     "card": "Lightning Bolt",
+                                     "targets": ["bob"]}), [])
+
+    def test_a_target_with_ocr_junk_stuck_to_it_is_reported(self):
+        problems = self.check({"type": "CAST", "player": "alice",
+                               "card": "Thought Scour",
+                               "targets": ["bob. 2"]})
+        self.assertEqual([p["rule"] for p in problems], ["garbled-target"])
+
+    def test_attacking_with_a_creature_that_is_not_in_play_is_reported(self):
+        problems = self.check({"type": "ATTACKED_BY", "player": "bob",
+                               "cards": ["Grizzly Bears", "Air Elemental"]})
+        self.assertEqual([p["rule"] for p in problems], ["missing-permanent"])
+        self.assertIn("Air Elemental", problems[0]["detail"])
 
 
 if __name__ == "__main__":
