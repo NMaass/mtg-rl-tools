@@ -134,6 +134,27 @@ Three further things make this trustworthy rather than merely plausible:
   thresholds and segmentation modes, because no single setting reads a white
   numeral over both a dark avatar and a bright one.
 
+### One thing that does not work: averaging frames
+
+The obvious way to lower that floor is the standard video-OCR trick: several
+consecutive frames of the same still text are the same picture plus
+independent noise, so averaging N of them cuts the noise by about √N. It was
+built, measured, and removed.
+
+On this kind of footage there is no noise to average. A modern codec spends
+no bits re-encoding a region that has not changed, and the log pane between
+scrolls has not: measured on a 720p re-encode, **eleven of eleven consecutive
+frame pairs were bit-identical** in the pane. Averaging identical frames
+returns the same frame. The measured effect was slightly negative — 191 log
+entries became 186 — because the frames consumed by each composite would
+otherwise have been separate sightings for the reconstruction's vote.
+
+The redundancy that *does* exist is across scroll positions, not across
+frames within one, and the reconstruction already takes it at the text level.
+Pixel-level compositing would pay on a source with genuine per-frame noise —
+an analog capture, a camera pointed at a screen — and not on a screen
+recording of a deterministic renderer.
+
 `layout` also measures the log's glyph height *in source pixels* and warns
 when it is below the point where OCR is dependable. Upscaling cannot add
 detail the capture never had, so this is a property of the recording, not

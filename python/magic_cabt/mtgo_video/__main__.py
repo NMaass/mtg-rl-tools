@@ -250,7 +250,7 @@ def run_ingest(args):
     layout, layout_check = resolve_layout(args, args.out)
     frames = extract_log_frames(
         args.video, frames_dir, start=args.start, end=args.end,
-        fps=args.fps, region=layout.log_pane, stack=args.stack,
+        fps=args.fps, region=layout.log_pane,
     )
     print("      %d frames" % len(frames), file=sys.stderr)
 
@@ -576,10 +576,6 @@ def build_parser():
                         help="skip detection; scale the reference layout instead")
     ingest.add_argument("--layout-frame", type=float, default=None,
                         help="video seconds to sample for layout detection")
-    ingest.add_argument("--stack", type=int, default=1,
-                        help="average this many consecutive frames into each "
-                             "OCR frame; cuts compression noise on a capture "
-                             "whose text is marginal")
     ingest.add_argument("--dump-ocr", action="store_true",
                         help="also write the raw per-frame OCR readings")
     ingest.add_argument("--layout-samples", type=int, default=5,
