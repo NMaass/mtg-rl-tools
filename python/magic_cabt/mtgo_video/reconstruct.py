@@ -26,6 +26,9 @@ _TAIL_JUNK_RE = re.compile(r"(?: [a-z]{1,2})+$")
 # holds ~18 entries, so anything beyond a couple of pane-heights is a false
 # anchor -- game 2's opening lines look almost exactly like game 1's.
 _TAIL_WINDOW = 36
+# How far behind the previous frame's anchor a new frame may still align,
+# to absorb a line or two of jitter without letting it slip a whole pane.
+_ANCHOR_SLACK = 6
 
 
 class Entry(NamedTuple):
@@ -156,25 +159,42 @@ def _merge_gap(tail_gap: List[Entry], frame_gap: List[Entry],
     return out
 
 
-def merge_windows(tail: List[Entry], frame: List[Entry]) -> List[Entry]:
+def merge_windows(tail: List[Entry], frame: List[Entry]):
+    """Merge a frame's window into the tail; also report where it anchored.
+
+    The anchor is where this frame's first line landed in the tail. It
+    matters because a game log is full of near-identical stretches ("Turn N:
+    X" / "X draws a card." / "X plays Island." repeats every turn), and a
+    plain sequence match will happily lock onto the wrong occurrence of one
+    -- duplicating or swallowing a whole pane's worth of lines. The pane only
+    ever scrolls forward, so the caller uses the anchor to stop the next
+    frame from aligning behind this one.
+    """
     sm = difflib.SequenceMatcher(
         None, [e.norm for e in tail], [e.norm for e in frame], autojunk=False
     )
+    blocks = sm.get_matching_blocks()  # ends with a terminal size-0 block
+    real = [b for b in blocks if b.size > 0]
+    anchor = max(0, real[0].a - real[0].b) if real else len(tail)
+
     out: List[Entry] = []
     pa = pb = 0
-    for block in sm.get_matching_blocks():  # ends with a terminal size-0 block
+    for block in blocks:
         out.extend(_merge_gap(tail[pa:block.a], frame[pb:block.b],
                               at_end=block.a >= len(tail)))
         for k in range(block.size):
             out.append(_pick(tail[block.a + k], frame[block.b + k]))
         pa, pb = block.a + block.size, block.b + block.size
-    return out
+    return out, anchor
 
 
 class LogReconstructor:
     def __init__(self):
         self._entries: List[Entry] = []
         self._frame_index = 0
+        # Where the previous frame's window aligned. The pane scrolls one
+        # way, so the next frame cannot align meaningfully behind it.
+        self._anchor = 0
 
     def finalize(self) -> List[Entry]:
         return collapse_duplicates(self._entries)
@@ -203,8 +223,12 @@ class LogReconstructor:
         if not frame:
             return 0
 
-        base = max(0, len(self._entries) - _TAIL_WINDOW)
+        # Look back from wherever the last frame anchored, minus a little
+        # slack for jitter, and never further than one window.
+        base = max(0, len(self._entries) - _TAIL_WINDOW,
+                   self._anchor - _ANCHOR_SLACK)
         before = len(self._entries)
-        merged = merge_windows(self._entries[base:], frame)
+        merged, anchor = merge_windows(self._entries[base:], frame)
         self._entries = self._entries[:base] + merged
+        self._anchor = base + anchor
         return len(self._entries) - before

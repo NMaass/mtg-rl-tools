@@ -14,8 +14,8 @@ from typing import List, Optional
 # and "AM" as "AN", "AWM", "Alvi", "4M". Only the shape -- one or two digits,
 # a separator, two digits, an AM/PM-ish token, a colon -- is dependable, and
 # that shape is distinctive enough not to match ordinary log text.
-_TS = (r"[\dOlI|/t]{1,2}\s*[:.,;\-\d]?\s*[\dO]{2}\s*"
-       r"[AP4/][A-Za-z]{0,3}\s*[:;.,]")
+_TS = (r"[\dOlI|/t]{1,2}\s*[^\sA-Za-z]?\s*[\dO]{2}\s*"
+       r"[AP4/][A-Za-z]{0,3}\s*[^\sA-Za-z0-9]")
 TIMESTAMP_RE = re.compile(r"^\s*" + _TS + r"\s*")
 INLINE_TIMESTAMP_RE = re.compile(r"\s+(?=" + _TS + r"\s)")
 

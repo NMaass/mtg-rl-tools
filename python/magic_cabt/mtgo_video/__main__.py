@@ -38,11 +38,23 @@ from .games import split_games, game_is_complete, discover_players
 from .ocr import ocr_image, lines_to_entries
 from .parse import parse_log
 from .reconstruct import LogReconstructor
-from .regions import Region, LOG_PANE_1080
+from .regions import Region
 from .state import GameSimulator
 
 _CARD_FIELDS = ("card", "into", "counter", "source", "attacker", "blocker")
 _CARD_LIST_FIELDS = ("cards", "targets")
+
+
+def _canonical_player(name, players, cutoff=0.7):
+    """Map an OCR'd player name onto the match's known players."""
+    import difflib
+
+    best, score = name, cutoff
+    for known in players:
+        ratio = difflib.SequenceMatcher(None, name.lower(), known.lower()).ratio()
+        if ratio >= score:
+            best, score = known, ratio
+    return best
 
 
 def correct_events(events, catalog, players=()):
@@ -91,6 +103,12 @@ def correct_events(events, catalog, players=()):
             name = get(event, field, i)
             if not is_player(name):
                 put(event, field, i, catalog.canonical_name(name))
+        # Player names are OCR'd too ("golubtsoy", "BurzCaldera"). Resolve
+        # them here rather than only inside the simulator, so the event log
+        # itself is canonical and two captures of one match can be compared.
+        for field in ("player", "target", "owner", "whose"):
+            if field in event:
+                event[field] = _canonical_player(event[field], players)
     return events
 
 
@@ -184,6 +202,8 @@ def resolve_layout(args, out_dir):
             "--layout-frame." % "; ".join(check["problems"]))
     print("      layout validated: %d timestamped lines, life %s"
           % (check["logTimestamps"], check["life"]), file=sys.stderr)
+    for warning in check.get("warnings", ()):
+        print("      WARNING: %s" % warning, file=sys.stderr)
     return layout, check
 
 
@@ -209,6 +229,13 @@ def run_ingest(args):
     readable = sum(1 for entries in per_frame if entries)
     print("      %d/%d frames yielded log entries" % (readable, len(per_frame)),
           file=sys.stderr)
+
+    if args.dump_ocr:
+        # The raw per-frame readings, so a reconstruction difference between
+        # two captures can be replayed offline instead of re-OCR'd.
+        with open(os.path.join(args.out, "ocr_frames.json"), "w") as f:
+            json.dump([{"time": t, "entries": e}
+                       for (t, _), e in zip(frames, per_frame)], f)
 
     print("[3/6] merging log windows...", file=sys.stderr)
     rec = LogReconstructor()
@@ -458,6 +485,8 @@ def build_parser():
                         help="skip detection; scale the reference layout instead")
     ingest.add_argument("--layout-frame", type=float, default=None,
                         help="video seconds to sample for layout detection")
+    ingest.add_argument("--dump-ocr", action="store_true",
+                        help="also write the raw per-frame OCR readings")
     ingest.add_argument("--hero", default=None,
                         help="local player name (perspective for the mirror)")
     ingest.add_argument("--match-id", default="mtgo-video")

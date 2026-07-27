@@ -124,6 +124,23 @@ class ReconstructTest(unittest.TestCase):
                   "7:00 AM: a casts Brainstorm."])
         self.assertNotIn("7:05 AM: b joined the game.", rec.entries[:-1])
 
+    def test_repeating_turn_sequences_do_not_shift_the_alignment(self):
+        # A game log repeats itself every turn, which a plain sequence match
+        # can lock onto at the wrong occurrence -- duplicating or swallowing
+        # a whole pane of lines. The pane only scrolls forward, so alignment
+        # must not slip backwards into an earlier identical stretch.
+        def turn(n, player):
+            return ["7:0%d AM: Turn %d: %s" % (n, n, player),
+                    "7:0%d AM: %s draws a card." % (n, player),
+                    "7:0%d AM: %s plays Island." % (n, player)]
+
+        log = turn(1, "alice") + turn(2, "bob") + turn(3, "alice")
+        rec = LogReconstructor()
+        # Slide a 4-line pane over the log, one line at a time.
+        for start in range(0, len(log) - 3):
+            rec.feed(log[start:start + 4], timestamp=float(start))
+        self.assertEqual(rec.entries, log)
+
     def test_normalize_ignores_timestamp_and_punctuation(self):
         self.assertEqual(normalize("7:07 AM: a plays Island."),
                          normalize("/:07 AN: a plays Island"))
