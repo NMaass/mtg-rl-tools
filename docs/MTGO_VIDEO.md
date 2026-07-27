@@ -75,16 +75,24 @@ separable at any resolution — trims the scrollbar band at its right edge,
 and derives the HUD regions proportionally from the detected client area.
 Letterboxing is removed first, so a padded or windowed capture works too.
 
-Two things make this trustworthy rather than merely plausible:
+Three things make this trustworthy rather than merely plausible:
 
 - **Consensus.** The pane is detected on several frames spread through the
   clip and each edge is the median. A single frame is a poor witness: early
   in a game the log has not overflowed, so there is no scrollbar and the
   pane reads wider than it is.
+- **The right frames.** A league VOD spends much of its length in the deck
+  editor and sideboarding, screens that carry a game log of their own in a
+  different place. Samples are filtered to duel frames first, by reading for
+  both players' life totals — a menu can show a numeral where one life total
+  would be, but only a duel shows two.
 - **Validation.** The located regions are read back before use. The log
   pane must contain timestamped lines; the life positions must contain
   small integers. If not, ingestion stops with a message instead of
-  producing a confident wrong log.
+  producing a confident wrong log. Tested against an unrelated recording
+  with a different client arrangement, that is exactly what happens: the log
+  pane is still found, and the capture is refused rather than decoded
+  wrongly.
 
 `layout` also measures the log's glyph height *in source pixels* and warns
 when it is below the point where OCR is dependable. Upscaling cannot add
