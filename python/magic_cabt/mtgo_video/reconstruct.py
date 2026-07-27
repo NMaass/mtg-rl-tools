@@ -134,6 +134,45 @@ def collapse_duplicates(entries: List[Entry], window: int = 4,
     return out
 
 
+def collapse_repeated_blocks(entries: List[Entry], min_length: int = 3,
+                             max_length: int = 30,
+                             threshold: float = 0.86) -> List[Entry]:
+    """Fold a whole run of lines that got recorded twice.
+
+    If a frame is noisy enough that none of its lines match the tail, the
+    entire window is appended as new and a pane's worth of the log appears
+    twice over. That is not a run of identical lines but a repeated
+    *sequence*, so the single-line rules cannot see it.
+
+    The same evidence settles it: the pane holds about eighteen lines, so a
+    genuinely repeated stretch would have had its two copies on screen
+    together at some point. Two copies that never shared a frame are one
+    stretch recorded twice.
+    """
+    out: List[Entry] = []
+    index = 0
+    while index < len(entries):
+        remaining = (len(entries) - index) // 2
+        span = 0
+        for length in range(min(max_length, remaining), min_length - 1, -1):
+            first = entries[index:index + length]
+            second = entries[index + length:index + 2 * length]
+            if all(_similar(a.norm, b.norm, threshold)
+                   for a, b in zip(first, second)) and not any(
+                       set(a.frames) & set(b.frames)
+                       for a, b in zip(first, second)):
+                span = length
+                break
+        if span:
+            out.extend(_pick(entries[index + k], entries[index + span + k])
+                       for k in range(span))
+            index += 2 * span
+        else:
+            out.append(entries[index])
+            index += 1
+    return out
+
+
 def limit_repeats(entries: List[Entry], threshold: float = 0.9) -> List[Entry]:
     """Cap a run of identical lines at how many were ever on screen at once.
 
@@ -230,7 +269,8 @@ class LogReconstructor:
         self._anchor = 0
 
     def finalize(self) -> List[Entry]:
-        return limit_repeats(collapse_duplicates(self._entries))
+        entries = collapse_repeated_blocks(self._entries)
+        return limit_repeats(collapse_duplicates(entries))
 
     @property
     def entries(self) -> List[str]:

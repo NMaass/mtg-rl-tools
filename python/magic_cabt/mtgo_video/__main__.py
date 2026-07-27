@@ -32,6 +32,7 @@ from .layout import (
     Layout,
     detect_layout,
     detect_layout_from_frames,
+    select_duel_frames,
     validate_layout,
 )
 from .games import split_games, game_is_complete, discover_players
@@ -186,20 +187,31 @@ def sample_layout_frames(video, out_dir, start, end, count=5, at=None):
 def resolve_layout(args, out_dir):
     """Locate the MTGO UI in this capture, however it was recorded."""
     samples = sample_layout_frames(args.video, out_dir, args.start, args.end,
+                                   count=args.layout_samples,
                                    at=args.layout_frame)
+    # Agree the layout over duel frames only; menus have a game log too, in
+    # a different place, and would pull the consensus off the board.
+    samples = select_duel_frames(samples)
     layout = detect_layout_from_frames(samples, detect=not args.no_detect)
-    sample = samples[len(samples) // 2]
     if args.region:
         layout.log_pane = Region.parse(args.region)
         layout.detected = False
     print("      layout: %s" % layout.describe(), file=sys.stderr)
 
-    check = validate_layout(layout, sample)
+    # Validate against each sample, not just one: a VOD spends time on
+    # deck-building and sideboarding screens, which have a game log but no
+    # duel scene, so a single unlucky sample would fail a good layout.
+    check = None
+    for sample in samples:
+        check = validate_layout(layout, sample)
+        if check["ok"]:
+            break
     if not check["ok"]:
         raise SystemExit(
-            "layout validation failed (%s). The UI could not be located in "
-            "this capture; pass --region WxH+X+Y or a different "
-            "--layout-frame." % "; ".join(check["problems"]))
+            "layout validation failed on all %d sampled frames (%s). The UI "
+            "could not be located in this capture; pass --region WxH+X+Y, or "
+            "--start/--end covering actual gameplay."
+            % (len(samples), "; ".join(check["problems"])))
     print("      layout validated: %d timestamped lines, life %s"
           % (check["logTimestamps"], check["life"]), file=sys.stderr)
     for warning in check.get("warnings", ()):
@@ -390,9 +402,13 @@ def run_layout(args):
     """Detect and validate the UI layout of a capture, without ingesting."""
     work = tempfile.mkdtemp(prefix="mtgo_layout_")
     samples = sample_layout_frames(args.video, work, args.start, args.end,
-                                   at=args.at)
+                                   count=args.layout_samples, at=args.at)
+    samples = select_duel_frames(samples)
     layout = detect_layout_from_frames(samples, detect=not args.no_detect)
-    check = validate_layout(layout, samples[len(samples) // 2])
+    for sample in samples:
+        check = validate_layout(layout, sample)
+        if check["ok"]:
+            break
     print(json.dumps({"layout": layout.to_dict(), "check": check,
                       "summary": layout.describe()}, indent=2))
     if not check["ok"]:
@@ -487,6 +503,8 @@ def build_parser():
                         help="video seconds to sample for layout detection")
     ingest.add_argument("--dump-ocr", action="store_true",
                         help="also write the raw per-frame OCR readings")
+    ingest.add_argument("--layout-samples", type=int, default=5,
+                        help="frames to sample for layout consensus")
     ingest.add_argument("--hero", default=None,
                         help="local player name (perspective for the mirror)")
     ingest.add_argument("--match-id", default="mtgo-video")
@@ -544,6 +562,7 @@ def build_parser():
     layout_cmd.add_argument("--start", type=float, default=None)
     layout_cmd.add_argument("--end", type=float, default=None)
     layout_cmd.add_argument("--no-detect", action="store_true")
+    layout_cmd.add_argument("--layout-samples", type=int, default=5)
     layout_cmd.set_defaults(func=run_layout)
 
     align = sub.add_parser(

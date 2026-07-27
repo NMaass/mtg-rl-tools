@@ -286,6 +286,49 @@ def _median(values: List[int]) -> int:
     return ordered[len(ordered) // 2]
 
 
+def looks_like_duel(frame_path: str, ffmpeg: str = "ffmpeg") -> bool:
+    """Whether a frame shows the duel scene rather than a menu screen.
+
+    A VOD spends a lot of its length on deck-building and sideboarding
+    screens. Those have a game log too -- but a differently shaped one, in a
+    different place -- so including them in the layout consensus produces a
+    pane that matches neither. The duel scene is the one with player life
+    totals on it, so read for those.
+    """
+    import os
+    import re
+    import tempfile
+
+    from .hud import grab
+    from .ocr import ocr_image
+
+    layout = build_layout(_load_gray(frame_path))
+    work = os.path.realpath(tempfile.mkdtemp(prefix="mtgo_duel_"))
+    try:
+        # Both seats, not either: a menu screen can happen to show a numeral
+        # where one life total would be (a deck-editor column count, say),
+        # but a duel always shows two.
+        for region in (layout.life_top, layout.life_bottom):
+            path = grab(frame_path, None, region,
+                        os.path.join(work, "life.png"), ffmpeg=ffmpeg)
+            text = " ".join(ocr_image(path, psm=7, strict=False,
+                                      whitelist="0123456789"))
+            match = re.search(r"\d+", text)
+            if not (match and 0 <= int(match.group(0)) <= 99):
+                return False
+        return True
+    finally:
+        import shutil
+
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def select_duel_frames(frame_paths: List[str]) -> List[str]:
+    """The sampled frames that show a duel; all of them if none do."""
+    duels = [path for path in frame_paths if looks_like_duel(path)]
+    return duels or list(frame_paths)
+
+
 def detect_layout_from_frames(frame_paths: List[str],
                               detect: bool = True) -> Layout:
     """Agree a layout across several frames.

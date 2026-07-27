@@ -35,7 +35,10 @@ does not trust any single reading: it keeps every sighting of a line and
 takes the majority. The same redundancy fixes the layout — the detected
 pane drifts with the log's content (the scrollbar only exists once the log
 overflows), so the bounds are a consensus across several frames rather than
-one.
+one. And it settles questions that would otherwise be judgement calls: a
+run of identical lines is capped at how many were ever on screen *at the
+same time*, because MTGO really does log one sentence twice in a row, and
+that is the difference between a real repeat and a misread.
 
 **Nothing is guessed silently.** A card name that does not clear the
 catalog's margin gate is reported unresolved, not resolved to whatever it
@@ -60,6 +63,7 @@ turned out to be a real defect rather than a simplification:
 | Fixed 3x upscale before OCR | Glyph size drifted with capture size, so results drifted too | Resample to a fixed target width, so tesseract sees the same thing at every resolution |
 | Longest reading wins | One bad frame could define a line | Majority vote across every sighting of that line |
 | Append on failed alignment | Noise produced duplicate entries (240 for a 75-line game at 576p) | Collapse duplicates, using frame co-occurrence to tell a misread apart from a genuine repeat |
+| Alignment scored on similarity alone | A game log repeats every turn, so a window could match the wrong occurrence — duplicating or dropping a whole pane of lines | The pane scrolls one way, so a frame may not align behind the frame before it |
 | Strict log grammar | A misread colon glued two lines into one unparsable entry | Tolerant clock shape, count from the noun not the article, self-validating verb repair |
 | Live Scryfall fuzzy lookups | Rate-limited, non-deterministic, 404s on names the log spells correctly elsewhere | Offline catalog, run vocabulary, margin gate |
 
