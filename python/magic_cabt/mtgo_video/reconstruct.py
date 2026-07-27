@@ -134,6 +134,39 @@ def collapse_duplicates(entries: List[Entry], window: int = 4,
     return out
 
 
+def limit_repeats(entries: List[Entry], threshold: float = 0.9) -> List[Entry]:
+    """Cap a run of identical lines at how many were ever on screen at once.
+
+    MTGO does log the same sentence several times in a row, so a run of
+    identical entries is not automatically wrong -- but its true length is
+    observable: if the pane never showed more than two copies of the line
+    simultaneously, then there were two, and a third is a misread that
+    failed to merge.
+    """
+    out: List[Entry] = []
+    index = 0
+    while index < len(entries):
+        end = index + 1
+        while (end < len(entries)
+               and _similar(entries[index].norm, entries[end].norm, threshold)):
+            end += 1
+        run = entries[index:end]
+        if len(run) > 1:
+            per_frame: dict = {}
+            for entry in run:
+                for frame in set(entry.frames):
+                    per_frame[frame] = per_frame.get(frame, 0) + 1
+            seen_at_once = max(per_frame.values()) if per_frame else 1
+            if len(run) > seen_at_once >= 1:
+                kept = list(run[:seen_at_once])
+                for extra in run[seen_at_once:]:
+                    kept[-1] = _pick(kept[-1], extra)
+                run = kept
+        out.extend(run)
+        index = end
+    return out
+
+
 def _merge_gap(tail_gap: List[Entry], frame_gap: List[Entry],
                at_end: bool) -> List[Entry]:
     """Merge unanchored stretches: pair OCR variants, keep true entries.
@@ -197,7 +230,7 @@ class LogReconstructor:
         self._anchor = 0
 
     def finalize(self) -> List[Entry]:
-        return collapse_duplicates(self._entries)
+        return limit_repeats(collapse_duplicates(self._entries))
 
     @property
     def entries(self) -> List[str]:

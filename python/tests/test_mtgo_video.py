@@ -172,6 +172,27 @@ class ReconstructTest(unittest.TestCase):
         rec.feed(["7:00 AM: a casts Brainstonn."])
         self.assertEqual(len(rec.entries), 2)
 
+    def test_a_repeat_run_is_capped_at_what_was_seen_at_once(self):
+        from magic_cabt.mtgo_video.reconstruct import Entry, limit_repeats
+
+        text = "7:03 AM: a casts Tolarian Terror."
+        norm = normalize(text)
+        # Two copies were on screen together in frames 1-3; a third entry
+        # only ever appeared alone, so it is a misread that failed to merge.
+        run = [Entry(text, norm, 1.0, (text,), (1, 2, 3)),
+               Entry(text, norm, 1.0, (text,), (1, 2, 3)),
+               Entry(text, norm, 4.0, (text,), (7,))]
+        self.assertEqual(len(limit_repeats(run)), 2)
+
+    def test_a_repeat_run_seen_in_full_is_kept_in_full(self):
+        from magic_cabt.mtgo_video.reconstruct import Entry, limit_repeats
+
+        text = "7:03 AM: a casts Tolarian Terror."
+        norm = normalize(text)
+        # All three were on screen at once, so all three are real.
+        run = [Entry(text, norm, 1.0, (text,), (1, 2)) for _ in range(3)]
+        self.assertEqual(len(limit_repeats(run)), 3)
+
     def test_a_genuinely_repeated_line_is_not_collapsed(self):
         # MTGO really does log the same sentence twice in a row. The two are
         # on screen together, which is what tells them apart from a misread.
