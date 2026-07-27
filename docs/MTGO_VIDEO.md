@@ -2,7 +2,7 @@
 
 Turns MTGO gameplay footage into a replay file — board states in the same
 schema the Arena mirror produces — then replays it in XMage and verifies it
-four independent ways.
+five independent ways.
 
 ```text
 MTGO footage
