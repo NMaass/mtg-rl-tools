@@ -106,7 +106,10 @@ itself draws**:
   both margins; the pair that sits one per half of the frame, in the same
   column, at the same size, wins. A candidate is only believed once its life
   box actually reads back as a number, which is what stops a scoreboard
-  ("0 – 0") or a mana pip from being adopted as a seat.
+  ("0 – 0") or a mana pip from being adopted as a seat. The numeral's
+  position is expressed in units of the name under it — the panel is one
+  widget drawn at whatever scale the client is set to, so its own text is
+  the only ruler that survives being rescaled.
 - **The log pane.** Brightness finds candidates — but a facecam and a
   sponsor graphic are bright too, and "the rightmost bright panel" is
   whichever one the streamer put on the right. So every candidate is read,
@@ -144,20 +147,28 @@ python3 -m magic_cabt.mtgo_video layout --video match.mp4
 
 ### Measured against real captures
 
-Four public league VODs, each a different arrangement, none of which the
-previous detector handled:
+Five public VODs, each a different arrangement, none of which the previous
+detector handled:
 
 | Capture | Arrangement | Log pane | Seats | Names |
 | --- | --- | --- | --- | --- |
 | Modern client, facecam right | client inset to 1620px, log docked right | found | 16 / 20 | Mafuhsa / MarshFlats |
 | Modern client, scaled up | extra zone panes docked beside the seats, larger UI scale | found | 20 / 16 | marcomartinelli999 / impact36inc |
 | Modern client, circular facecam over the log | facecam overlaps the log pane's lower half | found | 20 / 20 | Flexi98 / DB_ThatMillGuy |
+| 2016 championship broadcast, old client | different skin, no game-log pane at all | refused | 20 / 20 | leearson / beena |
 | Windowed client in a 1920x810 stream frame | client ~1620x650 inside overlays and a banner | refused | — | — |
 
-The fourth is the intended outcome, not a gap: its log text is about five
-source pixels tall, below what OCR can read at any magnification, and the
-pipeline says so — "recorded too small to read, whatever the frame size is"
-— rather than producing a confident wrong log.
+The last two are the intended outcomes rather than gaps. The broadcast is
+refused because it shows no game log to read — but its phase bar and both
+seat panels are still located, which is what says *why* it was refused. The
+windowed capture's log text is about five source pixels tall, below what OCR
+can read at any magnification, and the pipeline reports that rather than
+producing a confident wrong log.
+
+The broadcast is also what the inverted word pass is for: its seat plates
+are dark enough that the white names on them are invisible to the ordinary
+passes and read cleanly inverted. That pass only runs when the seats were
+not found otherwise.
 
 ### End to end on a capture the old detector could not open
 

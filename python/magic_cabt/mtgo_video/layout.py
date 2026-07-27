@@ -186,6 +186,19 @@ def _anchor_words(path: str) -> List[Word]:
     return _merge_words(frame_words(path, psm=11) + frame_words(path, psm=12))
 
 
+def _inverted_words(path: str) -> List[Word]:
+    """The same passes over an inverted frame.
+
+    Tesseract expects dark text on light. Most of MTGO's chrome is, but a
+    seat panel is not: the player's name is white on a near-black plate, and
+    in a tournament broadcast's darker skin it can be invisible to the
+    ordinary passes while reading cleanly inverted. Only used when the seats
+    were not found otherwise, since it costs two more passes over the frame.
+    """
+    return _merge_words(frame_words(path, psm=11, invert=True)
+                        + frame_words(path, psm=12, invert=True))
+
+
 def _merge_words(words: Sequence[Word]) -> List[Word]:
     """One entry per thing on screen, keeping the most confident reading."""
     kept: List[Word] = []
@@ -417,12 +430,23 @@ _MAX_NAME_TEXT = 0.030
 # whatever scale the client is set to, so measuring it in its own units --
 # rather than as a fraction of the frame -- is what carries across clients
 # that have been scaled up, and across a client that is not full-screen.
-_LIFE_ABOVE_NAME = (6.0, 1.2)     # top and bottom of the life band
+# Top and bottom of the band the life numeral sits in, above the name, in
+# units of the name's text height. Generous at both ends: the old broadcast
+# client draws the numeral lower in the plate than the modern one, and the
+# band is trimmed onto the glyphs it actually contains before it is read.
+# The lower edge stops just short of the name itself, so the crop can never
+# contain the letters.
+_LIFE_ABOVE_NAME = (6.5, 0.3)
 # Half the seat panel's width, in units of the name's text height. The name is
 # centred in the panel and the life numeral is right-aligned inside it, so the
 # panel -- not the name's own extent -- is what the crop has to span: a short
 # name like "bob" sits in exactly as wide a panel as a long one.
 _LIFE_PANEL_HALF_WIDTH = 7.0
+
+# How tall a life numeral is relative to the name under it. Measured at
+# roughly 3.7x across four clients; the floor below is deliberately well
+# under that, since it is a rejection test rather than a measurement.
+_MIN_LIFE_TO_NAME = 2.0
 
 # How many name pairs are worth reading before giving up on this margin.
 _NAME_PAIRS_TRIED = 12
@@ -525,7 +549,16 @@ _MAX_INK = 0.30
 _MIN_GLYPH_SPAN = 0.45
 
 
-def _looks_like_numeral(image, region: Region) -> bool:
+def _looks_like_numeral(image, region: Region,
+                        min_glyph: Optional[float] = None) -> bool:
+    """Whether a box plausibly holds a large numeral, by pixels alone.
+
+    `min_glyph` is how tall the numeral should be, in source pixels, when the
+    caller knows -- from the name under the seat, which is drawn at a fixed
+    fraction of it. Judging the ink run against that rather than against the
+    box's own height keeps the test honest when the box is deliberately
+    larger than the numeral it is looking for.
+    """
     box = _clamp(image, region)
     if box is None:
         return False
@@ -539,13 +572,20 @@ def _looks_like_numeral(image, region: Region) -> bool:
         ink += lit
         rows.append(lit > 0)
     fraction = ink / float(width * height)
-    if not _MIN_INK <= fraction <= _MAX_INK:
+    # A uniformly bright region -- a card face, the log pane -- is not a
+    # numeral on a panel, whatever else is true of it.
+    if fraction > _MAX_INK:
         return False
     longest = current = 0
     for row in rows:
         current = current + 1 if row else 0
         longest = max(longest, current)
-    return longest >= height * _MIN_GLYPH_SPAN
+    if min_glyph is not None:
+        # The lower ink bound is for when nothing is known about the glyph's
+        # size; here the run length says it directly, and a deliberately
+        # generous box would fail a fraction test for being generous.
+        return longest >= min_glyph
+    return fraction >= _MIN_INK and longest >= height * _MIN_GLYPH_SPAN
 
 
 def _tighten_to_glyphs(image, region: Region) -> Region:
@@ -689,6 +729,7 @@ def detect_seats(image, bar: Region, words: Sequence[Word]
                 "name_top": _name_region_under(pair[0], top_box, words),
                 "name_bottom": _name_region_under(pair[1], bottom_box, words),
                 "names": None,
+                "minGlyph": 0.6 * min(pair[0].height, pair[1].height),
             })
         # Anchor 2: the player names. A name is small ordinary text, which
         # OCR finds far more dependably than a numeral drawn over card art,
@@ -704,6 +745,10 @@ def detect_seats(image, bar: Region, words: Sequence[Word]
                 "name_top": _name_box(top_name),
                 "name_bottom": _name_box(bottom_name),
                 "names": (top_name.text.strip(), bottom_name.text.strip()),
+                # A life numeral is several times the height of the name
+                # under it; anything much shorter in that band is not one.
+                "minGlyph": _MIN_LIFE_TO_NAME * min(top_name.height,
+                                                    bottom_name.height),
             })
 
         active = turn_player(words, bar)
@@ -711,8 +756,9 @@ def detect_seats(image, bar: Region, words: Sequence[Word]
         for candidate in candidates:
             # Cheap pixel test first: it rejects nearly everything without
             # paying for OCR, and what survives is worth reading.
-            if not (_looks_like_numeral(image, candidate["life_top"])
-                    and _looks_like_numeral(image, candidate["life_bottom"])):
+            floor = candidate.get("minGlyph")
+            if not (_looks_like_numeral(image, candidate["life_top"], floor)
+                    and _looks_like_numeral(image, candidate["life_bottom"], floor)):
                 continue
             candidate["life_top"] = _tighten_to_glyphs(
                 image, candidate["life_top"])
@@ -1085,6 +1131,11 @@ def build_layout(frame_path: str, detect: bool = True) -> Layout:
                                          pane if detected else None))
         else:
             seats = detect_seats(image, bar, words)
+            if seats is None:
+                # A broadcast skin draws the seat plates dark enough that
+                # their white text only reads inverted.
+                seats = detect_seats(image, bar,
+                                     _merge_words(words + _inverted_words(frame_path)))
             if seats is None:
                 notes.append("phase bar found but no seat panel pair beside it")
 
