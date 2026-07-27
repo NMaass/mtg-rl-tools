@@ -1259,9 +1259,17 @@ def validate_layout(layout: Layout, frame_path: str,
 
     A detector that silently returns the wrong rectangle is worse than one
     that fails: the pipeline would produce a confident, wrong log. So the log
-    pane has to actually contain timestamped lines, and *both* seats have to
-    show a life total -- one alone used to be enough, which let a layout pass
-    while pointing the other seat at a mana pip.
+    pane has to actually contain timestamped lines.
+
+    The seats are held to the same standard -- *both* must show a life total,
+    since one alone used to be enough and let a layout pass while pointing the
+    other seat at a mana pip -- but failing it is not fatal. The log is what
+    the decode is made of; the seats are what two of the five verifications
+    are made of. A capture whose text is large enough to read but whose life
+    numerals are not still decodes into a game, and refusing it outright threw
+    away work over a check it was never going to be able to run. So an
+    unreadable seat is reported, recorded, and left to the checks that need
+    it to refuse.
     """
     import subprocess
 
@@ -1307,9 +1315,10 @@ def validate_layout(layout: Layout, frame_path: str,
             lives[label] = read_int(path)
         unreadable = [label for label, value in lives.items() if value is None]
         if unreadable:
-            problems.append("no life total readable at %s seat%s"
-                            % (" and ".join(unreadable),
-                               "s" if len(unreadable) > 1 else ""))
+            warnings.append(
+                "no life total readable at %s seat%s: this capture can be "
+                "decoded but not cross-checked against the HUD"
+                % (" and ".join(unreadable), "s" if len(unreadable) > 1 else ""))
 
         names = {}
         for label, region in (("top", layout.name_top),
@@ -1326,6 +1335,7 @@ def validate_layout(layout: Layout, frame_path: str,
         return {"logTimestamps": stamps, "life": lives, "names": names,
                 "textHeight": text_height,
                 "seatsDetected": layout.seats_detected,
+                "seatsReadable": not unreadable,
                 "logDetected": layout.detected,
                 "notes": layout.notes,
                 "problems": problems, "warnings": warnings,

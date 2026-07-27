@@ -285,6 +285,23 @@ had passed: three log lines whose player was read as `Buz2Caldera`, and a
 spell whose target was read as `BuzzCaldera. 2` with a scrollbar glyph stuck
 to it.
 
+It does more than flag the impossible line, because the impossible line is
+almost never the broken one. "Faerie Seer is destroyed, but it is not on the
+battlefield" is half an answer; the other half is that an *earlier* line
+never arrived. So each violation is turned into the smallest edit that would
+have made it possible — the shape process mining calls an alignment, where a
+*log move* is an event the model cannot perform and a *model move* is an
+event the model needed that the log lacks. Those are exactly this pipeline's
+two failure modes: OCR inventing a line and OCR dropping one.
+
+And a dropped line usually did not vanish — it was mangled into something the
+grammar could not parse and is still sitting in the log as an unparsed entry.
+So each proposed insertion is matched against the unparsed entries mentioning
+the same card, and the likely culprit is reported with it. Deleting one
+"casts Tolarian Terror" line from a decoded game and re-running produces three
+violations, all naming the same missing event: *a line putting Tolarian Terror
+onto the battlefield is missing.*
+
 It reports which event types it *cannot* check as well as which it can, so
 the coverage is visible rather than assumed. What it is not: XMage is not
 being asked to play the game, so this does not prove the original match was

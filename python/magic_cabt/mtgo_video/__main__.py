@@ -218,8 +218,11 @@ def resolve_layout(args, out_dir):
             "could not be located in this capture; pass --region WxH+X+Y, or "
             "--start/--end covering actual gameplay."
             % (len(samples), "; ".join(checks[-1]["problems"])))
-    check = dict(passed[0], samplesValidated=len(passed),
-                 samplesChecked=len(checks))
+    # Prefer a sample whose seats were readable too: the recorded layout is
+    # what the HUD checks will use later, and one that could read them is a
+    # better record of this capture than one that happened not to.
+    check = dict(next((c for c in passed if c.get("seatsReadable")), passed[0]),
+                 samplesValidated=len(passed), samplesChecked=len(checks))
     print("      layout validated on %d/%d sampled frames: %d timestamped "
           "lines, life %s"
           % (len(passed), len(checks), check["logTimestamps"], check["life"]),
@@ -247,7 +250,7 @@ def run_ingest(args):
     layout, layout_check = resolve_layout(args, args.out)
     frames = extract_log_frames(
         args.video, frames_dir, start=args.start, end=args.end,
-        fps=args.fps, region=layout.log_pane,
+        fps=args.fps, region=layout.log_pane, stack=args.stack,
     )
     print("      %d frames" % len(frames), file=sys.stderr)
 
@@ -573,6 +576,10 @@ def build_parser():
                         help="skip detection; scale the reference layout instead")
     ingest.add_argument("--layout-frame", type=float, default=None,
                         help="video seconds to sample for layout detection")
+    ingest.add_argument("--stack", type=int, default=1,
+                        help="average this many consecutive frames into each "
+                             "OCR frame; cuts compression noise on a capture "
+                             "whose text is marginal")
     ingest.add_argument("--dump-ocr", action="store_true",
                         help="also write the raw per-frame OCR readings")
     ingest.add_argument("--layout-samples", type=int, default=5,

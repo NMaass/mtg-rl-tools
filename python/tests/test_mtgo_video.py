@@ -1135,6 +1135,62 @@ class CompareStateTest(unittest.TestCase):
         self.assertTrue(any("battlefield" in p for p in problems))
 
 
+class AlignmentTest(unittest.TestCase):
+    """Naming the event a violation implies is missing."""
+
+    def test_a_permanent_that_never_arrived_is_named(self):
+        from magic_cabt.mtgo_video.rules import propose_repair
+
+        repair = propose_repair(
+            {"rule": "missing-permanent", "detail": "..."},
+            {"type": "DESTROYED", "card": "Faerie Seer"})
+        self.assertEqual(repair["type"], "ENTERS_BATTLEFIELD")
+        self.assertEqual(repair["card"], "Faerie Seer")
+
+    def test_an_attacker_that_never_arrived_is_named(self):
+        from magic_cabt.mtgo_video.rules import propose_repair
+
+        repair = propose_repair(
+            {"rule": "empty-battlefield", "detail": "..."},
+            {"type": "ATTACKED_BY", "player": "b",
+             "cards": ["Tolarian Terror"]})
+        self.assertEqual(repair["card"], "Tolarian Terror")
+
+    def test_damage_in_place_proposes_no_insertion(self):
+        # "This card is named after a player" is a line that is wrong where
+        # it stands, not a line orphaned by a lost one. Proposing an
+        # insertion for it would invent history.
+        from magic_cabt.mtgo_video.rules import propose_repair
+
+        self.assertIsNone(propose_repair(
+            {"rule": "card-is-player", "detail": "..."},
+            {"type": "CAST", "card": "alice"}))
+
+    def test_the_lost_line_is_found_among_the_unparsed_ones(self):
+        # A dropped line usually did not vanish -- OCR mangled it into
+        # something the grammar could not parse, and it is still there.
+        from magic_cabt.mtgo_video.rules import find_lost_line
+
+        events = [
+            {"type": "UNPARSED", "videoTime": 10.0,
+             "text": "alice plays Volatile Fjord. CIS DAR: Treen 9 AAarchCl"},
+            {"type": "UNPARSED", "videoTime": 20.0,
+             "text": "something else entirely"},
+            {"type": "CAST", "videoTime": 30.0, "text": "alice casts Ponder."},
+        ]
+        found = find_lost_line({"card": "Volatile Fjord"}, events, before=40.0)
+        self.assertIsNotNone(found)
+        self.assertIn("Volatile Fjord", found["text"])
+
+    def test_a_line_after_the_violation_is_not_the_cause_of_it(self):
+        from magic_cabt.mtgo_video.rules import find_lost_line
+
+        events = [{"type": "UNPARSED", "videoTime": 90.0,
+                   "text": "alice plays Volatile Fjord. junk"}]
+        self.assertIsNone(
+            find_lost_line({"card": "Volatile Fjord"}, events, before=40.0))
+
+
 class BoardReaderTest(unittest.TestCase):
     """Reading permanents off the screen rather than deriving them."""
 

@@ -21,6 +21,28 @@ What it is not: XMage is not being asked to *play* the game here, so this
 does not prove the original match was legal. It proves the decoded event
 stream is coherent against the board the mirror actually built -- which is
 where OCR and parse damage shows up.
+
+## Naming what is missing
+
+A violation says the log claims something the board cannot support. That is
+half an answer: "Faerie Seer is destroyed, but it is not on the battlefield"
+does not say what went wrong, and the thing that went wrong is almost never
+the line that failed. It is an *earlier* line that never arrived.
+
+So each violation is turned into an edit: the smallest event that, inserted
+before it, would have made it possible. This is the shape conformance
+checking in process mining calls an alignment -- a cheapest edit script
+between an observed trace and what a model permits, where a *log move* is an
+event the model cannot perform and a *model move* is an event the model
+needed that the log does not contain. Those are exactly this pipeline's two
+failure modes: OCR inventing a line, and OCR dropping one.
+
+Naming the missing event also makes it findable. A dropped line usually did
+not vanish -- it was misread into something the grammar could not parse, and
+is still sitting in the log as an UNPARSED entry. So each proposed insertion
+is matched against the unparsed entries that mention the same card, and the
+likely culprit is reported with it. That turns "this game is impossible" into
+"this line, here, is what broke it".
 """
 
 import json
@@ -297,6 +319,96 @@ _VERBS = {
 }
 
 
+# What each kind of violation says is missing from the log. The value is the
+# event the game must have had for the failing line to make sense; None means
+# the line is damaged where it stands rather than orphaned by a lost one.
+_REPAIRS = {
+    "missing-permanent": "ENTERS_BATTLEFIELD",
+    "empty-battlefield": "ENTERS_BATTLEFIELD",
+    "missing-source": "ENTERS_BATTLEFIELD",
+    "empty-hand": "DRAW",
+    "turn-skipped": "TURN",
+}
+
+
+def propose_repair(finding: Dict, event: Dict) -> Optional[Dict]:
+    """The event whose absence would explain this violation.
+
+    Deliberately conservative: only violations with an obvious single cause
+    get one. "This creature is not on the battlefield" has one -- something
+    put it there and the log lost the line. "This card is named after a
+    player" has none, because the line that is wrong is the line in hand.
+    """
+    kind = _REPAIRS.get(finding["rule"])
+    if kind is None:
+        return None
+    repair = {"type": kind, "player": event.get("player")}
+    if kind == "ENTERS_BATTLEFIELD":
+        repair["card"] = (event.get("card") or event.get("attacker")
+                          or event.get("blocker")
+                          or (event.get("cards") or [None])[0])
+        if not repair["card"]:
+            return None
+        repair["detail"] = ("a line putting %s onto the battlefield is "
+                            "missing" % repair["card"])
+    elif kind == "DRAW":
+        repair["detail"] = ("a line giving %s a card is missing"
+                            % (event.get("player") or "that player"))
+    elif kind == "TURN":
+        repair["detail"] = "one or more turn lines are missing"
+    return repair
+
+
+def find_lost_line(repair: Dict, events: Sequence[Dict],
+                   before: Optional[float], threshold: float = 0.55
+                   ) -> Optional[Dict]:
+    """The unparsed log entry a missing event was probably mangled into.
+
+    A dropped line rarely disappears; it is misread into something the
+    grammar cannot parse and sits in the log unrecognised. If one of those
+    mentions the card the missing event is about, and it arrived before the
+    line that broke, it is very likely the same line.
+    """
+    card = (repair.get("card") or "").lower()
+    if not card:
+        return None
+    best, best_score = None, threshold
+    for event in events:
+        if event.get("type") != "UNPARSED":
+            continue
+        when = event.get("videoTime")
+        if before is not None and when is not None and when > before:
+            continue
+        text = (event.get("text") or "").lower()
+        if not text:
+            continue
+        # The card's name inside a longer garbled line: score the best window
+        # of the line rather than the whole thing, which the noise dominates.
+        score = max(
+            (_similar(card, text[start:start + len(card) + 6])
+             for start in range(0, max(1, len(text) - len(card) + 1), 2)),
+            default=0.0)
+        if score > best_score:
+            best, best_score = event, score
+    if best is None:
+        return None
+    return {"text": best.get("text"), "videoTime": best.get("videoTime"),
+            "similarity": round(best_score, 3)}
+
+
+def _load_events(bundle_dir: str) -> List[Dict]:
+    path = os.path.join(bundle_dir, "mtgo_events.jsonl")
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path) as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                out.append(json.loads(line))
+    return out
+
+
 def check_bundle(bundle_dir: str, classpath: str, java: str = "java",
                  cwd: Optional[str] = None) -> Dict:
     """Walk a game's states, checking each event against the board before it.
@@ -325,6 +437,9 @@ def check_bundle(bundle_dir: str, classpath: str, java: str = "java",
     from_the_start = any(
         (state.get("sourceEvent") or {}).get("type") in _OPENING_EVENTS
         for state in states)
+    # The whole decoded stream, including the lines that failed to parse:
+    # a missing event is usually still in there, mangled.
+    decoded = _load_events(bundle_dir)
 
     violations = []
     unestablished = []
@@ -350,8 +465,14 @@ def check_bundle(bundle_dir: str, classpath: str, java: str = "java",
                            event=event.get("text"), type=kind)
             if not from_the_start and problem["rule"] in _NEEDS_GAME_START:
                 unestablished.append(finding)
-            else:
-                violations.append(finding)
+                continue
+            repair = propose_repair(problem, event)
+            if repair is not None:
+                lost = find_lost_line(repair, decoded, state.get("videoTime"))
+                if lost is not None:
+                    repair["probableLine"] = lost
+                finding["missing"] = repair
+            violations.append(finding)
 
     return {
         "bundle": os.path.abspath(bundle_dir),
@@ -360,6 +481,15 @@ def check_bundle(bundle_dir: str, classpath: str, java: str = "java",
         "eventsUnchecked": unchecked,
         "uncheckedTypes": dict(unchecked_types),
         "capturedFromGameStart": from_the_start,
+        # The edit script: how many events would have to be inserted for the
+        # decoded stream to make sense, and how many lines are damaged where
+        # they stand. A cost of zero is a stream the board can support.
+        "alignment": {
+            "modelMoves": sum(1 for v in violations if v.get("missing")),
+            "logMoves": sum(1 for v in violations if not v.get("missing")),
+            "attributed": sum(1 for v in violations
+                              if (v.get("missing") or {}).get("probableLine")),
+        },
         "violations": violations,
         # Findings that only mean the recording joined the game in progress.
         "unestablished": unestablished,
