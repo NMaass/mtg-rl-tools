@@ -105,18 +105,31 @@ python3 -m magic_cabt.mtgo_video layout --video match.mp4
 
 ### Measured behaviour
 
-The same game, decoded from five renderings of one recording:
+The same game — a complete six-turn Pauper league game, 75 log lines —
+decoded from five renderings of one recording, and verified all three ways:
 
-| Capture | Detected pane | Glyph height | Verdict |
-| --- | --- | --- | --- |
-| 2560x1440 | 466px | 14px | works |
-| 1920x1080 | 350px | 10px | works |
-| 1600x900 | 292px | 8px | works |
-| 1280x720 | 233px | 7px | works |
-| 1024x576 | 186px | 4px | **below threshold, reported** |
+| Capture | Detected pane | Log vs XMage | Log vs HUD life | Same game as 1080p? |
+| --- | --- | --- | --- | --- |
+| 2560x1440 | 466x629 | 61/61 | 122/122 | yes |
+| 1920x1080 | 350x449 | 61/61 | 118/118 | reference |
+| 1600x900 | 292x374 | 61/61 | 122/122 | yes |
+| 1280x720 | 233x299 | 68/68 | 136/136 | **no — 84 events, not 75** |
+| 1024x576 | 186x238 | 71/189 | — | **no — 249 events** |
 
-At 576p the log text is four pixels tall. That is genuinely below what OCR
-can read, and the pipeline says so rather than emitting a wrong game.
+1440p, 1080p and 900p decode to the identical game and verify completely.
+
+720p is the interesting case, and the reason the third check exists. Its
+decode passes both of the other verifications — every state it claims is
+rendered faithfully by XMage, and every life total it derives matches
+MTGO's own display — while still containing nine events that never
+happened, a stretch of the log recorded twice. Neither of the first two
+checks can see that: XMage renders what it is told, and duplicating a land
+drop does not change anyone's life total. Only comparing against another
+capture of the same match catches it.
+
+576p is below the floor: the log text is four pixels tall, which is less
+than OCR can read at any magnification. The pipeline measures that and
+warns before spending the time.
 
 ## Requirements
 
