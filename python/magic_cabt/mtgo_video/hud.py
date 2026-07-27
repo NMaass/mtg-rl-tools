@@ -37,33 +37,50 @@ def _at(offset: Region, panel_y: int) -> Region:
                   width=offset.width, height=offset.height)
 
 
-def life_regions() -> Dict[str, Region]:
+def life_regions(layout=None) -> Dict[str, Region]:
+    if layout is not None:
+        return {"top": layout.life_top, "bottom": layout.life_bottom}
     return {"top": _at(LIFE_OFFSET, PANEL_TOP_Y),
             "bottom": _at(LIFE_OFFSET, PANEL_BOTTOM_Y)}
 
 
-def name_regions() -> Dict[str, Region]:
+def name_regions(layout=None) -> Dict[str, Region]:
+    if layout is not None:
+        return {"top": layout.name_top, "bottom": layout.name_bottom}
     return {"top": _at(NAME_OFFSET, PANEL_TOP_Y),
             "bottom": _at(NAME_OFFSET, PANEL_BOTTOM_Y)}
 
 
-def grab(video: str, timestamp: float, region: Region, out_path: str,
-         scale: int = 6, invert: bool = True, ffmpeg: str = "ffmpeg") -> str:
-    """Extract one upscaled, grayscale crop at a video timestamp."""
+# Life totals and player names are drawn in near-white over the avatar art.
+# Thresholding on that separates the glyphs from a busy, brightly coloured
+# background far better than inverting the whole crop, which at lower
+# capture resolutions leaves the digits swimming in mid-grey.
+_TEXT_WHITE = 190
+_MIN_CROP_WIDTH = 240
+
+
+def grab(video: str, timestamp: Optional[float], region: Region, out_path: str,
+         scale: Optional[int] = None, threshold: int = _TEXT_WHITE,
+         ffmpeg: str = "ffmpeg") -> str:
+    """Extract one upscaled, binarized crop.
+
+    `timestamp` is video seconds; pass None when the source is a still.
+    """
+    factor = scale if scale else max(6.0, _MIN_CROP_WIDTH / max(1, region.width))
     filters = [
         region.ffmpeg_crop(),
-        "scale=%d:%d:flags=lanczos" % (region.width * scale, region.height * scale),
+        "scale=%d:%d:flags=lanczos" % (int(round(region.width * factor)),
+                                       int(round(region.height * factor))),
         "format=gray",
     ]
-    if invert:
-        # MTGO's HUD is light text on a dark panel; tesseract is trained for
-        # the opposite.
-        filters.append("negate")
-    subprocess.run(
-        [ffmpeg, "-y", "-loglevel", "error", "-ss", str(timestamp),
-         "-i", video, "-frames:v", "1", "-vf", ",".join(filters), out_path],
-        check=True,
-    )
+    if threshold:
+        filters.append("lut=y='if(gt(val,%d),255,0)'" % threshold)
+        filters.append("negate")  # tesseract expects dark text on light
+    command = [ffmpeg, "-y", "-loglevel", "error"]
+    if timestamp is not None:
+        command += ["-ss", str(timestamp)]
+    command += ["-i", video, "-frames:v", "1", "-vf", ",".join(filters), out_path]
+    subprocess.run(command, check=True)
     return out_path
 
 
@@ -74,13 +91,13 @@ def _ocr_int(path: str) -> Optional[int]:
 
 
 def read_life(video: str, timestamp: float, work_dir: Optional[str] = None,
-              ffmpeg: str = "ffmpeg") -> Dict[str, Optional[int]]:
+              ffmpeg: str = "ffmpeg", layout=None) -> Dict[str, Optional[int]]:
     """Life totals shown on screen at a timestamp, as {"top":n,"bottom":n}."""
     own_dir = work_dir is None
     work_dir = work_dir or tempfile.mkdtemp(prefix="mtgo_hud_")
     try:
         out = {}
-        for slot, region in life_regions().items():
+        for slot, region in life_regions(layout).items():
             path = os.path.join(os.path.realpath(work_dir), "life_%s.png" % slot)
             grab(video, timestamp, region, path, ffmpeg=ffmpeg)
             out[slot] = _ocr_int(path)
@@ -92,13 +109,13 @@ def read_life(video: str, timestamp: float, work_dir: Optional[str] = None,
 
 
 def read_names(video: str, timestamp: float, work_dir: Optional[str] = None,
-               ffmpeg: str = "ffmpeg") -> Dict[str, str]:
+               ffmpeg: str = "ffmpeg", layout=None) -> Dict[str, str]:
     """Player names under each panel, used to map panels to seats."""
     own_dir = work_dir is None
     work_dir = work_dir or tempfile.mkdtemp(prefix="mtgo_hud_")
     try:
         out = {}
-        for slot, region in name_regions().items():
+        for slot, region in name_regions(layout).items():
             path = os.path.join(os.path.realpath(work_dir), "name_%s.png" % slot)
             grab(video, timestamp, region, path, ffmpeg=ffmpeg)
             lines = ocr_image(path, psm=7, strict=False)
@@ -112,7 +129,7 @@ def read_names(video: str, timestamp: float, work_dir: Optional[str] = None,
 
 def align_derived_states(video: str, states: List[dict], kinds=("COMBAT_DAMAGE",),
                          max_lookahead: float = 40.0, step: float = 1.0,
-                         work_dir: Optional[str] = None) -> Dict:
+                         work_dir: Optional[str] = None, layout=None) -> Dict:
     """Timestamp derived state changes by finding them on screen.
 
     Some state changes are inferred rather than logged -- combat damage is
@@ -140,7 +157,7 @@ def align_derived_states(video: str, states: List[dict], kinds=("COMBAT_DAMAGE",
                 continue
             if slots is None:
                 slots = map_slots_to_seats(video, start, state.get("players", []),
-                                           work_dir)
+                                           work_dir, layout=layout)
                 if len(slots) < 2:
                     slots = None
                     continue
@@ -151,7 +168,7 @@ def align_derived_states(video: str, states: List[dict], kinds=("COMBAT_DAMAGE",
             when = start
             limit = start + max_lookahead
             while when <= limit:
-                shown = read_life(video, when, work_dir=work_dir)
+                shown = read_life(video, when, work_dir=work_dir, layout=layout)
                 if all(shown.get(seat_to_slot.get(seat)) == life
                        for seat, life in expected.items()
                        if seat in seat_to_slot):
@@ -174,7 +191,8 @@ def align_derived_states(video: str, states: List[dict], kinds=("COMBAT_DAMAGE",
 
 
 def crosscheck_life(video: str, states: List[dict], sample: int = 1,
-                    settle: float = 0.5, work_dir: Optional[str] = None) -> Dict:
+                    settle: float = 0.5, work_dir: Optional[str] = None,
+                    layout=None) -> Dict:
     """Compare each state's derived life totals against MTGO's own display.
 
     `settle` shifts the sample slightly later than the log line's first
@@ -198,11 +216,13 @@ def crosscheck_life(video: str, states: List[dict], sample: int = 1,
             timed += 1
             if slots is None:
                 slots = map_slots_to_seats(video, when + settle,
-                                           state.get("players", []), work_dir)
+                                           state.get("players", []), work_dir,
+                                           layout=layout)
                 if len(slots) < 2:
                     slots = None
                     continue
-            shown = read_life(video, when + settle, work_dir=work_dir)
+            shown = read_life(video, when + settle, work_dir=work_dir,
+                              layout=layout)
             by_seat = {p["seat"]: p for p in state.get("players", [])}
             for slot, seat in slots.items():
                 player = by_seat.get(seat)
@@ -239,11 +259,11 @@ def crosscheck_life(video: str, states: List[dict], sample: int = 1,
 
 
 def map_slots_to_seats(video: str, timestamp: float, players: List[dict],
-                       work_dir: Optional[str] = None) -> Dict[str, int]:
+                       work_dir: Optional[str] = None, layout=None) -> Dict[str, int]:
     """Match each HUD panel to a seat number by reading the player names."""
     import difflib
 
-    names = read_names(video, timestamp, work_dir=work_dir)
+    names = read_names(video, timestamp, work_dir=work_dir, layout=layout)
     mapping = {}
     for slot, shown in names.items():
         best, score = None, 0.0

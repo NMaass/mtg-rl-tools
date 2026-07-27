@@ -5,8 +5,9 @@ Unrecognized entries come back as {"type": "UNPARSED"} so coverage gaps are
 visible instead of silent.
 """
 
+import difflib
 import re
-from typing import Dict, List, Optional, Optional
+from typing import Dict, List, Optional
 
 from .ocr import strip_timestamp, TIMESTAMP_RE
 
@@ -53,12 +54,6 @@ _PATTERNS = [
         re.compile(r"^(?P<player>\S+) leads the match (?P<score>[\d-]+)\.?$"),
     ),
     (
-        "DRAW_N_WITH",
-        re.compile(
-            r"^(?P<player>\S+) draws (?P<count>\w+) cards with (?P<card>.+?)\.?$"
-        ),
-    ),
-    (
         "PUTS_TOP_N",
         re.compile(
             r"^(?P<player>\S+) puts (?P<count>\w+) cards? on top of their library\.?$"
@@ -74,14 +69,18 @@ _PATTERNS = [
             r"(?: targeting (?P<targets>.+?))?\.?$"
         ),
     ),
+    # The article in "draws a card" is a single glyph and is misread often
+    # ("draws 3 card"), so accept any token there and take the count from
+    # the noun's plurality instead -- "card" vs "cards" is a longer, far
+    # more reliable signal than one character.
     (
         "DRAW_WITH",
-        re.compile(r"^(?P<player>\S+) draws a card with (?P<card>.+?)\.?$"),
+        re.compile(r"^(?P<player>\S+) draws (?P<count>\S+) (?P<plural>cards?) "
+                   r"with (?P<card>.+?)\.?$"),
     ),
-    ("DRAW", re.compile(r"^(?P<player>\S+) draws a card\.?$")),
     (
-        "DRAW_N",
-        re.compile(r"^(?P<player>\S+) draws (?P<count>\w+) cards\.?$"),
+        "DRAW",
+        re.compile(r"^(?P<player>\S+) draws (?P<count>\S+) (?P<plural>cards?)\.?$"),
     ),
     ("MILL", re.compile(r"^(?P<player>\S+) mills (?P<cards>.+?)\.?$")),
     (
@@ -164,7 +163,9 @@ def parse_entry(entry: str) -> Dict:
     """Parse one full log entry (timestamp optional) into an event dict."""
     match = TIMESTAMP_RE.match(entry)
     clock = match.group(0).strip().rstrip(":;.,").strip() if match else None
-    text = strip_timestamp(entry)
+    # A line's closing period is often read as a comma; the patterns below
+    # allow it to be absent, so drop whatever it turned into.
+    text = strip_timestamp(entry).rstrip().rstrip(",;")
 
     for kind, pattern in _PATTERNS:
         m = pattern.match(text)
@@ -183,14 +184,78 @@ def parse_entry(entry: str) -> Dict:
         for key in ("amount", "value", "total"):
             if key in event:
                 event[key] = int(event[key])
-        if "count" in event:
-            event["count"] = _WORD_NUMBERS.get(event["count"].lower(), event["count"])
+        if "plural" in event:
+            event["count"] = _draw_count(event.pop("count"),
+                                         event.pop("plural").endswith("s"))
+        elif "count" in event:
+            event["count"] = _WORD_NUMBERS.get(event["count"].lower(),
+                                               event["count"])
         return event
+
+    repaired = _repair_verb(text)
+    if repaired is not None:
+        repaired["text"] = text
+        repaired["repaired"] = True
+        if clock:
+            repaired["clock"] = clock
+        return repaired
 
     event = {"type": "UNPARSED", "text": text}
     if clock:
         event["clock"] = clock
     return event
+
+
+# The verbs the grammar recognizes. This is a small closed vocabulary, which
+# is what makes repairing a misread one safe: there is nothing else a word in
+# this position could legitimately be.
+_VERBS = (
+    "plays", "casts", "draws", "mills", "reveals", "discards", "cycles",
+    "transforms", "counters", "activates", "blocks", "sacrifices",
+    "shuffles", "mulligans", "skips", "puts", "begins", "rolled", "joined",
+    "chooses", "gains", "loses", "deals", "leads", "wins", "destroyed",
+    "exiled", "conceded", "attacked", "returned",
+)
+
+
+def _repair_verb(text: str):
+    """Re-parse a line whose verb OCR mangled ("eyeles" for "cycles").
+
+    Only a repair that then *parses* is accepted, so a wrong guess produces
+    an unparsed line as before rather than a plausible wrong event.
+    """
+    words = text.split()
+    if any(word.lower().strip(".,") in _VERBS for word in words):
+        return None  # the verb is intact; something else is wrong
+    for index, word in enumerate(words):
+        token = word.lower().strip(".,")
+        if len(token) < 4:
+            continue
+        match = difflib.get_close_matches(token, _VERBS, n=1, cutoff=0.62)
+        if not match:
+            continue
+        candidate = list(words)
+        candidate[index] = match[0]
+        event = parse_entry(" ".join(candidate))
+        if event["type"] != "UNPARSED":
+            return event
+    return None
+
+
+def _draw_count(token: str, plural: bool) -> int:
+    """How many cards "draws <token> card(s)" means.
+
+    A singular noun means exactly one, whatever the article OCR'd as -- so a
+    misread "draws 3 card" is still one card. Only a plural noun licenses
+    reading the token as a number.
+    """
+    text = token.lower().strip()
+    if not plural:
+        return 1
+    if text in _WORD_NUMBERS:
+        return _WORD_NUMBERS[text]
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return int(digits) if digits else 2
 
 
 def _fix_number(raw) -> int:

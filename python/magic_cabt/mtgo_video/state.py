@@ -228,30 +228,20 @@ class GameSimulator:
 
     def _on_draw(self, e):
         p = self._player(e["player"])
-        p.hand += 1
+        count = int(e.get("count", 1))
+        p.hand += count
         if p.library is not None:
-            p.library = max(0, p.library - 1)
+            p.library = max(0, p.library - count)
         return True
 
     def _on_draw_with(self, e):
         return self._on_draw(e)
-
-    def _on_draw_n_with(self, e):
-        return self._on_draw_n(e)
 
     def _on_counters_with(self, e):
         # "<player> counters <card> with <counter>": pull the countered spell
         # off the battlefield if the cast optimistically resolved it there
         # (instants/sorceries are already in their owner's graveyard).
         self._remove_to_graveyard(e["card"])
-        return True
-
-    def _on_draw_n(self, e):
-        p = self._player(e["player"])
-        n = int(e["count"])
-        p.hand += n
-        if p.library is not None:
-            p.library = max(0, p.library - n)
         return True
 
     def _on_mill(self, e):

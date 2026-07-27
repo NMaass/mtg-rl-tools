@@ -24,9 +24,16 @@ import os
 import shutil
 import sys
 import tempfile
+from typing import Optional
 
 from .catalog import CardCatalog, DEFAULT_CATALOG, build_catalog
-from .extract import extract_log_frames
+from .extract import extract_log_frames, grab_frame
+from .layout import (
+    Layout,
+    detect_layout,
+    detect_layout_from_frames,
+    validate_layout,
+)
 from .games import split_games, game_is_complete, discover_players
 from .ocr import ocr_image, lines_to_entries
 from .parse import parse_log
@@ -142,15 +149,54 @@ def write_game_bundle(out_dir, events, args, catalog, index):
     return summary
 
 
+def sample_layout_frames(video, out_dir, start, end, count=5, at=None):
+    """Frames spread through the clip, for layout consensus."""
+    out_dir = os.path.realpath(out_dir)
+    if at is not None:
+        return [grab_frame(video, at, os.path.join(out_dir, "layout_frame.png"))]
+    begin = start or 0.0
+    finish = end if end is not None else begin + 300.0
+    span = max(1.0, finish - begin)
+    paths = []
+    for index in range(count):
+        when = begin + span * (index + 1) / (count + 1)
+        paths.append(grab_frame(
+            video, when, os.path.join(out_dir, "layout_frame_%d.png" % index)))
+    return paths
+
+
+def resolve_layout(args, out_dir):
+    """Locate the MTGO UI in this capture, however it was recorded."""
+    samples = sample_layout_frames(args.video, out_dir, args.start, args.end,
+                                   at=args.layout_frame)
+    layout = detect_layout_from_frames(samples, detect=not args.no_detect)
+    sample = samples[len(samples) // 2]
+    if args.region:
+        layout.log_pane = Region.parse(args.region)
+        layout.detected = False
+    print("      layout: %s" % layout.describe(), file=sys.stderr)
+
+    check = validate_layout(layout, sample)
+    if not check["ok"]:
+        raise SystemExit(
+            "layout validation failed (%s). The UI could not be located in "
+            "this capture; pass --region WxH+X+Y or a different "
+            "--layout-frame." % "; ".join(check["problems"]))
+    print("      layout validated: %d timestamped lines, life %s"
+          % (check["logTimestamps"], check["life"]), file=sys.stderr)
+    return layout, check
+
+
 def run_ingest(args):
-    region = Region.parse(args.region) if args.region else LOG_PANE_1080
     os.makedirs(args.out, exist_ok=True)
     frames_dir = args.frames_dir or tempfile.mkdtemp(prefix="mtgo_frames_")
 
-    print("[1/6] extracting frames (fps=%g)..." % args.fps, file=sys.stderr)
+    print("[1/6] locating the MTGO UI and extracting frames (fps=%g)..."
+          % args.fps, file=sys.stderr)
+    layout, layout_check = resolve_layout(args, args.out)
     frames = extract_log_frames(
         args.video, frames_dir, start=args.start, end=args.end,
-        fps=args.fps, region=region,
+        fps=args.fps, region=layout.log_pane,
     )
     print("      %d frames" % len(frames), file=sys.stderr)
 
@@ -184,7 +230,8 @@ def run_ingest(args):
         "startSeconds": args.start,
         "endSeconds": args.end,
         "fps": args.fps,
-        "region": "%dx%d+%d+%d" % (region.width, region.height, region.x, region.y),
+        "layout": layout.to_dict(),
+        "layoutCheck": layout_check,
         "framesRead": readable,
         "framesTotal": len(per_frame),
     })
@@ -287,13 +334,65 @@ def run_verify(args):
         raise SystemExit(1)
 
 
+def bundle_layout(bundle: str) -> Optional[Layout]:
+    """The layout recorded when this bundle was ingested, if any.
+
+    Reusing it means the HUD is read from the same places the log was, so a
+    720p bundle is cross-checked against 720p coordinates rather than
+    silently falling back to 1080p ones.
+    """
+    for candidate in (os.path.join(bundle, "match.json"),
+                      os.path.join(os.path.dirname(bundle.rstrip("/")),
+                                   "match.json")):
+        if not os.path.exists(candidate):
+            continue
+        with open(candidate) as f:
+            data = json.load(f)
+        raw = data.get("layout")
+        if not raw:
+            continue
+        fields = dict(raw)
+        for key in ("content", "log_pane", "life_top", "life_bottom",
+                    "name_top", "name_bottom"):
+            fields[key] = Region(**fields[key])
+        return Layout(**fields)
+    return None
+
+
+def run_layout(args):
+    """Detect and validate the UI layout of a capture, without ingesting."""
+    work = tempfile.mkdtemp(prefix="mtgo_layout_")
+    samples = sample_layout_frames(args.video, work, args.start, args.end,
+                                   at=args.at)
+    layout = detect_layout_from_frames(samples, detect=not args.no_detect)
+    check = validate_layout(layout, samples[len(samples) // 2])
+    print(json.dumps({"layout": layout.to_dict(), "check": check,
+                      "summary": layout.describe()}, indent=2))
+    if not check["ok"]:
+        raise SystemExit(1)
+
+
+def run_compare(args):
+    """Check that captures of the same match decoded to the same game."""
+    from .compare import compare_bundles
+
+    report = compare_bundles(args.bundles)
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(report, f, indent=2)
+    print(json.dumps(report, indent=2))
+    if not report["allIdentical"]:
+        raise SystemExit(1)
+
+
 def run_align(args):
     """Timestamp inferred state changes by locating them in the footage."""
     from .hud import align_derived_states
     from .render import load_states
 
     states = load_states(args.bundle)
-    report = align_derived_states(args.video, states)
+    report = align_derived_states(args.video, states,
+                                  layout=bundle_layout(args.bundle))
     path = os.path.join(args.bundle, "mirror_states.jsonl")
     with open(path, "w") as f:
         for state in states:
@@ -310,7 +409,8 @@ def run_crosscheck(args):
 
     states = load_states(args.bundle)
     report = crosscheck_life(args.video, states, sample=args.sample,
-                             settle=args.settle)
+                             settle=args.settle,
+                             layout=bundle_layout(args.bundle))
     report["bundle"] = os.path.abspath(args.bundle)
     if args.out:
         with open(args.out, "w") as f:
@@ -353,7 +453,11 @@ def build_parser():
     ingest.add_argument("--end", type=float, default=None)
     ingest.add_argument("--fps", type=float, default=1.0)
     ingest.add_argument("--region", default=None,
-                        help="log pane crop as WxH+X+Y (default: 1080p layout)")
+                        help="override the detected log-pane crop, as WxH+X+Y")
+    ingest.add_argument("--no-detect", action="store_true",
+                        help="skip detection; scale the reference layout instead")
+    ingest.add_argument("--layout-frame", type=float, default=None,
+                        help="video seconds to sample for layout detection")
     ingest.add_argument("--hero", default=None,
                         help="local player name (perspective for the mirror)")
     ingest.add_argument("--match-id", default="mtgo-video")
@@ -394,6 +498,24 @@ def build_parser():
                         help="working directory for the JVM (the Mage.Client dir)")
     verify.add_argument("--out", default=None, help="write the report here too")
     verify.set_defaults(func=run_verify)
+
+    compare_cmd = sub.add_parser(
+        "compare",
+        help="check that bundles of the same match decoded identically")
+    compare_cmd.add_argument("bundles", nargs="+",
+                             help="game bundle dirs; the first is the reference")
+    compare_cmd.add_argument("--out", default=None)
+    compare_cmd.set_defaults(func=run_compare)
+
+    layout_cmd = sub.add_parser(
+        "layout", help="detect and validate a capture's UI layout")
+    layout_cmd.add_argument("--video", required=True)
+    layout_cmd.add_argument("--at", type=float, default=None,
+                            help="sample one frame here instead of several")
+    layout_cmd.add_argument("--start", type=float, default=None)
+    layout_cmd.add_argument("--end", type=float, default=None)
+    layout_cmd.add_argument("--no-detect", action="store_true")
+    layout_cmd.set_defaults(func=run_layout)
 
     align = sub.add_parser(
         "align",

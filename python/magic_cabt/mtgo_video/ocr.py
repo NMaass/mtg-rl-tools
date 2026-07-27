@@ -9,7 +9,13 @@ from typing import List, Optional
 # it freely ("/:06 AN:", "7:04 AWM:", "7:01 4M:"), so be tolerant: an
 # hour-ish glyph, colon-ish separator, two digits, then a short AM/PM-ish
 # token ending in M/N/I (e.g. AM, PM, AN, AWM, AMI, 4M, Ali).
-_TS = r"[\dOl|/It]{1,2}\s*[:.]\s*[\dO]{2}\s*[AP4/][A-Za-z]{0,2}\s*[:;.,]"
+# The clock's punctuation is the least reliable thing on screen: the colon
+# has been seen as ".", ",", "-" and even as a digit ("7203 AM" for 7:03),
+# and "AM" as "AN", "AWM", "Alvi", "4M". Only the shape -- one or two digits,
+# a separator, two digits, an AM/PM-ish token, a colon -- is dependable, and
+# that shape is distinctive enough not to match ordinary log text.
+_TS = (r"[\dOlI|/t]{1,2}\s*[:.,;\-\d]?\s*[\dO]{2}\s*"
+       r"[AP4/][A-Za-z]{0,3}\s*[:;.,]")
 TIMESTAMP_RE = re.compile(r"^\s*" + _TS + r"\s*")
 INLINE_TIMESTAMP_RE = re.compile(r"\s+(?=" + _TS + r"\s)")
 

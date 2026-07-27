@@ -28,7 +28,7 @@ This is active research software, not a complete competitive Magic agent platfor
 | XMage option-index bridge | Implemented. Real XMage callbacks expose indexed legal choices and fail closed on unsupported decisions. |
 | Python live-game client | Implemented through `magic_cabt.CabtBridge`. |
 | MTG Arena capture | Implemented. `Player.log` sessions can be followed, normalized, mirrored, and recorded. |
-| MTGO video capture | Implemented. MTGO footage is OCR'd into a game log, reconstructed into board states, replayed in XMage, and verified both against XMage's own rendering and against MTGO's on-screen life totals. See [`docs/MTGO_VIDEO.md`](docs/MTGO_VIDEO.md). |
+| MTGO video capture | Implemented. MTGO footage is OCR'd into a game log, reconstructed into board states, replayed in XMage, and verified three ways: against XMage's own rendering, against MTGO's on-screen life totals, and across captures of the same match at different resolutions. The UI is located by detection rather than fixed coordinates, so 720p through 1440p decode identically. See [`docs/MTGO_VIDEO.md`](docs/MTGO_VIDEO.md). |
 | Canonical data contract | Implemented for Arena, XMage self-play, engine-human play, and search records. |
 | Strategic action grouping | Implemented. Low-level target/mode/payment callbacks can be compiled into auditable macro actions. |
 | Transition datasets | Implemented for state streams, decisions, and complete macro actions. |

@@ -137,6 +137,34 @@ class ReconstructTest(unittest.TestCase):
         rec.feed(["7:00 AM: a plays Island."], timestamp=12.0)
         self.assertEqual(rec.times, [10.0, 11.0])
 
+    def test_majority_reading_wins_across_repeated_sightings(self):
+        # A line sits on screen for many frames and OCR does not fail the
+        # same way each time, so the majority reading beats any single one.
+        rec = LogReconstructor()
+        for text in ["7:00 AM: a casts Mental Note.",
+                     "7:00 AM: a casts Mentol Note.",
+                     "7:00 AM: a casts Mental Note.",
+                     "7:00 AM: a casts Mental Note."]:
+            rec.feed([text])
+        self.assertEqual(rec.entries, ["7:00 AM: a casts Mental Note."])
+
+    def test_a_misread_duplicate_is_folded_back_together(self):
+        rec = LogReconstructor()
+        rec.feed(["7:00 AM: a plays Island.", "7:00 AM: a casts Brainstorm."])
+        # A noisy re-read that failed to align gets appended as a duplicate.
+        rec.feed(["7:00 AM: a casts Brainstonn."])
+        self.assertEqual(len(rec.entries), 2)
+
+    def test_a_genuinely_repeated_line_is_not_collapsed(self):
+        # MTGO really does log the same sentence twice in a row. The two are
+        # on screen together, which is what tells them apart from a misread.
+        rec = LogReconstructor()
+        both = ["7:03 AM: a casts Tolarian Terror.",
+                "7:03 AM: a casts Tolarian Terror."]
+        rec.feed(both)
+        rec.feed(both)
+        self.assertEqual(len(rec.entries), 2)
+
     def test_longer_reading_wins_but_earliest_time_is_kept(self):
         rec = LogReconstructor()
         rec.feed(["7:00 AM: a mills Cryptic"], timestamp=5.0)
@@ -180,10 +208,150 @@ class ParseTest(unittest.TestCase):
     def test_ocr_mangled_turn_number_is_recovered(self):
         self.assertEqual(parse_entry("7:03 AM: Turn 5S: golubtsov")["turn"], 5)
 
+    def test_draw_count_comes_from_the_noun_not_the_article(self):
+        # The article is one glyph and misreads often ("draws 3 card"); the
+        # singular noun is the reliable signal that it was one card.
+        cases = [
+            ("7:00 AM: a draws a card.", 1),
+            ("7:00 AM: a draws 3 card with Thought Scour.", 1),
+            ("7:00 AM: a draws three cards with Brainstorm.", 3),
+            ("7:00 AM: a draws 3 cards.", 3),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(parse_entry(text)["count"], expected)
+
+    def test_a_misread_clock_separator_still_delimits_entries(self):
+        # OCR reads the colon in "7:01 AM" as a hyphen often enough that it
+        # would otherwise glue two log lines into one unparsable entry.
+        self.assertEqual(
+            lines_to_entries(["7:01 AM: a draws a card. 7-01 AM: a plays Bojuka Bog."]),
+            ["7:01 AM: a draws a card.", "7-01 AM: a plays Bojuka Bog."])
+
+    def test_a_misread_verb_is_repaired_only_if_the_result_parses(self):
+        repaired = parse_entry("7:02 AM: a eyeles Lorien Revealed.")
+        self.assertEqual(repaired["type"], "CYCLE")
+        self.assertTrue(repaired["repaired"])
+        # The original text is kept, so the repair stays auditable.
+        self.assertIn("eyeles", repaired["text"])
+
+    def test_verb_repair_does_not_invent_events_from_noise(self):
+        for junk in ("7:00 AM: total gibberish zzz qqq",
+                     "7:00 AM: xxxxx yyyyy zzzzz"):
+            with self.subTest(junk=junk):
+                self.assertEqual(parse_entry(junk)["type"], "UNPARSED")
+
+    def test_a_mangled_clock_still_delimits_and_parses(self):
+        # Every one of these separators and AM spellings came out of a real
+        # capture; each would otherwise glue two log lines into one.
+        glued = ("7:00 AM: Turn 1: golubtsov 7,00 AM: golubtsov skips their "
+                 "draw step. 7203 AM: golubtsov draws a card. "
+                 "7:01 Alvi: golubtsov plays Forest.")
+        entries = lines_to_entries([glued])
+        self.assertEqual([parse_entry(e)["type"] for e in entries],
+                         ["TURN", "SKIP_DRAW", "DRAW", "PLAY_LAND"])
+
     def test_unrecognized_entries_are_reported_not_dropped(self):
         event = parse_entry("7:00 AM: something entirely new happens somehow")
         self.assertEqual(event["type"], "UNPARSED")
         self.assertIn("something entirely new", event["text"])
+
+
+class LayoutTest(unittest.TestCase):
+    """Locating the UI without depending on the capture resolution."""
+
+    def frame(self, width=1920, height=1080, letterbox=0):
+        """A synthetic MTGO-ish frame: dark board, bright log pane, scrollbar."""
+        from PIL import Image, ImageDraw
+
+        image = Image.new("L", (width, height), 0)
+        draw = ImageDraw.Draw(image)
+        scale = width / 1920.0
+        inner_top = letterbox
+        inner_height = height - 2 * letterbox
+        # board
+        draw.rectangle([0, inner_top, width - 1, inner_top + inner_height - 1],
+                       fill=80)
+        # log pane: white text column plus a darker scrollbar at its right
+        pane_x0 = int(1537 * scale)
+        pane_x1 = int(1892 * scale)
+        bar_x1 = int(1906 * scale)
+        pane_y0 = inner_top + int(62 * scale)
+        pane_y1 = inner_top + int(538 * scale)
+        draw.rectangle([pane_x0, pane_y0, pane_x1, pane_y1], fill=254)
+        draw.rectangle([pane_x1 + 1, pane_y0, bar_x1, pane_y1], fill=162)
+        # the bright border column drawn outside the scrollbar
+        draw.rectangle([bar_x1 + 1, pane_y0, bar_x1 + 3, pane_y1], fill=254)
+        return image
+
+    def test_pane_is_found_and_excludes_the_scrollbar(self):
+        from magic_cabt.mtgo_video.layout import build_layout
+
+        layout = build_layout(self.frame())
+        self.assertTrue(layout.detected)
+        right = layout.log_pane.x + layout.log_pane.width
+        # The text column ends before the scrollbar at x=1893, not after the
+        # bright border column that sits outside it.
+        self.assertLess(right, 1893)
+        self.assertGreater(right, 1860)
+
+    def test_detection_scales_with_capture_resolution(self):
+        from magic_cabt.mtgo_video.layout import build_layout
+
+        panes = {}
+        for width, height in ((1280, 720), (1920, 1080), (2560, 1440)):
+            layout = build_layout(self.frame(width, height))
+            self.assertTrue(layout.detected, "%dx%d" % (width, height))
+            panes[width] = layout.log_pane
+        # Widths should track the resolution ratio within rounding.
+        self.assertAlmostEqual(panes[1280].width / panes[1920].width,
+                               1280 / 1920, delta=0.03)
+        self.assertAlmostEqual(panes[2560].width / panes[1920].width,
+                               2560 / 1920, delta=0.03)
+
+    def test_letterboxing_is_trimmed_before_locating_anything(self):
+        from magic_cabt.mtgo_video.layout import build_layout
+
+        layout = build_layout(self.frame(1920, 1200, letterbox=60))
+        self.assertEqual(layout.content.y, 60)
+        self.assertEqual(layout.content.height, 1080)
+        self.assertTrue(layout.detected)
+
+    def test_falls_back_to_proportional_regions_when_nothing_is_found(self):
+        from PIL import Image
+        from magic_cabt.mtgo_video.layout import build_layout
+
+        layout = build_layout(Image.new("L", (1920, 1080), 80))
+        self.assertFalse(layout.detected)
+        self.assertGreater(layout.log_pane.width, 0)
+
+    def test_consensus_uses_the_narrowest_credible_right_edge(self):
+        # A frame whose log has not overflowed yet shows no scrollbar, so its
+        # pane looks wider. Taking that would glue scrollbar glyphs onto every
+        # wrapped line in the frames that do have one.
+        import os
+        import tempfile
+
+        from magic_cabt.mtgo_video.layout import detect_layout_from_frames
+
+        work = tempfile.mkdtemp(prefix="layout_test_")
+        try:
+            paths = []
+            for index in range(3):
+                image = self.frame()
+                if index == 2:  # no scrollbar drawn: pane reads wider
+                    from PIL import ImageDraw
+                    ImageDraw.Draw(image).rectangle(
+                        [1893, 62, 1906, 538], fill=254)
+                path = os.path.join(work, "f%d.png" % index)
+                image.save(path)
+                paths.append(path)
+            layout = detect_layout_from_frames(paths)
+            self.assertLess(layout.log_pane.x + layout.log_pane.width, 1893)
+            self.assertEqual(layout.samples, 3)
+        finally:
+            import shutil
+            shutil.rmtree(work, ignore_errors=True)
 
 
 class CatalogTest(unittest.TestCase):
@@ -555,6 +723,55 @@ class SimulatorTest(unittest.TestCase):
         # Hands, graveyards, and libraries are keyed by stringified seat.
         self.assertTrue(all(k.isdigit() for k in state["zones"]["hands"]))
         json.dumps(state)  # must be serializable for mirror_states.jsonl
+
+
+class CrossCaptureCompareTest(unittest.TestCase):
+    """Two captures of the same match must decode to the same game."""
+
+    def game(self, bundle="a", life=20, extra_event=False):
+        events = [{"type": "TURN", "turn": 1, "player": "a", "text": "Turn 1: a",
+                   "videoTime": 1.0},
+                  {"type": "PLAY_LAND", "player": "a", "card": "Island",
+                   "text": "a plays Island.", "videoTime": 2.0}]
+        if extra_event:
+            events.append({"type": "DRAW", "player": "a", "count": 1,
+                           "text": "a draws a card."})
+        states = [{"seq": 1, "turnNumber": 1, "phase": "Phase_Main1",
+                   "step": None, "activeSeat": 1, "videoTime": 2.0,
+                   "players": [{"seat": 1, "name": "a", "life": life,
+                                "libraryCount": 50, "handCount": 6}],
+                   "zones": {"battlefield": [{"name": "Island", "tapped": False,
+                                              "controllerSeat": 1}],
+                             "graveyards": {}},
+                   "sourceEvent": {"text": "a plays Island."}}]
+        return {"bundle": bundle, "events": events, "states": states}
+
+    def test_identical_games_compare_equal_despite_different_timestamps(self):
+        from magic_cabt.mtgo_video.compare import compare_games
+
+        left = self.game("1080p")
+        right = self.game("720p")
+        # Frame sampling legitimately shifts video timestamps between
+        # captures; that must not count as a difference.
+        right["events"][0]["videoTime"] = 1.5
+        right["states"][0]["videoTime"] = 2.5
+        result = compare_games(left, right)
+        self.assertTrue(result["identical"], result["differences"])
+
+    def test_a_differing_board_is_reported(self):
+        from magic_cabt.mtgo_video.compare import compare_games
+
+        result = compare_games(self.game(), self.game(life=17))
+        self.assertFalse(result["identical"])
+        self.assertTrue(any(d["kind"] == "states" for d in result["differences"]))
+
+    def test_a_missing_event_is_reported(self):
+        from magic_cabt.mtgo_video.compare import compare_games
+
+        result = compare_games(self.game(extra_event=True), self.game())
+        self.assertFalse(result["identical"])
+        self.assertTrue(any(d["reason"] == "count"
+                            for d in result["differences"]))
 
 
 class CompareStateTest(unittest.TestCase):
