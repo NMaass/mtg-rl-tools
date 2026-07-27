@@ -31,8 +31,11 @@ import java.util.UUID;
  * opponent's hidden cards render face-down — without needing a live GUI.
  * <pre>
  *   MirrorVerify &lt;mirror_states.jsonl&gt; [stateIndex]
+ *   MirrorVerify &lt;mirror_states.jsonl&gt; --all
  * </pre>
- * With no index, the last state of the first game is used.
+ * With no index, the last state of the first game is used. With {@code
+ * --all}, one summary line is printed per state (applied cumulatively in a
+ * single JVM run) so a whole game can be checked at once.
  */
 public final class MirrorVerify {
 
@@ -40,7 +43,7 @@ public final class MirrorVerify {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1) {
-            System.err.println("usage: MirrorVerify <mirror_states.jsonl> [stateIndex]");
+            System.err.println("usage: MirrorVerify <mirror_states.jsonl> [stateIndex|--all]");
             System.exit(2);
         }
         RepositoryUtil.bootstrapLocalDb();
@@ -58,7 +61,9 @@ public final class MirrorVerify {
             }
             firstGame.add(state);
         }
-        int index = args.length >= 2 ? Integer.parseInt(args[1]) : firstGame.size() - 1;
+        boolean all = args.length >= 2 && "--all".equals(args[1]);
+        int index = !all && args.length >= 2
+                ? Integer.parseInt(args[1]) : firstGame.size() - 1;
         index = Math.max(0, Math.min(index, firstGame.size() - 1));
 
         JsonObject firstState = firstGame.get(0);
@@ -67,6 +72,14 @@ public final class MirrorVerify {
         applier.startGame(playersArray(firstState), optInt(firstState, "localSeat"));
         for (int i = 0; i <= index; i++) {
             applier.apply(firstGame.get(i));
+            if (all) {
+                GameView stepView = new GameView(game.getState(), game,
+                        applier.localPlayerId(), null);
+                System.out.println(GSON.toJson(summarize(stepView, i, firstGame.size())));
+            }
+        }
+        if (all) {
+            return;
         }
 
         GameView view = new GameView(game.getState(), game,
@@ -108,6 +121,14 @@ public final class MirrorVerify {
                 }
             }
             playerJson.add("battlefield", battlefield);
+
+            JsonArray graveyard = new JsonArray();
+            if (player.getGraveyard() != null) {
+                for (CardView card : player.getGraveyard().values()) {
+                    graveyard.add(card.getName());
+                }
+            }
+            playerJson.add("graveyard", graveyard);
             players.add(playerJson);
         }
         summary.add("players", players);

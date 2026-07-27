@@ -183,6 +183,14 @@ final class MirrorStateApplier {
                 continue;
             }
             Permanent permanent = existingPermanent(instanceId);
+            if (permanent != null && renamed(permanent, objectJson)) {
+                // Same instance, different card: a transforming double-faced
+                // permanent flipped ("Delver of Secrets" -> "Insectile
+                // Aberration"). Rebuild it so the shown face follows the log.
+                game.getBattlefield().removePermanent(permanent.getId());
+                permanentsByInstance.remove(instanceId);
+                permanent = null;
+            }
             if (permanent == null) {
                 permanent = createPermanent(objectJson, controllerId);
                 if (permanent == null) {
@@ -356,6 +364,9 @@ final class MirrorStateApplier {
             Card face = selectBattlefieldFace(card, name);
             game.loadCards(Collections.singleton(card), controllerId);
             PermanentCard permanent = new PermanentCard(face, controllerId, game);
+            if (isTransformedFace(card, name)) {
+                permanent.setTransformed(true);
+            }
             if (faceDown) {
                 permanent.setFaceDown(true, game);
             }
@@ -393,6 +404,34 @@ final class MirrorStateApplier {
             return left;
         }
         return right != null ? right : card;
+    }
+
+    /**
+     * Whether a still-present instance now names a different card than the
+     * permanent currently rendered for it.
+     */
+    private boolean renamed(Permanent permanent, JsonObject objectJson) {
+        String name = optString(objectJson, "name", null);
+        if (name == null || optBool(objectJson, "faceDown")) {
+            return false;
+        }
+        return !name.equalsIgnoreCase(permanent.getName())
+                && !stripDiacritics(name).equalsIgnoreCase(
+                        stripDiacritics(permanent.getName()));
+    }
+
+    /**
+     * Whether the log named the back face of a transforming double-faced
+     * card ("Insectile Aberration" for Delver of Secrets). Unlike a split
+     * card, both faces of a transforming card live on one card object, so
+     * the permanent has to be flipped rather than built from a half.
+     */
+    private boolean isTransformedFace(Card card, String name) {
+        if (name == null) {
+            return false;
+        }
+        Card back = card.getSecondCardFace();
+        return back != null && name.equalsIgnoreCase(back.getName());
     }
 
     private Permanent faceDownPlaceholder(UUID controllerId) {
@@ -491,6 +530,9 @@ final class MirrorStateApplier {
      *    back to its paper original.
      *  - split / adventure / MDFC names arrive as "A // B"; XMage indexes the
      *    combined card under its front (left) face.
+     *  - accented names ("Lorien Revealed", "Jotun Grunt") are indexed by
+     *    XMage without their diacritics, while Arena and Scryfall carry
+     *    them, so fold the accents as a last resort.
      */
     private static java.util.List<String> resolutionCandidates(String name) {
         java.util.LinkedHashSet<String> candidates = new java.util.LinkedHashSet<>();
@@ -504,7 +546,18 @@ final class MirrorStateApplier {
         if (split > 0) {
             candidates.add(base.substring(0, split));
         }
+        for (String candidate : new java.util.ArrayList<>(candidates)) {
+            String folded = stripDiacritics(candidate);
+            if (!folded.equals(candidate)) {
+                candidates.add(folded);
+            }
+        }
         return new java.util.ArrayList<>(candidates);
+    }
+
+    private static String stripDiacritics(String text) {
+        return java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "");
     }
 
     private Card takeFiller(Integer seat, int index) {

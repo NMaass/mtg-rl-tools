@@ -1,0 +1,443 @@
+"""CLI for the MTGO video ingestion pipeline.
+
+    python -m magic_cabt.mtgo_video ingest VIDEO --out BUNDLE_DIR \
+        [--start S] [--end S] [--fps 1.0] [--hero NAME] [--deck-size 60]
+
+Produces a match directory containing one replayable bundle per game:
+
+    BUNDLE_DIR/
+      mtgo_log.json        reconstructed log entries (OCR windows merged)
+      mtgo_events.jsonl    parsed + name-corrected events, whole match
+      card_cache.json      Scryfall metadata cache
+      match.json           match-level summary
+      game1/
+        mirror_states.jsonl  board snapshots (Arena mirror schema)
+        mtgo_events.jsonl    this game's events
+        summary.json
+      game2/ ...
+"""
+
+import argparse
+import concurrent.futures
+import json
+import os
+import shutil
+import sys
+import tempfile
+
+from .catalog import CardCatalog, DEFAULT_CATALOG, build_catalog
+from .extract import extract_log_frames
+from .games import split_games, game_is_complete, discover_players
+from .ocr import ocr_image, lines_to_entries
+from .parse import parse_log
+from .reconstruct import LogReconstructor
+from .regions import Region, LOG_PANE_1080
+from .state import GameSimulator
+
+_CARD_FIELDS = ("card", "into", "counter", "source", "attacker", "blocker")
+_CARD_LIST_FIELDS = ("cards", "targets")
+
+
+def correct_events(events, catalog, players=()):
+    """Resolve OCR'd card names to canonical names against the local catalog.
+
+    A spell's target may be a player rather than a card ("casts Thought
+    Scour targeting BuzzCaldera"), so known player names are left alone
+    instead of being matched against the catalog.
+    """
+    import difflib
+
+    def is_player(text):
+        return any(
+            difflib.SequenceMatcher(None, text.lower(), name.lower()).ratio() >= 0.8
+            for name in players
+        )
+
+    def fields(event):
+        for field in _CARD_FIELDS:
+            if field in event:
+                yield field, None
+        for field in _CARD_LIST_FIELDS:
+            for i in range(len(event.get(field, ()))):
+                yield field, i
+
+    def get(event, field, i):
+        return event[field] if i is None else event[field][i]
+
+    def put(event, field, i, value):
+        if i is None:
+            event[field] = value
+        else:
+            event[field][i] = value
+
+    # Lock the run vocabulary to the cards this log spells correctly, before
+    # resolving anything fuzzily: a garbled sighting then snaps onto the card
+    # the log already named exactly, whichever came first.
+    catalog.seed_from_log(
+        get(event, field, i)
+        for event in events
+        for field, i in fields(event)
+        if not is_player(get(event, field, i))
+    )
+    for event in events:
+        for field, i in fields(event):
+            name = get(event, field, i)
+            if not is_player(name):
+                put(event, field, i, catalog.canonical_name(name))
+    return events
+
+
+def _ocr_one(path):
+    # Non-strict: an ingest spans thousands of frames and must survive a few
+    # unreadable ones. run_ingest reports the empty-frame count.
+    return lines_to_entries(ocr_image(path, strict=False))
+
+
+def write_game_bundle(out_dir, events, args, catalog, index):
+    os.makedirs(out_dir, exist_ok=True)
+    sim = GameSimulator(
+        hero=args.hero,
+        match_id=args.match_id,
+        game_number=index,
+        deck_size=args.deck_size,
+        card_info=catalog.lookup,
+    )
+    sim.seed_players(discover_players(events))
+    states = []
+    for event in events:
+        for snap in sim.apply(event):
+            # A snapshot the simulator already attributed (combat damage)
+            # keeps its own event and timestamp.
+            snap.setdefault("sourceEvent",
+                            {k: v for k, v in event.items() if k != "clock"})
+            if "videoTime" in event:
+                snap.setdefault("videoTime", event["videoTime"])
+            states.append(snap)
+
+    with open(os.path.join(out_dir, "mirror_states.jsonl"), "w") as f:
+        for state in states:
+            f.write(json.dumps(state) + "\n")
+    with open(os.path.join(out_dir, "mtgo_events.jsonl"), "w") as f:
+        for event in events:
+            f.write(json.dumps(event) + "\n")
+
+    players = [p.name for p in sorted(sim.players.values(), key=lambda q: q.seat)]
+    summary = {
+        "source": "mtgo_video",
+        "matchId": args.match_id,
+        "gameNumber": index,
+        "players": players,
+        "hero": args.hero,
+        "events": len(events),
+        "unparsedEvents": sum(1 for e in events if e["type"] == "UNPARSED"),
+        "states": len(states),
+        "complete": game_is_complete(events),
+        "winner": sim.winner,
+        "turns": sim.turn_number,
+        "simulatorWarnings": sim.warnings,
+        "title": "MTGO %s game %d: %s" % (args.match_id, index, " vs ".join(players)),
+    }
+    with open(os.path.join(out_dir, "summary.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+    return summary
+
+
+def run_ingest(args):
+    region = Region.parse(args.region) if args.region else LOG_PANE_1080
+    os.makedirs(args.out, exist_ok=True)
+    frames_dir = args.frames_dir or tempfile.mkdtemp(prefix="mtgo_frames_")
+
+    print("[1/6] extracting frames (fps=%g)..." % args.fps, file=sys.stderr)
+    frames = extract_log_frames(
+        args.video, frames_dir, start=args.start, end=args.end,
+        fps=args.fps, region=region,
+    )
+    print("      %d frames" % len(frames), file=sys.stderr)
+
+    print("[2/6] OCR (%d workers)..." % args.workers, file=sys.stderr)
+    paths = [path for _, path in frames]
+    # Threads, not processes: each task is a tesseract subprocess, so the
+    # GIL is released for the whole of the actual work.
+    with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
+        per_frame = list(pool.map(_ocr_one, paths))
+    readable = sum(1 for entries in per_frame if entries)
+    print("      %d/%d frames yielded log entries" % (readable, len(per_frame)),
+          file=sys.stderr)
+
+    print("[3/6] merging log windows...", file=sys.stderr)
+    rec = LogReconstructor()
+    for (timestamp, _), entries in zip(frames, per_frame):
+        rec.feed(entries, timestamp)
+    with open(os.path.join(args.out, "mtgo_log.json"), "w") as f:
+        json.dump(rec.entries, f, indent=1)
+    with open(os.path.join(args.out, "mtgo_log_times.json"), "w") as f:
+        json.dump(rec.times, f)
+    print("      %d log entries" % len(rec.entries), file=sys.stderr)
+
+    print("[4/6] parsing events...", file=sys.stderr)
+    print("[5/6] resolving card names against the local catalog...",
+          file=sys.stderr)
+    print("[6/6] splitting games and simulating board states...", file=sys.stderr)
+    match = dict(build_games(args, rec.entries, args.out, open_catalog(args),
+                             rec.times), **{
+        "video": os.path.abspath(args.video),
+        "startSeconds": args.start,
+        "endSeconds": args.end,
+        "fps": args.fps,
+        "region": "%dx%d+%d+%d" % (region.width, region.height, region.x, region.y),
+        "framesRead": readable,
+        "framesTotal": len(per_frame),
+    })
+    with open(os.path.join(args.out, "match.json"), "w") as f:
+        json.dump(match, f, indent=2)
+
+    if not args.frames_dir:
+        shutil.rmtree(frames_dir, ignore_errors=True)
+    print(json.dumps(match, indent=2))
+
+
+def build_games(args, rec_entries, out_dir, catalog, times=None):
+    """Parse, correct, split, and simulate; returns the match summary."""
+    events = parse_log(rec_entries, times)
+    correct_events(events, catalog, players=discover_players(events))
+    with open(os.path.join(out_dir, "mtgo_events.jsonl"), "w") as f:
+        for event in events:
+            f.write(json.dumps(event) + "\n")
+
+    games = split_games(events)
+    game_summaries = []
+    for i, game_events in enumerate(games, start=1):
+        if args.game and i != args.game:
+            continue
+        game_summaries.append(
+            write_game_bundle(os.path.join(out_dir, "game%d" % i),
+                              game_events, args, catalog, i))
+
+    if catalog.unresolved:
+        print("WARNING: %d card names did not match the catalog: %s"
+              % (len(catalog.unresolved), ", ".join(sorted(catalog.unresolved))),
+              file=sys.stderr)
+
+    unparsed = sum(1 for e in events if e["type"] == "UNPARSED")
+    return {
+        "catalogSource": catalog.source,
+        "catalogBuiltAt": catalog.built_at,
+        "cardsInPlay": sorted(catalog.vocabulary),
+        "cardsUnresolved": catalog.unresolved,
+        "source": "mtgo_video",
+        "matchId": args.match_id,
+        "hero": args.hero,
+        "logEntries": len(rec_entries),
+        "events": len(events),
+        "unparsedEvents": unparsed,
+        "parseCoverage": round(1.0 - unparsed / max(1, len(events)), 4),
+        "games": game_summaries,
+    }
+
+
+def open_catalog(args):
+    """Load the local card catalog, building it once if it is missing."""
+    path = args.catalog or DEFAULT_CATALOG
+    if not os.path.exists(path):
+        print("building card catalog (one-time Scryfall bulk download)...",
+              file=sys.stderr)
+        build_catalog(path)
+    return CardCatalog(path)
+
+
+def run_catalog(args):
+    path = build_catalog(args.catalog or DEFAULT_CATALOG)
+    catalog = CardCatalog(path)
+    print(json.dumps({"path": path, "cards": len(catalog.cards),
+                      "source": catalog.source, "builtAt": catalog.built_at},
+                     indent=2))
+
+
+def run_rebuild(args):
+    """Re-run parsing and simulation from an already-OCR'd log."""
+    with open(os.path.join(args.bundle, "mtgo_log.json")) as f:
+        entries = json.load(f)
+    times_path = os.path.join(args.bundle, "mtgo_log_times.json")
+    times = None
+    if os.path.exists(times_path):
+        with open(times_path) as f:
+            times = json.load(f)
+    match = build_games(args, entries, args.bundle, open_catalog(args), times)
+    match_path = os.path.join(args.bundle, "match.json")
+    if os.path.exists(match_path):
+        with open(match_path) as f:
+            match = dict(json.load(f), **match)
+    with open(match_path, "w") as f:
+        json.dump(match, f, indent=2)
+    print(json.dumps(match, indent=2))
+
+
+def run_verify(args):
+    from .verify import verify_bundle
+
+    classpath = args.classpath or os.environ.get("MAGIC_CABT_CLASSPATH")
+    if not classpath:
+        raise SystemExit("pass --classpath or set $MAGIC_CABT_CLASSPATH")
+    report = verify_bundle(args.bundle, classpath, java=args.java, cwd=args.cwd)
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(report, f, indent=2)
+    print(json.dumps(report, indent=2))
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
+def run_align(args):
+    """Timestamp inferred state changes by locating them in the footage."""
+    from .hud import align_derived_states
+    from .render import load_states
+
+    states = load_states(args.bundle)
+    report = align_derived_states(args.video, states)
+    path = os.path.join(args.bundle, "mirror_states.jsonl")
+    with open(path, "w") as f:
+        for state in states:
+            f.write(json.dumps(state) + "\n")
+    print(json.dumps(report, indent=2))
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
+def run_crosscheck(args):
+    """Check derived life totals against MTGO's on-screen HUD."""
+    from .hud import crosscheck_life
+    from .render import load_states
+
+    states = load_states(args.bundle)
+    report = crosscheck_life(args.video, states, sample=args.sample,
+                             settle=args.settle)
+    report["bundle"] = os.path.abspath(args.bundle)
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(report, f, indent=2)
+    print(json.dumps(report, indent=2))
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
+def run_render(args):
+    from .render import capture_states, render_replay, render_side_by_side
+
+    classpath = args.classpath or os.environ.get("MAGIC_CABT_CLASSPATH")
+    if not classpath:
+        raise SystemExit("pass --classpath or set $MAGIC_CABT_CLASSPATH")
+    # Capture once, then encode every requested cut from the same shots.
+    shots = capture_states(args.bundle, classpath=classpath, java=args.java,
+                           cwd=args.cwd, reuse=args.reuse_frames)
+    outputs = [render_replay(args.bundle, args.out, seconds_per_state=
+                             args.seconds_per_state, shots=shots)]
+    if args.side_by_side:
+        if not args.source_video:
+            raise SystemExit("--side-by-side needs --source-video")
+        outputs.append(render_side_by_side(
+            args.bundle, args.source_video, args.side_by_side,
+            speed=args.speed, shots=shots,
+        ))
+    for path in outputs:
+        print(path)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="magic_cabt.mtgo_video")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    ingest = sub.add_parser("ingest", help="video -> log -> per-game mirror bundles")
+    ingest.add_argument("video")
+    ingest.add_argument("--out", required=True)
+    ingest.add_argument("--start", type=float, default=None)
+    ingest.add_argument("--end", type=float, default=None)
+    ingest.add_argument("--fps", type=float, default=1.0)
+    ingest.add_argument("--region", default=None,
+                        help="log pane crop as WxH+X+Y (default: 1080p layout)")
+    ingest.add_argument("--hero", default=None,
+                        help="local player name (perspective for the mirror)")
+    ingest.add_argument("--match-id", default="mtgo-video")
+    ingest.add_argument("--game", type=int, default=None,
+                        help="only build this game number (1-based)")
+    ingest.add_argument("--deck-size", type=int, default=60)
+    ingest.add_argument("--catalog", default=None,
+                        help="card catalog path (default: %s)" % DEFAULT_CATALOG)
+    ingest.add_argument("--frames-dir", default=None,
+                        help="keep extracted frames here (default: temp dir)")
+    ingest.add_argument("--workers", type=int,
+                        default=max(1, (os.cpu_count() or 2) - 1))
+    ingest.set_defaults(func=run_ingest)
+
+    rebuild = sub.add_parser(
+        "rebuild",
+        help="re-parse and re-simulate from a bundle's cached mtgo_log.json")
+    rebuild.add_argument("bundle")
+    rebuild.add_argument("--hero", default=None)
+    rebuild.add_argument("--match-id", default="mtgo-video")
+    rebuild.add_argument("--game", type=int, default=None)
+    rebuild.add_argument("--deck-size", type=int, default=60)
+    rebuild.add_argument("--catalog", default=None)
+    rebuild.set_defaults(func=run_rebuild)
+
+    catalog = sub.add_parser(
+        "catalog", help="download/refresh the local card-name catalog")
+    catalog.add_argument("--catalog", default=None,
+                         help="output path (default: %s)" % DEFAULT_CATALOG)
+    catalog.set_defaults(func=run_catalog)
+
+    verify = sub.add_parser(
+        "verify", help="check a game bundle against XMage's mirrored behavior")
+    verify.add_argument("bundle")
+    verify.add_argument("--classpath", default=None)
+    verify.add_argument("--java", default="java")
+    verify.add_argument("--cwd", default=None,
+                        help="working directory for the JVM (the Mage.Client dir)")
+    verify.add_argument("--out", default=None, help="write the report here too")
+    verify.set_defaults(func=run_verify)
+
+    align = sub.add_parser(
+        "align",
+        help="timestamp inferred changes (combat damage) from the footage")
+    align.add_argument("bundle")
+    align.add_argument("--video", required=True)
+    align.set_defaults(func=run_align)
+
+    crosscheck = sub.add_parser(
+        "crosscheck",
+        help="check derived life totals against MTGO's on-screen HUD")
+    crosscheck.add_argument("bundle")
+    crosscheck.add_argument("--video", required=True)
+    crosscheck.add_argument("--sample", type=int, default=1,
+                            help="check every Nth state (default: all)")
+    crosscheck.add_argument("--settle", type=float, default=0.5,
+                            help="seconds after the log line to read the HUD")
+    crosscheck.add_argument("--out", default=None)
+    crosscheck.set_defaults(func=run_crosscheck)
+
+    render = sub.add_parser(
+        "render", help="replay a game bundle in XMage and record it to video")
+    render.add_argument("bundle")
+    render.add_argument("--out", required=True, help="output mp4 path")
+    render.add_argument("--classpath", default=None)
+    render.add_argument("--java", default="java")
+    render.add_argument("--cwd", default=None)
+    render.add_argument("--seconds-per-state", type=float, default=1.0)
+    render.add_argument("--side-by-side", default=None,
+                        help="also write footage-beside-XMage mp4 here")
+    render.add_argument("--source-video", default=None,
+                        help="the MTGO footage, for --side-by-side")
+    render.add_argument("--speed", type=float, default=1.0,
+                        help="playback speed multiplier for --side-by-side")
+    render.add_argument("--reuse-frames", action="store_true",
+                        help="re-encode from existing screenshots, no XMage")
+    render.set_defaults(func=run_render)
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
