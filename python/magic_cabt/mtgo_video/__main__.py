@@ -174,13 +174,14 @@ def sample_layout_frames(video, out_dir, start, end, count=5, at=None):
     if at is not None:
         return [grab_frame(video, at, os.path.join(out_dir, "layout_frame.png"))]
     begin = start or 0.0
-    # Sample within the footage that exists: a clip shorter than the assumed
-    # window would have most of its samples seek past the end, and ffmpeg
-    # writes no file for those.
+    # Sample across everything that will be ingested, and only that. Taking
+    # the layout from the first few minutes of a three-hour VOD and then
+    # cropping the whole thing to it assumes the client never moves -- and
+    # the first few minutes of a league VOD are usually the deck editor.
     finish = end
     if finish is None:
         duration = probe_duration(video)
-        finish = min(begin + 300.0, duration) if duration else begin + 300.0
+        finish = duration if duration else begin + 300.0
     span = max(1.0, finish - begin)
     paths = []
     for index in range(count):
@@ -204,22 +205,34 @@ def resolve_layout(args, out_dir):
         layout.detected = False
     print("      layout: %s" % layout.describe(), file=sys.stderr)
 
-    # Validate against each sample, not just one: a VOD spends time on
-    # deck-building and sideboarding screens, which have a game log but no
-    # duel scene, so a single unlucky sample would fail a good layout.
-    check = None
-    for sample in samples:
-        check = validate_layout(layout, sample)
-        if check["ok"]:
-            break
-    if not check["ok"]:
+    # Validate against every sample, not just until one passes. A VOD spends
+    # time on deck-building and sideboarding screens, so one failure means
+    # nothing -- but *which* samples fail is the only evidence available that
+    # the client was rearranged partway through the recording, and one crop
+    # cannot serve a video whose UI moved in the middle of it.
+    checks = [validate_layout(layout, sample) for sample in samples]
+    passed = [c for c in checks if c["ok"]]
+    if not passed:
         raise SystemExit(
             "layout validation failed on all %d sampled frames (%s). The UI "
             "could not be located in this capture; pass --region WxH+X+Y, or "
             "--start/--end covering actual gameplay."
-            % (len(samples), "; ".join(check["problems"])))
-    print("      layout validated: %d timestamped lines, life %s"
-          % (check["logTimestamps"], check["life"]), file=sys.stderr)
+            % (len(samples), "; ".join(checks[-1]["problems"])))
+    check = dict(passed[0], samplesValidated=len(passed),
+                 samplesChecked=len(checks))
+    print("      layout validated on %d/%d sampled frames: %d timestamped "
+          "lines, life %s"
+          % (len(passed), len(checks), check["logTimestamps"], check["life"]),
+          file=sys.stderr)
+    if len(passed) < len(checks):
+        # Not fatal on its own: the failing sample may be a menu screen. But
+        # if the client really did move, every frame after the move is being
+        # cropped to the wrong rectangle, and this is the only warning of it.
+        print("      WARNING: %d of %d sampled frames did not validate "
+              "against this layout. If the client was resized or rearranged "
+              "partway through, ingest each part separately with "
+              "--start/--end." % (len(checks) - len(passed), len(checks)),
+              file=sys.stderr)
     for warning in check.get("warnings", ()):
         print("      WARNING: %s" % warning, file=sys.stderr)
     return layout, check
@@ -423,13 +436,13 @@ def run_layout(args):
                                    count=args.layout_samples, at=args.at)
     samples = select_duel_frames(samples)
     layout = detect_layout_from_frames(samples, detect=not args.no_detect)
-    for sample in samples:
-        check = validate_layout(layout, sample)
-        if check["ok"]:
-            break
+    checks = [validate_layout(layout, sample) for sample in samples]
+    passed = [c for c in checks if c["ok"]]
+    check = dict(passed[0] if passed else checks[-1],
+                 samplesValidated=len(passed), samplesChecked=len(checks))
     print(json.dumps({"layout": layout.to_dict(), "check": check,
                       "summary": layout.describe()}, indent=2))
-    if not check["ok"]:
+    if not passed:
         raise SystemExit(1)
 
 
