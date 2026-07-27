@@ -13,7 +13,7 @@ MTGO footage
   -> parse        MTGO's log grammar, tolerant of how OCR mangles it
   -> catalog      resolve card names offline, or refuse to
   -> simulate     fold events into board snapshots
-  -> verify       against XMage, against the board, against the HUD, across captures
+  -> verify       against XMage, the rules, the picture, the HUD, other captures
 ```
 
 ## Design
@@ -247,6 +247,7 @@ python3 -m magic_cabt.mtgo_video align bundle/game1 --video match.mp4
 # against MTGO's own on-screen life totals
 python3 -m magic_cabt.mtgo_video verify bundle/game1
 python3 -m magic_cabt.mtgo_video rules bundle/game1
+python3 -m magic_cabt.mtgo_video board bundle/game1 --video match.mp4
 python3 -m magic_cabt.mtgo_video crosscheck bundle/game1 --video match.mp4
 
 # Verify two captures of the same match decoded to the same game
@@ -260,7 +261,7 @@ python3 -m magic_cabt.mtgo_video render bundle/game1 --out replay.mp4 \
 `rebuild` re-runs parsing and simulation from a bundle's cached
 `mtgo_log.json` without redoing OCR — use it while iterating.
 
-## The four verifications
+## The five verifications
 
 **`verify` — log vs XMage.** Feeds every snapshot through XMage's real
 `MirrorStateApplier` and `GameView` and diffs turn, life, library and hand
@@ -297,6 +298,34 @@ structurally cannot. It found two real bugs: combat damage missing entirely
 (MTGO logs no line for it), and a transformed double-faced creature keeping
 its front-face power.
 
+**`board` — the board on screen vs the board the log produced.** Every other
+check reasons about the decoded log. This one looks at the picture: it finds
+the two battlefield panels from the phase bar, slides a card-sized window
+across the permanents on them, and identifies each by a perceptual signature
+of its art against Scryfall's, restricted to the cards this match has named.
+
+That is the only check that can see a *dropped* line. A missed "casts X"
+leaves the event stream internally consistent, XMage renders the board it was
+given, and nobody's life changes — but the permanent is still sitting there
+on screen. Run against the ten-minute capture it found one: MTGO's log line
+"Mafuhsa plays Volatile Fjord" had another line glued onto it by an
+unreadable timestamp, so the land went onto the board under a garbage name.
+The screen shows Volatile Fjord in play; the derived board does not.
+
+Colour, not gradient. The usual perceptual hashes for matching card scans
+are built on gradient structure, and at a hundred pixels wide that structure
+is mostly compression noise: a 16x16 dHash put the right card outside the top
+two for three cards in four. A 6x6 grid of average colour identified all
+four, each beating the runner-up by about a factor of two.
+
+Three things keep it from inventing permanents. An art window with no
+contrast is not a card — an empty stretch of panel is flat grey, and flat
+grey matches whichever card has the flattest art. A tapped permanent is drawn
+rotated, so its art is a column of its box rather than a band across it, and
+reading it upright lands on rules text. And nothing is claimed from one
+frame: a permanent does not flicker, so a card the log never mentioned must
+be seen in several states at the same place before it is reported.
+
 **`crosscheck` also corrects.** Combat damage is the one quantity the log
 does not state, and MTGO's silence goes further than that: it prints nothing
 when an attacker is killed by a spell mid-combat, so an attack it describes
@@ -328,6 +357,7 @@ bundle/
     summary.json
     verification.json   log vs XMage
     rules_check.json    each event vs the board it happens on
+    board_check.json    the board on screen vs the board derived
     hud_crosscheck.json log vs MTGO's on-screen life totals
 ```
 

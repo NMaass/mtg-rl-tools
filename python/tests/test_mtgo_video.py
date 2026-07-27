@@ -1135,6 +1135,158 @@ class CompareStateTest(unittest.TestCase):
         self.assertTrue(any("battlefield" in p for p in problems))
 
 
+class BoardReaderTest(unittest.TestCase):
+    """Reading permanents off the screen rather than deriving them."""
+
+    PANEL_TOP = 70
+    PANEL_BOTTOM = 150
+    CARD_W = 100
+    CARD_H = 160
+
+    def setUp(self):
+        import tempfile
+
+        self.work = tempfile.mkdtemp(prefix="board_test_")
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.work, ignore_errors=True)
+
+    def art_of(self, seed):
+        """A distinctive little picture, standing in for a card's art."""
+        from PIL import Image
+
+        image = Image.new("RGB", (60, 40))
+        pixels = image.load()
+        for y in range(40):
+            for x in range(60):
+                pixels[x, y] = ((seed * 37 + x * 3) % 256,
+                                (seed * 91 + y * 5) % 256,
+                                (seed * 53 + x * y) % 256)
+        return image
+
+    def frame(self, top_cards=(), bottom_cards=(), tapped=False):
+        """A board: two panels, cards drawn as frame + art + text box."""
+        from PIL import Image, ImageDraw
+
+        image = Image.new("RGB", (1200, 700), (20, 20, 20))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([100, 20, 1100, 330], fill=(self.PANEL_TOP,) * 3)
+        draw.rectangle([100, 336, 1100, 640], fill=(self.PANEL_BOTTOM,) * 3)
+        for panel_y, cards in ((30, top_cards), (350, bottom_cards)):
+            for index, seed in enumerate(cards):
+                self._draw_card(image, draw, 300 + index * (self.CARD_W + 12),
+                                panel_y, seed, tapped)
+        return image
+
+    def _draw_card(self, image, draw, x, y, seed, tapped):
+        width, height = (self.CARD_H, self.CARD_W) if tapped else (self.CARD_W,
+                                                                   self.CARD_H)
+        draw.rectangle([x, y, x + width, y + height], fill=(240, 240, 240))
+        art = self.art_of(seed)
+        if tapped:
+            art = art.rotate(-90, expand=True)
+            box = (x + int(width * 0.13), y + int(height * 0.05),
+                   x + int(width * 0.55), y + int(height * 0.95))
+        else:
+            box = (x + int(width * 0.05), y + int(height * 0.13),
+                   x + int(width * 0.95), y + int(height * 0.55))
+        image.paste(art.resize((box[2] - box[0], box[3] - box[1])), box[:2])
+
+    def index_of(self, names):
+        from magic_cabt.mtgo_video.art import ArtIndex, signature
+
+        index = ArtIndex(os.path.join(self.work, "art.json"))
+        for seed, name in names.items():
+            index.signatures[name] = signature(self.art_of(seed))
+        return index
+
+    def layout(self):
+        from magic_cabt.mtgo_video.layout import Layout
+        from magic_cabt.mtgo_video.regions import Region
+
+        return Layout(
+            frame_width=1200, frame_height=700,
+            content=Region(x=0, y=0, width=1200, height=700),
+            log_pane=Region(x=1150, y=0, width=40, height=600),
+            life_top=Region(x=10, y=40, width=40, height=30),
+            life_bottom=Region(x=10, y=500, width=40, height=30),
+            name_top=Region(x=10, y=75, width=60, height=14),
+            name_bottom=Region(x=10, y=535, width=60, height=14),
+            scale=1.0, detected=False, seats_detected=True,
+            phase_bar=Region(x=120, y=660, width=900, height=14))
+
+    def observe(self, image, index, unit=None):
+        from magic_cabt.mtgo_video import board
+
+        path = os.path.join(self.work, "frame.png")
+        image.save(path)
+        return board.observe(path, self.layout(), index, unit=unit)
+
+    def test_each_panels_cards_are_found_and_named(self):
+        index = self.index_of({1: "Alpha", 2: "Beta", 3: "Gamma"})
+        seen = self.observe(self.frame(top_cards=(1,), bottom_cards=(2, 3)),
+                            index)
+        self.assertIsNotNone(seen)
+        top = [card.name for card in seen["zones"]["top"]["cards"]]
+        bottom = [card.name for card in seen["zones"]["bottom"]["cards"]]
+        self.assertEqual(top, ["Alpha"])
+        self.assertEqual(sorted(bottom), ["Beta", "Gamma"])
+
+    def test_a_card_outside_the_vocabulary_is_not_guessed_at(self):
+        # The vocabulary is what the log named. A permanent that matches
+        # none of it is exactly what a dropped "casts X" looks like, and
+        # naming it after its nearest neighbour would erase that.
+        index = self.index_of({1: "Alpha", 2: "Beta"})
+        seen = self.observe(self.frame(top_cards=(9,)), index)
+        names = [card.name for card in seen["zones"]["top"]["cards"]]
+        self.assertEqual(names, [None])
+
+    def test_a_tapped_card_is_read_through_its_rotation(self):
+        # MTGO turns a tapped permanent on its side. Read as though it were
+        # upright, its art window lands on rules text and bare panel.
+        index = self.index_of({1: "Alpha", 2: "Beta", 3: "Gamma"})
+        seen = self.observe(self.frame(bottom_cards=(2,), tapped=True), index,
+                            unit=self.CARD_W)
+        names = [card.name for card in seen["zones"]["bottom"]["cards"]]
+        self.assertEqual(names, ["Beta"])
+
+    def test_an_empty_panel_reports_nothing_rather_than_the_flattest_card(self):
+        index = self.index_of({1: "Alpha", 2: "Beta"})
+        seen = self.observe(self.frame(bottom_cards=(1,)), index)
+        self.assertEqual(seen["zones"]["top"]["cards"], [])
+
+    def test_only_permanents_seen_more_than_once_are_reported(self):
+        from magic_cabt.mtgo_video.board import _confirm
+
+        findings = [
+            {"seat": 1, "card": "Alpha", "x": 300, "distance": 12.0,
+             "stateIndex": 1, "videoTime": 10.0},
+            {"seat": 1, "card": "Alpha", "x": 306, "distance": 11.0,
+             "stateIndex": 2, "videoTime": 20.0},
+            {"seat": 1, "card": "Beta", "x": 700, "distance": 25.0,
+             "stateIndex": 1, "videoTime": 10.0},
+        ]
+        confirmed, fleeting = _confirm(findings)
+        self.assertEqual([f["card"] for f in confirmed], ["Alpha"])
+        self.assertEqual(confirmed[0]["sightings"], 2)
+        self.assertEqual([f["card"] for f in fleeting], ["Beta"])
+
+    def test_the_same_card_seen_in_two_places_is_two_findings(self):
+        from magic_cabt.mtgo_video.board import _confirm
+
+        findings = [
+            {"seat": 1, "card": "Alpha", "x": 300, "distance": 12.0,
+             "stateIndex": 1, "videoTime": 10.0},
+            {"seat": 1, "card": "Alpha", "x": 900, "distance": 12.0,
+             "stateIndex": 2, "videoTime": 20.0},
+        ]
+        confirmed, fleeting = _confirm(findings)
+        self.assertEqual(confirmed, [])
+        self.assertEqual(len(fleeting), 2)
+
+
 class HudCorrectionTest(unittest.TestCase):
     """Adopting the life the footage shows when the derivation cannot be."""
 

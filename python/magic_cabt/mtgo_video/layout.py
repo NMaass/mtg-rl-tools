@@ -254,6 +254,23 @@ def detect_phase_bar(words: Sequence[Word], frame_height: int) -> Optional[Regio
                   height=max(1, max(m.bottom for m in members) - top))
 
 
+def find_phase_bar(frame_path: str, frame_height: int
+                   ) -> Tuple[Optional[Region], List[Word]]:
+    """The phase bar, and the words it was found among.
+
+    The bar's labels are dim grey on a dark strip, and a compressed stream
+    can smear them past what the ordinary passes read while leaving them
+    perfectly legible inverted -- so the frame is read that way too rather
+    than concluding a duel frame is not one.
+    """
+    words = _anchor_words(frame_path)
+    bar = detect_phase_bar(words, frame_height)
+    if bar is not None:
+        return bar, words
+    words = _merge_words(words + _inverted_words(frame_path))
+    return detect_phase_bar(words, frame_height), words
+
+
 def looks_like_duel(frame_path: str, ffmpeg: str = "ffmpeg") -> bool:
     """Whether a frame shows the duel scene rather than a menu screen.
 
@@ -267,7 +284,7 @@ def looks_like_duel(frame_path: str, ffmpeg: str = "ffmpeg") -> bool:
     totals), which needed the seat positions this module is trying to find.
     """
     image = _load_gray(frame_path)
-    return detect_phase_bar(_anchor_words(frame_path), image.size[1]) is not None
+    return find_phase_bar(frame_path, image.size[1])[0] is not None
 
 
 def select_duel_frames(frame_paths: List[str]) -> List[str]:
@@ -1123,8 +1140,7 @@ def build_layout(frame_path: str, detect: bool = True) -> Layout:
     seats = None
     bar = None
     if detect:
-        words = _anchor_words(frame_path)
-        bar = detect_phase_bar(words, image.size[1])
+        bar, words = find_phase_bar(frame_path, image.size[1])
         if bar is None:
             notes.append("no phase bar: this frame is not a duel scene")
             notes.extend(_too_small_note(image, content,

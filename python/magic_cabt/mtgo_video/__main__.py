@@ -408,6 +408,47 @@ def run_rules(args):
         raise SystemExit(1)
 
 
+def run_board(args):
+    """Check the board on screen against the board the log produced."""
+    from .art import ArtIndex
+    from .board import check_states
+    from .render import load_states
+
+    states = load_states(args.bundle)
+    layout = bundle_layout(args.bundle)
+    if layout is None or layout.phase_bar is None:
+        raise SystemExit(
+            "this bundle has no recorded phase bar, so the board cannot be "
+            "located; re-ingest it with a build that detects one")
+    vocabulary = _bundle_vocabulary(args.bundle)
+    index = ArtIndex(args.art_cache)
+    missing = [name for name in vocabulary
+               if name not in index.signatures and name not in index.missing]
+    if missing:
+        print("fetching art for %d cards..." % len(missing), file=sys.stderr)
+        index.ensure(vocabulary)
+    report = check_states(args.video, states, layout, index,
+                          sample=args.sample, settle=args.settle)
+    report["bundle"] = os.path.abspath(args.bundle)
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(report, f, indent=2)
+    print(json.dumps(report, indent=2))
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
+def _bundle_vocabulary(bundle: str):
+    """The cards this match named, which is what the board can contain."""
+    for candidate in (os.path.join(bundle, "match.json"),
+                      os.path.join(os.path.dirname(bundle.rstrip("/")),
+                                   "match.json")):
+        if os.path.exists(candidate):
+            with open(candidate) as f:
+                return json.load(f).get("cardsInPlay") or []
+    return []
+
+
 def bundle_layout(bundle: str) -> Optional[Layout]:
     """The layout recorded when this bundle was ingested, if any.
 
@@ -587,6 +628,20 @@ def build_parser():
                        help="working directory for the JVM (the Mage.Client dir)")
     rules.add_argument("--out", default=None, help="write the report here too")
     rules.set_defaults(func=run_rules)
+
+    board_cmd = sub.add_parser(
+        "board",
+        help="check the board on screen against the board the log produced")
+    board_cmd.add_argument("bundle")
+    board_cmd.add_argument("--video", required=True)
+    board_cmd.add_argument("--sample", type=int, default=1,
+                           help="check every Nth state (default: all)")
+    board_cmd.add_argument("--settle", type=float, default=0.5,
+                           help="seconds after the log line to read the board")
+    board_cmd.add_argument("--art-cache", default=None,
+                           help="card-art signature cache path")
+    board_cmd.add_argument("--out", default=None)
+    board_cmd.set_defaults(func=run_board)
 
     compare_cmd = sub.add_parser(
         "compare",
