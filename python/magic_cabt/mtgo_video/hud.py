@@ -72,22 +72,91 @@ def grab(video: str, timestamp: Optional[float], region: Region, out_path: str,
     one over a bright one do not survive the same cut. Keeping the grey crop
     lets several be tried without going back to the video.
     """
-    factor = scale if scale else max(6.0, _MIN_CROP_WIDTH / max(1, region.width))
-    filters = [
-        region.ffmpeg_crop(),
-        "scale=%d:%d:flags=lanczos" % (int(round(region.width * factor)),
-                                       int(round(region.height * factor))),
-        "format=gray",
-    ]
-    if threshold:
-        filters.append("lut=y='if(gt(val,%d),255,0)'" % threshold)
-        filters.append("negate")  # tesseract expects dark text on light
     command = [ffmpeg, "-y", "-loglevel", "error"]
     if timestamp is not None:
         command += ["-ss", str(timestamp)]
-    command += ["-i", video, "-frames:v", "1", "-vf", ",".join(filters), out_path]
+    command += ["-i", video, "-frames:v", "1", "-vf",
+                _crop_filter(region, scale, threshold), out_path]
     subprocess.run(command, check=True)
     return out_path
+
+
+def _crop_filter(region: Region, scale: Optional[int],
+                 threshold: Optional[int]) -> str:
+    factor = scale if scale else max(6.0, _MIN_CROP_WIDTH / max(1, region.width))
+    steps = [region.ffmpeg_crop(),
+             "scale=%d:%d:flags=lanczos" % (int(round(region.width * factor)),
+                                            int(round(region.height * factor))),
+             "format=gray"]
+    if threshold:
+        steps.append("lut=y='if(gt(val,%d),255,0)'" % threshold)
+        steps.append("negate")  # tesseract expects dark text on light
+    return ",".join(steps)
+
+
+def grab_regions(video: str, timestamp: Optional[float],
+                 regions: Dict[str, Region], out_dir: str,
+                 scale: Optional[int] = None, threshold: Optional[int] = None,
+                 ffmpeg: str = "ffmpeg") -> Dict[str, str]:
+    """Extract several crops of one frame in a single pass.
+
+    Starting ffmpeg once per crop is most of what the HUD checks spend their
+    time on: a whole game's crosscheck is several hundred process launches to
+    read a few hundred small numerals. One pass with a filter graph per crop
+    reads them all from the same decode.
+    """
+    out_dir = os.path.realpath(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    labels = sorted(regions)
+    command = [ffmpeg, "-y", "-loglevel", "error"]
+    if timestamp is not None:
+        command += ["-ss", str(timestamp)]
+    command += ["-i", video, "-filter_complex", ";".join(
+        "[0:v]%s[o%d]" % (_crop_filter(regions[label], scale, threshold), index)
+        for index, label in enumerate(labels))]
+    outputs = {}
+    for index, label in enumerate(labels):
+        outputs[label] = os.path.join(out_dir, "%s.png" % label)
+        command += ["-map", "[o%d]" % index, "-frames:v", "1", outputs[label]]
+    subprocess.run(command, check=True)
+    return outputs
+
+
+def grab_series(video: str, start: float, duration: float,
+                regions: Dict[str, Region], out_dir: str, fps: float = 1.0,
+                scale: Optional[int] = None, threshold: Optional[int] = None,
+                ffmpeg: str = "ffmpeg") -> List[Dict[str, str]]:
+    """Extract the same crops repeatedly across a window, in one pass.
+
+    `align` scans forward from an attack looking for the frame where the
+    screen shows the life the log implies. A second at a time through
+    separate ffmpeg calls, that is dozens of process launches for every
+    state; as one windowed pass it is one.
+    """
+    out_dir = os.path.realpath(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    labels = sorted(regions)
+    command = [ffmpeg, "-y", "-loglevel", "error", "-ss", str(start),
+               "-t", str(duration), "-i", video, "-filter_complex", ";".join(
+                   "[0:v]fps=%g,%s[o%d]"
+                   % (fps, _crop_filter(regions[label], scale, threshold), index)
+                   for index, label in enumerate(labels))]
+    for index, label in enumerate(labels):
+        command += ["-map", "[o%d]" % index,
+                    os.path.join(out_dir, "%s_%%04d.png" % label)]
+    subprocess.run(command, check=True)
+
+    series = []
+    step = 1
+    while True:
+        frame = {}
+        for label in labels:
+            path = os.path.join(out_dir, "%s_%04d.png" % (label, step))
+            if not os.path.exists(path):
+                return series
+            frame[label] = path
+        series.append(frame)
+        step += 1
 
 
 # Thresholds and segmentation modes to read a numeral under. No single
@@ -164,12 +233,9 @@ def read_life(video: str, timestamp: float, work_dir: Optional[str] = None,
     own_dir = work_dir is None
     work_dir = work_dir or tempfile.mkdtemp(prefix="mtgo_hud_")
     try:
-        out = {}
-        for slot, region in life_regions(layout).items():
-            path = os.path.join(os.path.realpath(work_dir), "life_%s.png" % slot)
-            grab(video, timestamp, region, path, ffmpeg=ffmpeg)
-            out[slot] = read_int(path)
-        return out
+        crops = grab_regions(video, timestamp, life_regions(layout),
+                             work_dir, ffmpeg=ffmpeg)
+        return {slot: read_int(path) for slot, path in crops.items()}
     finally:
         if own_dir:
             import shutil
@@ -182,13 +248,12 @@ def read_names(video: str, timestamp: float, work_dir: Optional[str] = None,
     own_dir = work_dir is None
     work_dir = work_dir or tempfile.mkdtemp(prefix="mtgo_hud_")
     try:
+        crops = grab_regions(video, timestamp, name_regions(layout), work_dir,
+                             threshold=_TEXT_WHITE, ffmpeg=ffmpeg)
         out = {}
-        for slot, region in name_regions(layout).items():
-            path = os.path.join(os.path.realpath(work_dir), "name_%s.png" % slot)
-            grab(video, timestamp, region, path, threshold=_TEXT_WHITE,
-                 ffmpeg=ffmpeg)
+        for slot, path in crops.items():
             lines = ocr_image(path, psm=7, strict=False)
-            out[slot] = (lines[0].strip() if lines else "")
+            out[slot] = lines[0].strip() if lines else ""
         return out
     finally:
         if own_dir:
@@ -335,16 +400,19 @@ def align_derived_states(video: str, states: List[dict], kinds=("COMBAT_DAMAGE",
             expected = {p["seat"]: p.get("life") for p in state.get("players", [])}
 
             found = None
-            when = start
-            limit = start + max_lookahead
-            while when <= limit:
-                shown = read_life(video, when, work_dir=work_dir, layout=layout)
+            # The whole scan window comes out of one decode: a second at a
+            # time through separate ffmpeg calls, this loop alone was dozens
+            # of process launches for every state in the game.
+            series = grab_series(video, start, max_lookahead,
+                                 life_regions(layout),
+                                 os.path.join(work_dir, "scan"), fps=1.0 / step)
+            for offset, crops in enumerate(series):
+                shown = {slot: read_int(path) for slot, path in crops.items()}
                 if all(shown.get(seat_to_slot.get(seat)) == life
                        for seat, life in expected.items()
                        if seat in seat_to_slot):
-                    found = when
+                    found = start + offset * step
                     break
-                when += step
             if found is not None:
                 aligned.append({"stateIndex": index, "from": start, "to": found})
                 state["videoTime"] = found
@@ -366,6 +434,47 @@ def align_derived_states(video: str, states: List[dict], kinds=("COMBAT_DAMAGE",
             shutil.rmtree(work_dir, ignore_errors=True)
 
 
+class _Reel:
+    """The life crops for a whole game, from one pass over the video.
+
+    Falls back to seeking for a single frame when the reel could not be
+    built, so a video ffmpeg will not scan in one go still works -- slower,
+    and correct.
+    """
+
+    RATE = 2.0   # samples a second: enough to honour a half-second settle
+
+    def __init__(self, video, states, sample, settle, layout, work_dir):
+        self.video = video
+        self.layout = layout
+        self.work_dir = work_dir
+        self.frames: List[Dict[str, str]] = []
+        self.start = None
+        times = [state["videoTime"] + settle
+                 for index, state in enumerate(states)
+                 if not index % sample and state.get("videoTime") is not None]
+        if len(times) < 4:
+            return
+        self.start = max(0.0, min(times))
+        span = max(times) - self.start + 2.0
+        try:
+            self.frames = grab_series(video, self.start, span,
+                                      life_regions(layout),
+                                      os.path.join(work_dir, "reel"),
+                                      fps=self.RATE)
+        except Exception:
+            self.frames = []
+
+    def life_at(self, when: float) -> Dict[str, Optional[int]]:
+        if self.frames and self.start is not None:
+            index = int(round((when - self.start) * self.RATE))
+            if 0 <= index < len(self.frames):
+                return {slot: read_int(path)
+                        for slot, path in self.frames[index].items()}
+        return read_life(self.video, when, work_dir=self.work_dir,
+                         layout=self.layout)
+
+
 def crosscheck_life(video: str, states: List[dict], sample: int = 1,
                     settle: float = 0.5, work_dir: Optional[str] = None,
                     layout=None) -> Dict:
@@ -383,6 +492,11 @@ def crosscheck_life(video: str, states: List[dict], sample: int = 1,
         checked = timed = agreed = unreadable = from_hud = 0
         disagreements = []
         slots = None
+        # One decode for the whole game rather than a seek per state. A
+        # crosscheck reads a few hundred small numerals scattered through the
+        # video, and seeking to each of them separately costs several times
+        # what reading them does.
+        reel = _Reel(video, states, sample, settle, layout, work_dir)
         for index, state in enumerate(states):
             if index % sample:
                 continue
@@ -397,8 +511,7 @@ def crosscheck_life(video: str, states: List[dict], sample: int = 1,
                 if len(slots) < 2:
                     slots = None
                     continue
-            shown = read_life(video, when + settle, work_dir=work_dir,
-                              layout=layout)
+            shown = reel.life_at(when + settle)
             by_seat = {p["seat"]: p for p in state.get("players", [])}
             for slot, seat in slots.items():
                 player = by_seat.get(seat)

@@ -76,6 +76,7 @@ turned out to be a real defect rather than a simplification:
 | Fixed 3x upscale before OCR | Glyph size drifted with capture size, so results drifted too | Resample to a fixed target width, so tesseract sees the same thing at every resolution |
 | Longest reading wins | One bad frame could define a line | Majority vote across every sighting of that line |
 | Append on failed alignment | Noise produced duplicate entries (240 for a 75-line game at 576p) | Collapse duplicates, using frame co-occurrence to tell a misread apart from a genuine repeat |
+| A seek per reading in the HUD checks | A ten-minute game's crosscheck was a few hundred ffmpeg launches to read a few hundred numerals | One decode for the whole game; the same 156 readings, 216s to 82s |
 | Alignment scored on similarity alone | A game log repeats every turn, so a window could match the wrong occurrence — duplicating or dropping a whole pane of lines | The pane scrolls one way, so a frame may not align behind the frame before it |
 | Strict log grammar | A misread colon glued two lines into one unparsable entry | Tolerant clock shape, count from the noun not the article, self-validating verb repair |
 | Live Scryfall fuzzy lookups | Rate-limited, non-deterministic, 404s on names the log spells correctly elsewhere | Offline catalog, run vocabulary, margin gate |
@@ -214,31 +215,32 @@ killed by a spell mid-combat still dealt its damage.
 
 ### Measured behaviour
 
-The same game — a complete six-turn Pauper league game, 75 log lines —
-decoded from five renderings of one recording, and verified all three ways:
+The same ten-minute Pauper league match, re-encoded at three sizes and put
+through the whole pipeline. Every number here came out of the current code;
+nothing is carried over from an earlier measurement.
 
-| Capture | Detected pane | Log vs XMage | Log vs HUD life | Same game as 1080p? |
-| --- | --- | --- | --- | --- |
-| 2560x1440 | 466x629 | 61/61 | 122/122 | yes |
-| 1920x1080 | 350x449 | 61/61 | 118/118 | reference |
-| 1600x900 | 292x374 | 61/61 | 122/122 | yes |
-| 1280x720 | 233x299 | 68/68 | 136/136 | **no — 84 events, not 75** |
-| 1024x576 | 186x238 | 71/189 | — | **no — 249 events** |
+| Capture | Log text | Log entries | Parse coverage | vs XMage | vs the rules | vs the HUD | Same game as 1080p? |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1920x1080 | 13px | 106 | 97% | 78/78 | 2 findings, both real | 152/156 (97%) | reference |
+| 1280x720 | 7px | 191 | 81% | 63/123 | 17 findings, 4 naming a lost line | seats unreadable | **no — 170 events, not 90** |
+| 1024x576 | 5px | 779 | 51% | — | — | seats unreadable | **no — split into five games that never happened** |
 
-1440p, 1080p and 900p decode to the identical game and verify completely.
+The two degraded captures were both warned about before any of that work
+started: the pipeline measures the log's glyph height in source pixels and
+says when it is below what OCR can read at any magnification.
 
-720p is the interesting case, and the reason the third check exists. Its
-decode passes both of the other verifications — every state it claims is
-rendered faithfully by XMage, and every life total it derives matches
-MTGO's own display — while still containing nine events that never
-happened, a stretch of the log recorded twice. Neither of the first two
-checks can see that: XMage renders what it is told, and duplicating a land
-drop does not change anyone's life total. Only comparing against another
-capture of the same match catches it.
+720p is the case worth reading. It decodes into a game that is nearly twice
+as long as the one that was played, because at seven pixels the
+reconstruction cannot always tell a re-read line from a new one. Three of the
+five checks catch it, and they catch different parts: XMage rejects half its
+states outright, the rules check finds four permanents attacking from nowhere
+and matches four of them to the unparsed lines they were mangled out of, and
+`compare` simply reports that this is not the same game as the 1080p decode.
+The HUD check cannot run at all, because at that size the life numerals are
+not readable either — and the layout detector says so rather than pretending.
 
-576p is below the floor: the log text is four pixels tall, which is less
-than OCR can read at any magnification. The pipeline measures that and
-warns before spending the time.
+576p is well below the floor: 779 log entries for a 106-entry game, split
+into five "games" whose boundaries are OCR noise.
 
 ## Requirements
 
