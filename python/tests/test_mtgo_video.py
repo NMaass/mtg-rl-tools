@@ -1368,7 +1368,7 @@ class BoardReaderTest(unittest.TestCase):
         seen = self.observe(self.frame(bottom_cards=(1,)), index)
         self.assertEqual(seen["zones"]["top"]["cards"], [])
 
-    def test_only_permanents_seen_more_than_once_are_reported(self):
+    def test_only_permanents_seen_in_adjacent_states_are_reported(self):
         from magic_cabt.mtgo_video.board import _confirm
 
         findings = [
@@ -1383,6 +1383,24 @@ class BoardReaderTest(unittest.TestCase):
         self.assertEqual([f["card"] for f in confirmed], ["Alpha"])
         self.assertEqual(confirmed[0]["sightings"], 2)
         self.assertEqual([f["card"] for f in fleeting], ["Beta"])
+
+    def test_two_sightings_with_a_gap_between_them_are_not_a_permanent(self):
+        # A permanent that was really there was there in the states in
+        # between as well. Twice at some point in the game, with nothing
+        # between, is what a matcher finding a plausible neighbour looks
+        # like -- and was a real false positive on real footage.
+        from magic_cabt.mtgo_video.board import _confirm
+
+        findings = [
+            {"seat": 2, "card": "Gamma", "x": 500, "distance": 24.0,
+             "stateIndex": 4, "videoTime": 210.0},
+            {"seat": 2, "card": "Gamma", "x": 505, "distance": 24.7,
+             "stateIndex": 19, "videoTime": 250.0},
+        ]
+        confirmed, fleeting = _confirm(findings)
+        self.assertEqual(confirmed, [])
+        self.assertEqual(len(fleeting), 1)
+        self.assertFalse(fleeting[0]["consecutive"])
 
     def test_the_same_card_seen_in_two_places_is_two_findings(self):
         from magic_cabt.mtgo_video.board import _confirm

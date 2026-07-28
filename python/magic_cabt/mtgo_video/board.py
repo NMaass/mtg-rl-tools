@@ -608,13 +608,13 @@ def check_states(video: str, states: Sequence[dict], layout, index,
                     if name not in shown:
                         unseen.append({"stateIndex": index_of, "videoTime": when,
                                        "seat": seat, "card": name})
-        confirmed, fleeting = _confirm(unlogged)
+        confirmed, fleeting = _confirm(unlogged, sample=sample)
         return {
             "statesChecked": checked,
             "cardsIdentified": identified,
             "vocabulary": len(index.signatures),
             "unloggedPermanents": confirmed,
-            "unloggedSeenOnce": fleeting,
+            "unloggedNotPersistent": fleeting,
             "derivedButNotSeen": unseen,
             "ok": not confirmed,
         }
@@ -650,16 +650,19 @@ def _agree_card_size(video: str, states: Sequence[dict], layout,
     return int(_median(widths)) if widths else None
 
 
-def _confirm(findings: List[Dict], tolerance: int = 60
+def _confirm(findings: List[Dict], tolerance: int = 60, sample: int = 1
              ) -> Tuple[List[Dict], List[Dict]]:
-    """Keep the sightings that persist; set the one-offs aside.
+    """Keep the sightings that persist; set the rest aside.
 
     A permanent does not flicker. It sits in the same place on the same
     panel for as long as it is in play, so a card the log never mentioned
-    should be seen in several sampled states at about the same x. A single
-    sighting is more likely to be the matcher finding a plausible neighbour
-    in a corner of the board it could not otherwise identify -- worth
-    reporting, but not worth calling a defect.
+    should be seen at about the same x in states that are *next to each
+    other* -- not merely twice at some point in the game. Two sightings
+    minutes apart with nothing in between is what a matcher finding a
+    plausible neighbour twice looks like; a permanent that was really there
+    was there in the states between as well.
+
+    Both weaker cases are still reported, just not as defects.
     """
     groups: Dict[Tuple[int, str], List[Dict]] = {}
     for finding in findings:
@@ -671,10 +674,13 @@ def _confirm(findings: List[Dict], tolerance: int = 60
         for item in items + [None]:
             if cluster and (item is None
                             or item["x"] - cluster[-1]["x"] > tolerance):
-                states = {entry["stateIndex"] for entry in cluster}
-                target = confirmed if len(states) >= 2 else fleeting
+                states = sorted({entry["stateIndex"] for entry in cluster})
+                adjacent = any(b - a <= 2 * sample
+                               for a, b in zip(states, states[1:]))
+                target = confirmed if adjacent else fleeting
                 best = min(cluster, key=lambda entry: entry["distance"])
                 target.append(dict(best, sightings=len(states),
+                                   consecutive=adjacent,
                                    videoTimes=sorted({entry["videoTime"]
                                                       for entry in cluster})))
                 cluster = []

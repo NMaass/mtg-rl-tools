@@ -204,8 +204,8 @@ to 1620px with a facecam beside it), ingested and put through every check:
 | Parse coverage | 97% (3 unparsed, all glued by an unreadable timestamp) |
 | `verify` — log vs XMage | 78/78 states |
 | `rules` — events vs the board | 67 checked, 2 flagged (both real: MTGO printed a player's name where a card's belonged) |
-| `crosscheck` — vs the on-screen life | 152/156 readings agree (97%), 2 of which came from the HUD and are counted apart |
-| `board` — the screen vs the derived board | 22 cards read, 1 unlogged permanent (real: a glued log line) |
+| `crosscheck` — vs the on-screen life | 153/156 readings agree (98%), 2 of which came from the HUD and are counted apart |
+| `board` — the screen vs the derived board | 96 cards read, 2 unlogged permanents (both real, both the same glued log line) |
 | `align` — derived combat damage | 9 of 9 located in the footage: 8 confirmed, 1 corrected from the screen |
 
 Getting there turned up five defects worth naming, each found by a check
@@ -235,7 +235,7 @@ nothing is carried over from an earlier measurement.
 
 | Capture | Log text | Log entries | Parse coverage | vs XMage | vs the rules | vs the HUD | Same game as 1080p? |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1920x1080 | 13px | 106 | 97% | 78/78 | 2 findings, both real | 152/156 (97%) | reference |
+| 1920x1080 | 13px | 106 | 97% | 78/78 | 2 findings, both real | 153/156 (98%) | reference |
 | 1280x720 | 7px | 191 | 81% | 63/123 | 17 findings, 4 naming a lost line | seats unreadable | **no — 170 events, not 90** |
 | 1024x576 | 5px | 779 | 51% | — | — | seats unreadable | **no — split into five games that never happened** |
 
@@ -387,7 +387,10 @@ grey matches whichever card has the flattest art. A tapped permanent is drawn
 rotated, so its art is a column of its box rather than a band across it, and
 reading it upright lands on rules text. And nothing is claimed from one
 frame: a permanent does not flicker, so a card the log never mentioned must
-be seen in several states at the same place before it is reported.
+be seen at the same place in states next to each other before it is
+reported. Twice at some point in the game with nothing in between is what a
+matcher finding a plausible neighbour twice looks like, and was a real false
+positive until the rule demanded adjacency.
 
 **`crosscheck` also corrects.** Combat damage is the one quantity the log
 does not state, and MTGO's silence goes further than that: it prints nothing
