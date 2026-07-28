@@ -411,6 +411,129 @@ def run_rules(args):
         raise SystemExit(1)
 
 
+def run_check(args):
+    """Run every verification that this bundle and this machine allow.
+
+    The five checks have different prerequisites -- two need XMage on the
+    classpath, two need the capture and a readable HUD, one needs a second
+    recording of the same match -- and running them one at a time means
+    finding that out five times. Anything that cannot run is reported as
+    skipped, with the reason, rather than quietly left out: a check that did
+    not run is not a check that passed.
+    """
+    classpath = args.classpath or os.environ.get("MAGIC_CABT_CLASSPATH")
+    results = []
+
+    def record(name, runner, prerequisite=None):
+        if prerequisite:
+            results.append({"check": name, "status": "skipped",
+                            "detail": prerequisite})
+            return
+        try:
+            report = runner()
+        except Exception as error:  # a check that cannot run is not a pass
+            results.append({"check": name, "status": "error",
+                            "detail": str(error).splitlines()[0][:200]})
+            return
+        results.append({"check": name,
+                        "status": "ok" if report.get("ok") else "failed",
+                        "detail": _summarize(name, report)})
+
+    from .verify import verify_bundle
+
+    record("verify", lambda: verify_bundle(args.bundle, classpath,
+                                           java=args.java, cwd=args.cwd),
+           None if classpath else "no --classpath or $MAGIC_CABT_CLASSPATH")
+
+    from .rules import check_bundle
+
+    record("rules", lambda: check_bundle(args.bundle, classpath,
+                                         java=args.java, cwd=args.cwd),
+           None if classpath else "no --classpath or $MAGIC_CABT_CLASSPATH")
+
+    record("board", lambda: _board_report(args),
+           None if args.video else "no --video")
+    record("crosscheck", lambda: _crosscheck_report(args),
+           None if args.video else "no --video")
+
+    from .compare import compare_bundles
+
+    def compared():
+        report = compare_bundles([args.bundle] + list(args.against))
+        return dict(report, ok=report["allIdentical"])
+
+    record("compare", compared,
+           None if args.against else "no --against BUNDLE (needs a second "
+                                     "recording of the same match)")
+
+    ran = [r for r in results if r["status"] != "skipped"]
+    report = {
+        "bundle": os.path.abspath(args.bundle),
+        "checks": results,
+        "checksRun": len(ran),
+        # A bundle nothing could be run against has not been verified, and
+        # reporting that as a pass is exactly the failure this command exists
+        # to prevent.
+        "ok": bool(ran) and all(r["status"] == "ok" for r in ran),
+    }
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(report, f, indent=2)
+    for result in results:
+        print("%-11s %-8s %s" % (result["check"], result["status"],
+                                 result["detail"]), file=sys.stderr)
+    print(json.dumps(report, indent=2))
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
+def _summarize(name, report):
+    if name == "verify":
+        return "%s/%s states" % (report.get("statesVerified"),
+                                 report.get("states"))
+    if name == "rules":
+        alignment = report.get("alignment") or {}
+        return ("%d events checked, %d findings (%d naming a lost line)"
+                % (report.get("eventsChecked", 0),
+                   len(report.get("violations") or []),
+                   alignment.get("attributed", 0)))
+    if name == "board":
+        return ("%d cards read, %d unlogged permanents"
+                % (report.get("cardsIdentified", 0),
+                   len(report.get("unloggedPermanents") or [])))
+    if name == "crosscheck":
+        return ("%s/%s life readings agree"
+                % (report.get("lifeReadingsAgreed"),
+                   report.get("lifeReadingsChecked")))
+    if name == "compare":
+        return "identical" if report.get("ok") else "decodes differ"
+    return ""
+
+
+def _board_report(args):
+    from .art import ArtIndex
+    from .board import check_states
+    from .render import load_states
+
+    layout = bundle_layout(args.bundle)
+    if layout is None or layout.phase_bar is None:
+        raise RuntimeError("bundle has no recorded phase bar; re-ingest it")
+    vocabulary = _bundle_vocabulary(args.bundle)
+    index = ArtIndex(args.art_cache)
+    index.ensure(vocabulary)
+    return check_states(args.video, load_states(args.bundle), layout, index,
+                        sample=args.sample)
+
+
+def _crosscheck_report(args):
+    from .hud import crosscheck_life
+    from .render import load_states
+
+    return crosscheck_life(args.video, load_states(args.bundle),
+                           sample=args.sample,
+                           layout=bundle_layout(args.bundle))
+
+
 def run_board(args):
     """Check the board on screen against the board the log produced."""
     from .art import ArtIndex
@@ -631,6 +754,21 @@ def build_parser():
                        help="working directory for the JVM (the Mage.Client dir)")
     rules.add_argument("--out", default=None, help="write the report here too")
     rules.set_defaults(func=run_rules)
+
+    check_cmd = sub.add_parser(
+        "check", help="run every verification this bundle allows")
+    check_cmd.add_argument("bundle")
+    check_cmd.add_argument("--video", default=None,
+                           help="the capture, for the checks that read it")
+    check_cmd.add_argument("--against", nargs="*", default=[],
+                           help="other recordings' bundles of the same match")
+    check_cmd.add_argument("--classpath", default=None)
+    check_cmd.add_argument("--java", default="java")
+    check_cmd.add_argument("--cwd", default=None)
+    check_cmd.add_argument("--sample", type=int, default=1)
+    check_cmd.add_argument("--art-cache", default=None)
+    check_cmd.add_argument("--out", default=None)
+    check_cmd.set_defaults(func=run_check)
 
     board_cmd = sub.add_parser(
         "board",

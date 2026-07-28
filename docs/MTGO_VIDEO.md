@@ -266,8 +266,13 @@ python3 -m magic_cabt.mtgo_video ingest match.mp4 --out bundle \
 # Locate inferred changes (combat damage) in the footage
 python3 -m magic_cabt.mtgo_video align bundle/game1 --video match.mp4
 
-# Verify: against XMage, against the board each event happens on, and
-# against MTGO's own on-screen life totals
+# Run every check this bundle and this machine allow, in one go. Anything
+# that cannot run is reported as skipped with the reason -- and a bundle
+# nothing could be run against does not come back "ok".
+python3 -m magic_cabt.mtgo_video check bundle/game1 --video match.mp4
+
+# Or one at a time: against XMage, against the board each event happens on,
+# against the permanents on screen, against MTGO's own life totals
 python3 -m magic_cabt.mtgo_video verify bundle/game1
 python3 -m magic_cabt.mtgo_video rules bundle/game1
 python3 -m magic_cabt.mtgo_video board bundle/game1 --video match.mp4

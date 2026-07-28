@@ -1135,6 +1135,61 @@ class CompareStateTest(unittest.TestCase):
         self.assertTrue(any("battlefield" in p for p in problems))
 
 
+class CombinedCheckTest(unittest.TestCase):
+    """Running every verification the bundle and the machine allow."""
+
+    def run_check(self, **kwargs):
+        import argparse
+        import contextlib
+        import io
+        import tempfile
+
+        from magic_cabt.mtgo_video.__main__ import run_check
+
+        work = tempfile.mkdtemp(prefix="check_test_")
+        try:
+            args = argparse.Namespace(
+                bundle=work, video=None, against=[], classpath=None,
+                java="java", cwd=None, sample=1, art_cache=None,
+                out=os.path.join(work, "out.json"))
+            for key, value in kwargs.items():
+                setattr(args, key, value)
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    run_check(args)
+                except SystemExit:
+                    pass
+            with open(args.out) as handle:
+                return json.load(handle)
+        finally:
+            import shutil
+            shutil.rmtree(work, ignore_errors=True)
+
+    def test_a_bundle_nothing_could_be_run_against_is_not_ok(self):
+        # The failure this exists to prevent: five checks, none of them able
+        # to run, and a green result at the end of it.
+        report = self.run_check()
+        self.assertEqual(report["checksRun"], 0)
+        self.assertFalse(report["ok"])
+        self.assertTrue(all(c["status"] == "skipped" for c in report["checks"]))
+
+    def test_every_skip_says_what_was_missing(self):
+        report = self.run_check()
+        for check in report["checks"]:
+            self.assertTrue(check["detail"],
+                            "%s skipped without a reason" % check["check"])
+
+    def test_a_check_that_raises_is_reported_not_swallowed(self):
+        # A check that blew up is not a check that passed, and the bundle
+        # here has no states for verify to read.
+        report = self.run_check(classpath="/nonexistent")
+        statuses = {c["check"]: c["status"] for c in report["checks"]}
+        self.assertEqual(statuses["verify"], "error")
+        self.assertFalse(report["ok"])
+
+
 class AlignmentTest(unittest.TestCase):
     """Naming the event a violation implies is missing."""
 
