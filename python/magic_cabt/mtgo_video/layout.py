@@ -1205,6 +1205,14 @@ def _median_region(regions: Sequence[Region]) -> Region:
                   height=max(8, _median([r.y + r.height for r in regions]) - top))
 
 
+def _union_region(regions: Sequence[Region]) -> Region:
+    left = min(r.x for r in regions)
+    top = min(r.y for r in regions)
+    return Region(x=left, y=top,
+                  width=max(8, max(r.x + r.width for r in regions) - left),
+                  height=max(8, max(r.y + r.height for r in regions) - top))
+
+
 def detect_layout_from_frames(frame_paths: List[str],
                               detect: bool = True) -> Layout:
     """Agree a layout across several frames.
@@ -1237,10 +1245,20 @@ def detect_layout_from_frames(frame_paths: List[str],
 
     seated = [l for l in layouts if l.seats_detected]
     if seated:
-        # A seat panel does not move either, so the same consensus applies --
-        # and it repairs a frame where one life numeral was briefly covered.
-        base.life_top = _median_region([l.life_top for l in seated])
-        base.life_bottom = _median_region([l.life_bottom for l in seated])
+        # The union again, and for a sharper version of the same reason. A
+        # life box is trimmed to the numeral currently in it, and that
+        # numeral changes: a player on 9 has a one-digit box and the same
+        # player on 16 a two-digit one. Taking the median of those crops the
+        # box to something that fits neither, and a crop that clips a digit
+        # reads 16 as 1 -- a wrong answer, where a slightly generous crop is
+        # only a slightly noisier one.
+        base.life_top = _union_region([l.life_top for l in seated])
+        base.life_bottom = _union_region([l.life_bottom for l in seated])
+        # A name, unlike a life total, does not change while the game runs,
+        # so its box has no legitimate reason to differ between frames --
+        # which means an outlier is an outlier, and the median is what
+        # discards it. Unioning names instead grows the crop around whatever
+        # one frame mistook for a name, and it stops reading.
         base.name_top = _median_region([l.name_top for l in seated])
         base.name_bottom = _median_region([l.name_bottom for l in seated])
         base.seats_detected = True

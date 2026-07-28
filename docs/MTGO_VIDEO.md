@@ -195,8 +195,7 @@ not found otherwise.
 ### End to end on a capture the old detector could not open
 
 Ten minutes of the first of those VODs (a Pauper league match, client inset
-to 1620px with a facecam beside it), ingested and put through all four
-checks:
+to 1620px with a facecam beside it), ingested and put through every check:
 
 | | |
 | --- | --- |
@@ -205,13 +204,27 @@ checks:
 | `verify` — log vs XMage | 78/78 states |
 | `rules` — events vs the board | 67 checked, 2 flagged (both real: MTGO printed a player's name where a card's belonged) |
 | `crosscheck` — vs the on-screen life | 152/156 readings agree (97%), 2 of which came from the HUD and are counted apart |
+| `board` — the screen vs the derived board | 22 cards read, 1 unlogged permanent (real: a glued log line) |
 | `align` — derived combat damage | 9 of 9 located in the footage: 8 confirmed, 1 corrected from the screen |
 
-Getting there turned up four defects worth naming, each found by a check
+Getting there turned up five defects worth naming, each found by a check
 rather than by inspection: the log crop was a few pixels narrow and clipped
 the last character of full-width lines; a dozen ordinary MTGO log forms had
-no grammar; ninjutsu's attacker swap was not modelled; and an attacker
-killed by a spell mid-combat still dealt its damage.
+no grammar; ninjutsu's attacker swap was not modelled; an attacker killed by
+a spell mid-combat still dealt its damage; and one land reached the board
+under a garbage name because its log line had another glued onto it.
+
+Those numbers are reproducible rather than remembered. The captures are other
+people's videos and cannot live in the repository, so
+`python/tests/captures.json` records each one's YouTube id, the timestamp of
+the frame, and what the detector should find in it, and
+`scripts/check-mtgo-captures.py` fetches whatever is missing and checks the
+lot:
+
+```sh
+scripts/check-mtgo-captures.py            # fetch what is missing, check all
+scripts/check-mtgo-captures.py --offline  # only what is already cached
+```
 
 ### Measured behaviour
 

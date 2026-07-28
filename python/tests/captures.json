@@ -1,0 +1,98 @@
+{
+  "comment": [
+    "Public MTGO recordings the layout detector is measured against, and what",
+    "it should find in each. These cannot live in the repository -- they are",
+    "other people's videos -- so the manifest records where each frame came",
+    "from precisely enough to fetch it again: a YouTube id and a timestamp in",
+    "the original upload.",
+    "",
+    "Life totals are only asserted exactly where they are stable across the",
+    "sampled window. Mid-game they are not: a player can take damage between",
+    "one sample and the next, so what is checked there is that both seats",
+    "read as a plausible life at all, which is what the detector is",
+    "responsible for. Names do not change, so those are exact.",
+    "",
+    "Run scripts/check-mtgo-captures.py to fetch what is missing and check",
+    "every expectation. Everything claimed about real footage in",
+    "docs/MTGO_VIDEO.md is one of these rows."
+  ],
+  "captures": [
+    {
+      "id": "zSJDR6Ik6TM",
+      "at": 1205,
+      "arrangement": "modern client inset to 1620px, facecam and scoreboard right",
+      "expect": {
+        "logDetected": true,
+        "seatsDetected": true,
+        "names": {
+          "top": "Mafuhsa",
+          "bottom": "MarshFlats"
+        },
+        "lifeReadable": true,
+        "note": "mid-game: life changes within the sampled window"
+      }
+    },
+    {
+      "id": "hlrnZjJxC8E",
+      "at": 1205,
+      "arrangement": "modern client, larger UI scale, zone panes docked beside the seats",
+      "expect": {
+        "logDetected": true,
+        "seatsDetected": true,
+        "names": {
+          "top": "marcomartinelli999",
+          "bottom": "impact36inc"
+        },
+        "lifeReadable": true,
+        "note": "mid-game: life changes within the sampled window"
+      }
+    },
+    {
+      "id": "GYQ5eoftT0k",
+      "at": 907,
+      "arrangement": "modern client, circular facecam overlapping the log pane",
+      "expect": {
+        "logDetected": true,
+        "seatsDetected": true,
+        "life": {
+          "top": 20,
+          "bottom": 20
+        },
+        "names": {
+          "top": "Flexi98",
+          "bottom": "DB_ThatMillGuy"
+        }
+      }
+    },
+    {
+      "id": "FeNbwi7-lT0",
+      "at": 120,
+      "whole": true,
+      "format": "137",
+      "arrangement": "2016 championship broadcast, old client, no game-log pane",
+      "expect": {
+        "logDetected": false,
+        "seatsDetected": true,
+        "life": {
+          "top": 20,
+          "bottom": 20
+        },
+        "names": {
+          "top": "leearson",
+          "bottom": "beena"
+        },
+        "refused": "log pane has no timestamped lines"
+      }
+    },
+    {
+      "id": "_A9xU4NAzp8",
+      "at": 2408,
+      "arrangement": "windowed client inside a 1920x810 stream frame; below the OCR floor",
+      "expect": {
+        "seatsDetected": false,
+        "refused": "no life total readable",
+        "note": "the client's text is ~5px tall; the detector should say so"
+      }
+    }
+  ]
+}
