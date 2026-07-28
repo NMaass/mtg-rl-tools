@@ -170,7 +170,8 @@ python3 -m magic_cabt.mtgo_video layout --video match.mp4
 ### Measured against real captures
 
 Five public VODs, each a different arrangement, none of which the previous
-detector handled:
+detector handled. These are the rows of `python/tests/captures.json`, and
+`scripts/check-mtgo-captures.py` re-checks every one of them:
 
 | Capture | Arrangement | Log pane | Seats | Names |
 | --- | --- | --- | --- | --- |
@@ -320,11 +321,15 @@ against the board XMage holds the moment before it.
 That is what catches damage the other checks structurally cannot. A missed
 "casts X" line leaves the later "X is destroyed" with nothing to destroy —
 and `verify` still passes (XMage renders what it is told) and `crosscheck`
-still passes (destroying a creature changes nobody's life). Run against the
-reference bundle it found four real decode defects that both other checks
-had passed: three log lines whose player was read as `Buz2Caldera`, and a
-spell whose target was read as `BuzzCaldera. 2` with a scrollbar glyph stuck
-to it.
+still passes (destroying a creature changes nobody's life).
+
+On the reference capture it reports two findings, and both are real: MTGO
+itself printed a player's name where a card's belonged, twice, in plain black
+rather than the blue it uses for cards. Nothing can recover which card that
+was, so the cast is recorded, reported, and kept off the board rather than
+becoming a permanent named after a player. On the degraded 720p decode of the
+same match it reports seventeen, and names the lost line behind four of
+them.
 
 It does more than flag the impossible line, because the impossible line is
 almost never the broken one. "Faerie Seer is destroyed, but it is not on the
