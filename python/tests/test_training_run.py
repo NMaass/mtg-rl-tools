@@ -149,8 +149,8 @@ class ToyEndToEndTest(unittest.TestCase):
             first_state = _read_json(os.path.join(out, "state.json"))
             code, stderr = _run(["--toy", "12", "--out", out])
             self.assertEqual(0, code, stderr)
-            self.assertIn("collect: cached", stderr)
-            self.assertIn("train-bc: cached", stderr)
+            self.assertRegex(stderr, r"collect\s+cached")
+            self.assertRegex(stderr, r"train-bc\s+cached")
             second_state = _read_json(os.path.join(out, "state.json"))
             self.assertEqual(
                 first_state["stages"]["train-bc"]["finishedAt"],
@@ -369,6 +369,75 @@ class DryRunTest(unittest.TestCase):
             self.assertFalse(os.path.exists(out))
 
 
+class ConsoleUxTest(unittest.TestCase):
+    """The terminal presentation contract: stable when piped, informative."""
+
+    def test_piped_output_has_no_control_codes_and_numbered_stages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "run")
+            code, stderr = _run(["--toy", "12", "--out", out, "--seed", "3"])
+            self.assertEqual(0, code, stderr)
+            self.assertNotIn("\x1b", stderr, "piped output must be plain")
+            self.assertNotIn("\r", stderr, "piped output must not rewrite")
+            self.assertRegex(stderr, r"\[ ?\d+/\d+\] collect\s+ok\s+\d")
+            self.assertRegex(stderr, r"audit\s+ok.*trusted")
+            self.assertRegex(stderr, r"train-torch\s+skipped")
+            self.assertRegex(stderr, r"done in \d+\.\ds -- report:")
+
+    def test_quiet_suppresses_stages_but_not_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, stderr = _run(["--toy", "3", "--min-games", "50",
+                                 "--out", os.path.join(tmp, "run"),
+                                 "--quiet"])
+            self.assertEqual(1, code)
+            self.assertNotRegex(stderr, r"\[ ?\d+/\d+\]")
+            self.assertIn("error:", stderr)
+
+    def test_keyboard_interrupt_records_stage_and_hints_resume(self):
+        from magic_cabt import training_run
+
+        def boom(ctx):
+            raise KeyboardInterrupt()
+
+        original = training_run._STAGE_FUNCTIONS["macro"]
+        training_run._STAGE_FUNCTIONS["macro"] = boom
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "run")
+                code, stderr = _run(["--toy", "8", "--out", out])
+                self.assertEqual(130, code)
+                self.assertIn("re-run the same command to resume", stderr)
+                state = _read_json(os.path.join(out, "state.json"))
+                self.assertEqual("interrupted",
+                                 state["stages"]["macro"]["status"])
+        finally:
+            training_run._STAGE_FUNCTIONS["macro"] = original
+
+    def test_interrupted_run_resumes_and_completes(self):
+        from magic_cabt import training_run
+
+        calls = {"n": 0}
+        original = training_run._STAGE_FUNCTIONS["macro"]
+
+        def boom_once(ctx):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise KeyboardInterrupt()
+            return original(ctx)
+
+        training_run._STAGE_FUNCTIONS["macro"] = boom_once
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "run")
+                code, _ = _run(["--toy", "8", "--out", out])
+                self.assertEqual(130, code)
+                code, stderr = _run(["--toy", "8", "--out", out])
+                self.assertEqual(0, code, stderr)
+                self.assertRegex(stderr, r"collect\s+cached")
+        finally:
+            training_run._STAGE_FUNCTIONS["macro"] = original
+
+
 class ParserTest(unittest.TestCase):
 
     def test_parser_defaults(self):
@@ -377,6 +446,12 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(0.1, args.test_fraction)
         self.assertEqual(2, args.min_games)
         self.assertEqual([], args.log)
+
+    def test_help_is_grouped_with_examples(self):
+        text = build_parser().format_help()
+        for expected in ("inputs", "corpus and splits", "training",
+                         "run control", "examples:"):
+            self.assertIn(expected, text)
 
 
 def _read_json(path):

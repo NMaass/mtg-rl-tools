@@ -111,7 +111,16 @@ class RunContext(object):
         self.combined = os.path.join(self.dataset_dir, "all_decisions.jsonl")
         self.state = {"schemaVersion": 1, "stages": {}}
         self.stage_meta = {}
-        self.torch_available = _torch_available()
+        self.console = _Console(quiet=args.quiet)
+        self._torch_available = None
+
+    @property
+    def torch_available(self):
+        """Lazy: importing torch costs seconds, so pay only when a torch
+        stage (or the dry-run plan) actually asks."""
+        if self._torch_available is None:
+            self._torch_available = _torch_available()
+        return self._torch_available
 
     # -- state -------------------------------------------------------------
 
@@ -147,11 +156,114 @@ class RunContext(object):
     # -- console -----------------------------------------------------------
 
     def say(self, text):
-        if not self.args.quiet:
-            sys.stderr.write("[training-run] %s\n" % text)
+        self.console.info(text)
 
     def stage_log_path(self, name):
         return os.path.join(self.logs_dir, "%s.log" % name)
+
+
+class _Console(object):
+    """Terminal presenter: stable plain lines when piped, live lines on a TTY.
+
+    Each stage renders as one aligned line. On a TTY the line appears as soon
+    as the stage starts and is rewritten in place when it finishes (and while
+    it reports progress), so the display stays put instead of scrolling
+    mid-stage. When piped — CI, log files — no control codes are emitted and
+    the start and finish are separate plain lines, so a hung run still shows
+    where it stopped. Color follows the stream (a TTY, ``TERM`` not ``dumb``)
+    and the ``NO_COLOR`` convention.
+    """
+
+    _STATUS_COLORS = {"ok": "32", "cached": "36", "skipped": "33",
+                      "failed": "31", "interrupted": "31"}
+
+    def __init__(self, stream=None, quiet=False):
+        self.stream = stream if stream is not None else sys.stderr
+        self.quiet = quiet
+        isatty = getattr(self.stream, "isatty", None)
+        self.live = bool(isatty and isatty()) \
+            and os.environ.get("TERM") != "dumb"
+        self.color = self.live and not os.environ.get("NO_COLOR")
+        self._open = None
+
+    # -- painting ----------------------------------------------------------
+
+    def _paint(self, text, code):
+        if self.color and code:
+            return "\x1b[%sm%s\x1b[0m" % (code, text)
+        return text
+
+    def _stage_prefix(self, index, total, name):
+        return "[%2d/%d] %-11s" % (index, total, name)
+
+    # -- stage lines -------------------------------------------------------
+
+    def stage_begin(self, index, total, name):
+        if self.quiet:
+            return
+        prefix = self._stage_prefix(index, total, name)
+        if self.live:
+            self._open = (index, total, name)
+            self.stream.write("\r\x1b[K%s %s" % (
+                prefix, self._paint("running", "2")))
+        else:
+            self.stream.write("%s running\n" % prefix)
+        self.stream.flush()
+
+    def progress(self, text):
+        """Refresh the open stage line with a short progress note (TTY only)."""
+        if self.quiet or not self.live or self._open is None:
+            return
+        index, total, name = self._open
+        self.stream.write("\r\x1b[K%s %s  %s" % (
+            self._stage_prefix(index, total, name),
+            self._paint("running", "2"), text))
+        self.stream.flush()
+
+    def stage_end(self, index, total, name, status, seconds=None, note=None):
+        if self.quiet:
+            self._open = None
+            return
+        parts = [self._stage_prefix(index, total, name),
+                 self._paint("%-11s" % status,
+                             self._STATUS_COLORS.get(status))]
+        if seconds is not None:
+            parts.append("%6.1fs" % seconds)
+        if note:
+            note = str(note)
+            if len(note) > 60:
+                note = note[:59] + "…"
+            parts.append(" %s" % note)
+        line = " ".join(parts).rstrip()
+        if self.live:
+            self.stream.write("\r\x1b[K%s\n" % line)
+        else:
+            self.stream.write("%s\n" % line)
+        self._open = None
+        self.stream.flush()
+
+    # -- prose lines -------------------------------------------------------
+
+    def info(self, text):
+        if self.quiet:
+            return
+        code = "33" if text.startswith("warning:") else None
+        self._write_line("[training-run] %s" % self._paint(text, code))
+
+    def error(self, text):
+        self._write_line(self._paint("error: %s" % text, "31"))
+
+    def _write_line(self, line):
+        """Print a prose line without destroying an open live stage line."""
+        if self.live and self._open is not None:
+            index, total, name = self._open
+            self.stream.write("\r\x1b[K%s\n" % line)
+            self.stream.write("%s %s" % (
+                self._stage_prefix(index, total, name),
+                self._paint("running", "2")))
+        else:
+            self.stream.write("%s\n" % line)
+        self.stream.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -403,8 +515,6 @@ def stage_ingest(ctx):
                 count += 1
         produced.append({"source": "toy", "path": toy_path,
                          "decisions": count})
-        ctx.say("toy corpus: %d decisions across %d games"
-                % (count, ctx.args.toy))
     for log_path in logs:
         produced.append(_ingest_one_log(ctx, log_path))
     ctx.stage_meta["ingest"] = {"bundles": produced}
@@ -472,8 +582,11 @@ def _ingest_one_log(ctx, log_path):
                                 card_db=card_db, verbose=True,
                                 log_stream=log_stream)
         try:
-            with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
-                session.feed_entries(iter_log_entries(fh))
+            size = os.path.getsize(log_path) or 1
+            label = os.path.basename(log_path)
+            with open(log_path, "rb") as fh:
+                session.feed_entries(iter_log_entries(
+                    _decoded_lines_with_progress(ctx, fh, size, label)))
         finally:
             recorder.close()
 
@@ -499,6 +612,24 @@ def _ingest_one_log(ctx, log_path):
                 "enabled in Arena, and is this a gameplay session?"
                 % os.path.basename(log_path))
     return info
+
+
+def _decoded_lines_with_progress(ctx, handle, size, label):
+    """Decode a raw log stream, reporting percent-through on the live line.
+
+    The byte count is tracked directly (text-mode iteration forbids
+    ``tell``), so the meter is exact and free.
+    """
+    seen = 0
+    last = 0.0
+    for raw in handle:
+        seen += len(raw)
+        now = time.monotonic()
+        if now - last >= 0.5:
+            last = now
+            ctx.console.progress("%s %d%%" % (label,
+                                              min(100, 100 * seen // size)))
+        yield raw.decode("utf-8", "replace")
 
 
 def _open_card_db(ctx):
@@ -580,8 +711,6 @@ def stage_collect(ctx):
     }
     ctx.stage_meta["collect"] = meta
     _atomic_json(os.path.join(ctx.dataset_dir, "collect_report.json"), meta)
-    ctx.say("collected %d decisions across %d games from %d source(s)"
-            % (written, len(games), len(sources)))
     return meta
 
 
@@ -664,9 +793,6 @@ def stage_split(ctx):
     report["testFraction"] = ctx.args.test_fraction
     _atomic_json(os.path.join(ctx.dataset_dir, "splits.json"), report)
     ctx.stage_meta["split"] = report
-    ctx.say("split games train/val/test = %d/%d/%d"
-            % (report["train"]["games"], report["val"]["games"],
-               report["test"]["games"]))
 
     test_bundle = os.path.join(ctx.dataset_dir, "test_bundle")
     os.makedirs(test_bundle, exist_ok=True)
@@ -831,7 +957,6 @@ def stage_report(ctx):
     _atomic_json(json_path, report)
     with open(md_path, "w", encoding="utf-8") as handle:
         handle.write(render_report_markdown(report))
-    ctx.say("report: %s" % md_path)
     return {"json": json_path, "markdown": md_path}
 
 
@@ -1064,11 +1189,14 @@ def run(args):
 
     _write_config(ctx)
 
-    for name in STAGE_NAMES:
+    run_started = time.monotonic()
+    total = len(STAGE_NAMES)
+    for position, name in enumerate(STAGE_NAMES, start=1):
         if name in skips:
             ctx.record_stage(name, "skipped",
                              detail=_skip("skipped via --skip"))
-            ctx.say("%s: skipped (--skip)" % name)
+            ctx.console.stage_end(position, total, name, "skipped",
+                                  note="--skip")
             continue
         fingerprint = _stage_fingerprint(ctx, name)
         previous = ctx.stage_state(name)
@@ -1077,27 +1205,64 @@ def run(args):
                 and name != "report"):
             if name in _META_STAGES and previous.get("detail"):
                 ctx.stage_meta[name] = previous["detail"]
-            ctx.say("%s: cached" % name)
+            ctx.console.stage_end(position, total, name, "cached")
             continue
-        ctx.say("%s: running" % name)
+        ctx.console.stage_begin(position, total, name)
         started = time.monotonic()
         try:
             detail = _STAGE_FUNCTIONS[name](ctx)
         except StageError as error:
+            seconds = time.monotonic() - started
             ctx.record_stage(name, "failed", fingerprint=fingerprint,
-                             seconds=time.monotonic() - started,
-                             detail={"error": str(error)})
-            sys.stderr.write("error: %s\n" % error)
+                             seconds=seconds, detail={"error": str(error)})
+            ctx.console.stage_end(position, total, name, "failed", seconds)
+            ctx.console.error(str(error))
             return 1
+        except KeyboardInterrupt:
+            seconds = time.monotonic() - started
+            ctx.record_stage(name, "interrupted", fingerprint=fingerprint,
+                             seconds=seconds,
+                             detail={"error": "interrupted by user"})
+            ctx.console.stage_end(position, total, name, "interrupted",
+                                  seconds)
+            ctx.console.error("interrupted during %s -- re-run the same "
+                              "command to resume from there" % name)
+            return 130
+        seconds = time.monotonic() - started
         status = "skipped" if (isinstance(detail, dict)
                                and detail.get("skipped")) else "ok"
-        if status == "skipped":
-            ctx.say("%s: skipped (%s)" % (name, detail.get("reason")))
+        note = detail.get("reason") if status == "skipped" \
+            else _stage_note(name, detail)
         ctx.record_stage(name, status, fingerprint=fingerprint,
-                         seconds=time.monotonic() - started,
-                         detail=_json_safe(detail))
-    _print_summary(ctx)
+                         seconds=seconds, detail=_json_safe(detail))
+        ctx.console.stage_end(position, total, name, status, seconds, note)
+    _print_summary(ctx, time.monotonic() - run_started)
     return 0
+
+
+def _stage_note(name, detail):
+    """The one fact worth showing beside a finished stage's status."""
+    if not isinstance(detail, dict):
+        return None
+    if name == "collect":
+        return "%s games, %s decisions" % (detail.get("games"),
+                                           detail.get("decisions"))
+    if name == "split":
+        return "train/val/test %s/%s/%s games" % (
+            (detail.get("train") or {}).get("games"),
+            (detail.get("val") or {}).get("games"),
+            (detail.get("test") or {}).get("games"))
+    if name == "audit":
+        return "trusted" if detail.get("trusted") else "NOT trusted"
+    if name == "compile":
+        train = (detail.get("train") or {}).get("examples")
+        return "%s train examples" % train if train is not None else None
+    if name == "ingest":
+        bundles = detail.get("bundles")
+        if bundles:
+            return "%d source%s" % (len(bundles),
+                                    "" if len(bundles) == 1 else "s")
+    return None
 
 
 def _dry_run_plan(ctx, skips):
@@ -1125,7 +1290,6 @@ def _write_config(ctx):
         "createdAt": _utc_now(),
         "python": platform.python_version(),
         "platform": platform.platform(),
-        "torchAvailable": ctx.torch_available,
         "packageVersion": _package_version(),
     }
     _atomic_json(os.path.join(ctx.out, _CONFIG_FILE), config)
@@ -1147,16 +1311,20 @@ def _json_safe(value):
         return {"repr": repr(value)}
 
 
-def _print_summary(ctx):
+def _print_summary(ctx, elapsed):
     report = _maybe_json(os.path.join(ctx.out, "report.json")) or {}
     metrics = report.get("testMetrics") or {}
-    if metrics and not ctx.args.quiet:
-        ctx.say("held-out test top-1: %s" % "  ".join(
-            "%s=%s" % (name, _fmt(row.get("top1Accuracy")))
+    if metrics:
+        ctx.say("test top-1: %s" % " · ".join(
+            "%s %s" % (name, _fmt(row.get("top1Accuracy")))
             for name, row in sorted(metrics.items())))
     for warning in report.get("warnings") or []:
         ctx.say("warning: %s" % warning)
-    ctx.say("done: %s" % os.path.join(ctx.out, "report.md"))
+    artifacts = ["report: %s" % os.path.join(ctx.out, "report.md")]
+    if _stage_ok(ctx, "compare"):
+        artifacts.append("comparison: %s"
+                         % os.path.join(ctx.eval_dir, "comparison.html"))
+    ctx.say("done in %.1fs -- %s" % (elapsed, " · ".join(artifacts)))
 
 
 # ---------------------------------------------------------------------------
@@ -1168,52 +1336,71 @@ def build_parser():
         prog="magic-cabt-training-run",
         description="Run the full supported training pipeline from saved "
                     "MTGA Player.log files (or existing decision bundles) "
-                    "to a trained-and-evaluated report.")
-    parser.add_argument("--log", action="append", default=[],
+                    "to a trained-and-evaluated report.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n"
+               "  # smoke-test the whole pipeline on a synthetic corpus\n"
+               "  magic-cabt-training-run --toy 30 --out runs/toy\n"
+               "\n"
+               "  # real run over saved Arena logs, resumable in place\n"
+               "  magic-cabt-training-run --log captures/Player.log \\\n"
+               "      --log captures/old-logs --out runs/first-run\n")
+
+    inputs = parser.add_argument_group(
+        "inputs", "at least one of --log, --bundle, or --toy")
+    inputs.add_argument("--log", action="append", default=[],
                         help="saved Player.log file, or a directory of .log "
                              "files (repeatable)")
-    parser.add_argument("--bundle", action="append", default=[],
+    inputs.add_argument("--bundle", action="append", default=[],
                         help="existing bundle dir or DecisionRecord JSONL "
                              "(repeatable)")
-    parser.add_argument("--toy", type=int, default=0, metavar="GAMES",
+    inputs.add_argument("--toy", type=int, default=0, metavar="GAMES",
                         help="generate a synthetic corpus of GAMES games "
                              "instead of reading logs (pipeline smoke test)")
-    parser.add_argument("--out", required=True,
-                        help="run directory for datasets, models, logs, and "
-                             "the final report")
-    parser.add_argument("--name", default=None,
+
+    corpus = parser.add_argument_group("corpus and splits")
+    corpus.add_argument("--name", default=None,
                         help="corpus name recorded in the manifest")
-    parser.add_argument("--card-db", default=None,
+    corpus.add_argument("--card-db", default=None,
                         help="Arena card database path for name resolution")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--val-fraction", type=float, default=0.1)
-    parser.add_argument("--test-fraction", type=float, default=0.1)
-    parser.add_argument("--min-games", type=int, default=2,
+    corpus.add_argument("--seed", type=int, default=0,
+                        help="seed for splits, baselines, and trainers")
+    corpus.add_argument("--val-fraction", type=float, default=0.1)
+    corpus.add_argument("--test-fraction", type=float, default=0.1)
+    corpus.add_argument("--min-games", type=int, default=2,
                         help="fail if the corpus has fewer whole games")
-    parser.add_argument("--epochs", type=int, default=10,
-                        help="epochs for torch trainers")
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--skip", action="append", default=[],
-                        metavar="STAGE",
-                        help="skip an optional stage (repeatable): ingest, "
-                             "macro, baselines, train-bc, train-torch, or "
-                             "compare; the data-integrity chain cannot be "
-                             "skipped")
-    parser.add_argument("--skip-torch", action="store_true",
-                        help="skip torch model stages even if torch is "
-                             "installed")
-    parser.add_argument("--allow-untrusted", action="store_true",
-                        help="continue past a NOT-trusted audit verdict "
-                             "(recorded in the report)")
-    parser.add_argument("--allow-duplicate-games", action="store_true",
+    corpus.add_argument("--allow-duplicate-games", action="store_true",
                         help="keep first occurrence when the same "
                              "game/sequence appears in multiple inputs")
-    parser.add_argument("--force", action="store_true",
-                        help="ignore cached stages and rebuild everything")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="print the resolved plan and exit")
-    parser.add_argument("--quiet", action="store_true")
+    corpus.add_argument("--allow-untrusted", action="store_true",
+                        help="continue past a NOT-trusted audit verdict "
+                             "(recorded in the report)")
+
+    training = parser.add_argument_group("training")
+    training.add_argument("--epochs", type=int, default=10,
+                          help="epochs for torch trainers")
+    training.add_argument("--batch-size", type=int, default=64)
+    training.add_argument("--lr", type=float, default=1e-3)
+    training.add_argument("--skip-torch", action="store_true",
+                          help="skip torch model stages even if torch is "
+                               "installed")
+
+    control = parser.add_argument_group("run control")
+    control.add_argument("--out", required=True,
+                         help="run directory for datasets, models, logs, and "
+                              "the final report")
+    control.add_argument("--skip", action="append", default=[],
+                         metavar="STAGE",
+                         help="skip an optional stage (repeatable): ingest, "
+                              "macro, baselines, train-bc, train-torch, or "
+                              "compare; the data-integrity chain cannot be "
+                              "skipped")
+    control.add_argument("--force", action="store_true",
+                         help="ignore cached stages and rebuild everything")
+    control.add_argument("--dry-run", action="store_true",
+                         help="print the resolved plan and exit")
+    control.add_argument("--quiet", action="store_true",
+                         help="suppress progress output (errors still print)")
     return parser
 
 

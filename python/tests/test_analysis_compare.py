@@ -95,6 +95,37 @@ class AnalysisComparisonTest(unittest.TestCase):
             self.assertIn("Fixture comparison", rendered)
             self.assertIn("application/json", rendered)
 
+    def test_rendered_inline_script_is_valid_javascript(self):
+        """The template is a %%-formatted Python string, so one unescaped
+        backslash puts a raw newline inside a JS string literal and the whole
+        viewer dies with a SyntaxError -- which is exactly what shipped once.
+        Guard the escape level, and syntax-check with node when available."""
+        import re
+        import shutil
+        import subprocess
+
+        rendered = render_comparison_html(
+            {"title": "T", "models": [{"name": "m1"}], "rows": []})
+        script = re.search(r"<script>(.*?)</script>", rendered,
+                           re.S).group(1)
+        self.assertIn("join('\\n')", script,
+                      "newline joins must reach JS as two-char escapes")
+        for line in script.splitlines():
+            self.assertFalse(line.rstrip().endswith("join('"),
+                             "raw newline split a JS string literal")
+        node = shutil.which("node")
+        if node:
+            with tempfile.NamedTemporaryFile("w", suffix=".js",
+                                             delete=False) as handle:
+                handle.write(script)
+                path = handle.name
+            try:
+                result = subprocess.run([node, "--check", path],
+                                        capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+            finally:
+                os.unlink(path)
+
     def test_fungible_human_choice_uses_canonical_rank(self):
         options = [
             {"index": 0, "type": "TARGET", "label": "Token",
