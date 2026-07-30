@@ -841,13 +841,17 @@ def build_report(ctx):
     splits = ctx.stage_meta.get("split") or _maybe_json(
         os.path.join(ctx.dataset_dir, "splits.json"))
     models = {}
-    for name, path in (
-            ("baseline:first", os.path.join(ctx.eval_dir,
-                                            "baseline_first_test.json")),
-            ("baseline:random", os.path.join(ctx.eval_dir,
-                                             "baseline_random_test.json")),
-            ("bag-of-words-bc", os.path.join(ctx.eval_dir, "bc_test.json"))):
-        metrics = _maybe_json(path)
+    for stage, name, path in (
+            ("baselines", "baseline:first",
+             os.path.join(ctx.eval_dir, "baseline_first_test.json")),
+            ("baselines", "baseline:random",
+             os.path.join(ctx.eval_dir, "baseline_random_test.json")),
+            ("train-bc", "bag-of-words-bc",
+             os.path.join(ctx.eval_dir, "bc_test.json"))):
+        # A metrics file is only this run's result when its producing stage
+        # ran (or was cache-valid) this run; a skipped stage must not
+        # republish a previous run's artifact as current.
+        metrics = _maybe_json(path) if _stage_ok(ctx, stage) else None
         if metrics:
             models[name] = {
                 "top1Accuracy": metrics.get("top1Accuracy"),
@@ -855,7 +859,8 @@ def build_report(ctx):
                 "meanReciprocalRank": metrics.get("meanReciprocalRank"),
                 "examples": metrics.get("examples"),
             }
-    bc_val = _maybe_json(os.path.join(ctx.eval_dir, "bc_val.json"))
+    bc_val = _maybe_json(os.path.join(ctx.eval_dir, "bc_val.json")) \
+        if _stage_ok(ctx, "train-bc") else None
     warnings = []
     if collect and collect.get("duplicatesDropped"):
         warnings.append("%d duplicate decisions dropped during collect"
@@ -868,7 +873,8 @@ def build_report(ctx):
     if (torch_state.get("detail") or {}).get("skipped"):
         warnings.append("torch stages skipped: %s"
                         % torch_state["detail"].get("reason"))
-    comparison = _maybe_json(os.path.join(ctx.eval_dir, "comparison.json"))
+    comparison = _maybe_json(os.path.join(ctx.eval_dir, "comparison.json")) \
+        if _stage_ok(ctx, "compare") else None
     comparison_models = ((comparison or {}).get("metrics") or {}).get("models")
     return {
         "schemaVersion": 1,
@@ -882,6 +888,10 @@ def build_report(ctx):
         "stages": ctx.state["stages"],
         "warnings": warnings,
     }
+
+
+def _stage_ok(ctx, name):
+    return (ctx.state["stages"].get(name) or {}).get("status") == "ok"
 
 
 def _maybe_json(path):
@@ -1014,6 +1024,12 @@ _STAGE_FUNCTIONS = {
 _META_STAGES = ("ingest", "collect", "split", "compile", "baselines",
                 "train-bc", "train-torch")
 
+# The data-integrity chain. Skipping any of these on a reused run directory
+# would let later stages consume a previous corpus's files as if they were
+# current, so --skip refuses them; caching makes rerunning them free anyway.
+_UNSKIPPABLE_STAGES = frozenset(
+    ("collect", "validate", "audit", "split", "compile", "report"))
+
 
 def run(args):
     ctx = RunContext(args)
@@ -1023,8 +1039,12 @@ def run(args):
         raise StageError("unknown --skip stage(s): %s (choose from %s)"
                          % (", ".join(sorted(unknown)),
                             ", ".join(STAGE_NAMES)))
-    if "report" in skips or "collect" in skips or "validate" in skips:
-        raise StageError("collect, validate, and report cannot be skipped")
+    integrity = skips.intersection(_UNSKIPPABLE_STAGES)
+    if integrity:
+        raise StageError(
+            "%s cannot be skipped: the data-integrity chain must run on the "
+            "current corpus, or later stages would silently reuse a previous "
+            "run's files" % ", ".join(sorted(integrity)))
 
     if args.dry_run:
         plan = _dry_run_plan(ctx, skips)
@@ -1176,8 +1196,10 @@ def build_parser():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--skip", action="append", default=[],
                         metavar="STAGE",
-                        help="skip a stage (repeatable); collect/validate/"
-                             "report cannot be skipped")
+                        help="skip an optional stage (repeatable): ingest, "
+                             "macro, baselines, train-bc, train-torch, or "
+                             "compare; the data-integrity chain cannot be "
+                             "skipped")
     parser.add_argument("--skip-torch", action="store_true",
                         help="skip torch model stages even if torch is "
                              "installed")

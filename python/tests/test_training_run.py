@@ -156,6 +156,40 @@ class ToyEndToEndTest(unittest.TestCase):
                 first_state["stages"]["train-bc"]["finishedAt"],
                 second_state["stages"]["train-bc"]["finishedAt"])
 
+    def test_skipped_stages_do_not_republish_previous_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "run")
+            code, _ = _run(["--toy", "12", "--out", out, "--quiet"])
+            self.assertEqual(0, code)
+            first_report = _read_json(os.path.join(out, "report.json"))
+            self.assertTrue(first_report["testMetrics"])
+            self.assertTrue(first_report["comparison"])
+
+            # Same run dir, a different corpus, and the metric-producing
+            # stages skipped: the old eval artifacts still sit on disk and
+            # must not resurface as this run's results.
+            code, stderr = _run(["--toy", "16", "--out", out, "--quiet",
+                                 "--skip", "baselines",
+                                 "--skip", "train-bc",
+                                 "--skip", "compare"])
+            self.assertEqual(0, code, stderr)
+            report = _read_json(os.path.join(out, "report.json"))
+            self.assertEqual({}, report["testMetrics"])
+            self.assertFalse(report.get("comparison"))
+            self.assertIsNone(report.get("bcValTop1"))
+            with open(os.path.join(out, "report.md"),
+                      encoding="utf-8") as handle:
+                self.assertNotIn("Head-to-head", handle.read())
+
+    def test_data_integrity_stages_cannot_be_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for stage in ("audit", "split", "compile"):
+                code, stderr = _run(["--toy", "6", "--skip", stage,
+                                     "--out", os.path.join(tmp, "run-" + stage),
+                                     "--quiet"])
+                self.assertEqual(1, code, stage)
+                self.assertIn("cannot be skipped", stderr)
+
     def test_torch_stage_is_skipped_not_failed_without_torch(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "run")
