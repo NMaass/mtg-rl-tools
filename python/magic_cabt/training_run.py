@@ -454,9 +454,14 @@ def _ingest_one_log(ctx, log_path):
             ctx.say("ingest cached: %s" % os.path.basename(log_path))
             existing["cached"] = True
             return existing
-        raise StageError(
-            "bundle %s exists but was built from different log content; "
-            "re-run with --force to rebuild it" % bundle_dir)
+    if os.path.isdir(bundle_dir):
+        # No marker (a previous ingest died mid-way) or a marker for other
+        # content. The recorder appends, so ingesting into the leftovers
+        # would silently duplicate records; the bundle is derived data, so
+        # rebuild it from the log instead.
+        ctx.say("rebuilding incomplete ingest bundle for %s"
+                % os.path.basename(log_path))
+        shutil.rmtree(bundle_dir)
 
     card_db = _open_card_db(ctx)
     os.makedirs(bundle_dir, exist_ok=True)
@@ -692,13 +697,17 @@ def stage_compile(ctx):
         _run_wrapped_main(ctx, "compile", compile_il.main, [
             "--input", source, "--out", out_path,
         ])
-        rows = sum(1 for _ in open(out_path, "r", encoding="utf-8"))
+        with open(out_path, "r", encoding="utf-8") as handle:
+            rows = sum(1 for _ in handle)
         outputs[split] = {"path": out_path, "examples": rows}
-        if split == "train" and rows == 0:
-            raise StageError(
-                "0 single-choice IL examples compiled from the train split; "
-                "every decision was multi-select or invalid. See %s"
-                % ctx.stage_log_path("compile"))
+        if rows == 0:
+            if split == "train":
+                raise StageError(
+                    "0 single-choice IL examples compiled from the train "
+                    "split; every decision was multi-select or invalid. "
+                    "See %s" % ctx.stage_log_path("compile"))
+            ctx.say("warning: the %s split compiled to 0 single-choice IL "
+                    "examples; its evaluation metrics will be empty" % split)
     ctx.stage_meta["compile"] = outputs
     return outputs
 
@@ -859,6 +868,8 @@ def build_report(ctx):
     if (torch_state.get("detail") or {}).get("skipped"):
         warnings.append("torch stages skipped: %s"
                         % torch_state["detail"].get("reason"))
+    comparison = _maybe_json(os.path.join(ctx.eval_dir, "comparison.json"))
+    comparison_models = ((comparison or {}).get("metrics") or {}).get("models")
     return {
         "schemaVersion": 1,
         "generatedAt": _utc_now(),
@@ -866,6 +877,7 @@ def build_report(ctx):
         "corpus": collect,
         "splits": splits,
         "testMetrics": models,
+        "comparison": comparison_models,
         "bcValTop1": (bc_val or {}).get("top1Accuracy"),
         "stages": ctx.state["stages"],
         "warnings": warnings,
@@ -912,6 +924,16 @@ def render_report_markdown(report):
                 name, _fmt(row.get("top1Accuracy")),
                 _fmt(row.get("top3Accuracy")),
                 _fmt(row.get("meanReciprocalRank"))))
+    comparison = report.get("comparison") or []
+    if comparison:
+        lines += ["", "## Head-to-head on the test bundle "
+                      "(`eval/comparison.html`)", "",
+                  "| Model | Coverage | Top-1 | MRR |",
+                  "| --- | --- | --- | --- |"]
+        for row in comparison:
+            lines.append("| %s | %s | %s | %s |" % (
+                row.get("name"), _fmt(row.get("coverage")),
+                _fmt(row.get("playedTop1")), _fmt(row.get("playedMRR"))))
     lines += ["", "## Stages", "",
               "| Stage | Status | Seconds |", "| --- | --- | --- |"]
     for name in STAGE_NAMES:
@@ -955,12 +977,18 @@ def _stage_fingerprint(ctx, name):
     else:
         base["dataset"] = (ctx.stage_meta.get("collect") or {}).get("sha256") \
             or ((ctx.stage_state("collect") or {}).get("detail") or {}).get("sha256")
-        if name in ("train-torch",):
+        if name == "train-torch":
             base["epochs"] = args.epochs
             base["batchSize"] = args.batch_size
             base["lr"] = args.lr
             base["torchAvailable"] = ctx.torch_available
             base["skipTorch"] = bool(args.skip_torch)
+        if name == "compare":
+            # The comparison scores whatever checkpoints train-torch produced,
+            # so a retrained model must invalidate the cached comparison even
+            # though the dataset hash is unchanged.
+            base["trainTorch"] = (ctx.stage_state("train-torch") or {}).get(
+                "fingerprint")
     return _fingerprint_value(base)
 
 
@@ -1176,6 +1204,15 @@ def main(argv=None):
         return 2
     if args.toy < 0:
         sys.stderr.write("error: --toy takes a positive game count\n")
+        return 2
+    if args.epochs < 1 or args.batch_size < 1:
+        sys.stderr.write("error: --epochs and --batch-size must be >= 1\n")
+        return 2
+    if args.lr <= 0:
+        sys.stderr.write("error: --lr must be > 0\n")
+        return 2
+    if args.min_games < 1:
+        sys.stderr.write("error: --min-games must be >= 1\n")
         return 2
     try:
         return run(args)

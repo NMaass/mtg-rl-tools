@@ -8,7 +8,10 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
 
 from magic_cabt.training_run import (
+    RunContext,
     StageError,
+    _ingest_one_log,
+    _stage_fingerprint,
     build_parser,
     generate_toy_records,
     main,
@@ -95,6 +98,15 @@ class ToyEndToEndTest(unittest.TestCase):
             # its own status lives in state.json only.
             state = _read_json(os.path.join(out, "state.json"))
             self.assertEqual("ok", state["stages"]["report"]["status"])
+
+            comparison = {row["name"]: row
+                          for row in report.get("comparison") or []}
+            self.assertIn("first", comparison)
+            self.assertIn("random", comparison)
+            self.assertIsNotNone(comparison["first"]["playedTop1"])
+            with open(os.path.join(out, "report.md"),
+                      encoding="utf-8") as handle:
+                self.assertIn("Head-to-head", handle.read())
             metrics = report["testMetrics"]
             bc = metrics["bag-of-words-bc"]["top1Accuracy"]
             rnd = metrics["baseline:random"]["top1Accuracy"]
@@ -226,6 +238,80 @@ class FailureModeTest(unittest.TestCase):
                                  "--out", os.path.join(tmp, "run")])
             self.assertEqual(2, code)
             self.assertIn("sum to < 1", stderr)
+
+    def test_hyperparameter_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "run")
+            for argv, message in (
+                    (["--toy", "6", "--epochs", "0", "--out", out],
+                     "--epochs"),
+                    (["--toy", "6", "--batch-size", "0", "--out", out],
+                     "--batch-size"),
+                    (["--toy", "6", "--lr", "0", "--out", out], "--lr"),
+                    (["--toy", "6", "--min-games", "0", "--out", out],
+                     "--min-games")):
+                code, stderr = _run(argv)
+                self.assertEqual(2, code, argv)
+                self.assertIn(message, stderr)
+
+
+class IngestRecoveryTest(unittest.TestCase):
+    """A bundle whose ingest died mid-way must be rebuilt, never appended."""
+
+    def _context(self, tmp):
+        args = build_parser().parse_args(
+            ["--out", os.path.join(tmp, "run"), "--quiet"])
+        return RunContext(args)
+
+    def _jsonl_line_counts(self, bundle_dir):
+        counts = {}
+        for name in sorted(os.listdir(bundle_dir)):
+            if name.endswith(".jsonl"):
+                with open(os.path.join(bundle_dir, name),
+                          encoding="utf-8") as handle:
+                    counts[name] = sum(1 for _ in handle)
+        return counts
+
+    def test_missing_marker_triggers_rebuild_not_append(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "Player.log")
+            with open(log_path, "w", encoding="utf-8") as handle:
+                handle.write("[UnityCrossThreadLogger]plain chatter\n")
+                handle.write("not arena json at all\n")
+            ctx = self._context(tmp)
+            first = _ingest_one_log(ctx, log_path)
+            bundle_dir = first["bundle"]
+            baseline = self._jsonl_line_counts(bundle_dir)
+
+            os.remove(os.path.join(bundle_dir, "ingest_source.json"))
+            second = _ingest_one_log(ctx, log_path)
+            self.assertEqual(bundle_dir, second["bundle"])
+            self.assertFalse(second.get("cached"))
+            self.assertEqual(baseline, self._jsonl_line_counts(bundle_dir),
+                             "rebuild must not append to the old bundle")
+
+            third = _ingest_one_log(ctx, log_path)
+            self.assertTrue(third.get("cached"))
+
+
+class CompareInvalidationTest(unittest.TestCase):
+    """Retrained torch checkpoints must invalidate a cached comparison."""
+
+    def test_compare_fingerprint_tracks_train_torch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = build_parser().parse_args(
+                ["--out", os.path.join(tmp, "run")])
+            ctx = RunContext(args)
+            ctx.stage_meta["collect"] = {"sha256": "abc"}
+            ctx.state["stages"]["train-torch"] = {"status": "ok",
+                                                  "fingerprint": "one"}
+            before = _stage_fingerprint(ctx, "compare")
+            ctx.state["stages"]["train-torch"]["fingerprint"] = "two"
+            after = _stage_fingerprint(ctx, "compare")
+            self.assertNotEqual(before, after)
+            unrelated = _stage_fingerprint(ctx, "split")
+            ctx.state["stages"]["train-torch"]["fingerprint"] = "three"
+            self.assertEqual(unrelated, _stage_fingerprint(ctx, "split"))
 
 
 class DryRunTest(unittest.TestCase):
