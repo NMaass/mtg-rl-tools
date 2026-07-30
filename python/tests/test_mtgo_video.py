@@ -362,7 +362,17 @@ LOG_LINES = (
 )
 
 
+def _has_pil():
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _font(size):
+    if not _has_pil():
+        return None
     from PIL import ImageFont
 
     for path in FONT_CANDIDATES:
@@ -492,7 +502,8 @@ def _write(image, path):
     return path
 
 
-@unittest.skipIf(_font(12) is None, "no TrueType font available to draw with")
+@unittest.skipIf(_font(12) is None,
+                 "Pillow with a TrueType font is not available to draw with")
 class LayoutTest(unittest.TestCase):
     """Locating the UI without depending on resolution *or* arrangement."""
 
@@ -1246,6 +1257,7 @@ class AlignmentTest(unittest.TestCase):
             find_lost_line({"card": "Volatile Fjord"}, events, before=40.0))
 
 
+@unittest.skipIf(not _has_pil(), "Pillow is not installed")
 class BoardReaderTest(unittest.TestCase):
     """Reading permanents off the screen rather than deriving them."""
 
