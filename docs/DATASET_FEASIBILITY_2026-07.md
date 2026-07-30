@@ -9,10 +9,12 @@ in four ways:
 1. **The 17lands verdict was rendered against the wrong file.** The public
    datasets include a third type beyond draft and game data: **replay data**,
    per-turn card-level event columns for both players across millions of limited
-   games since early 2021. It is not a full log, but it is close enough that the
-   rules-repair machinery this repository already built for OCR-damaged MTGO
-   logs can plausibly *reconstruct* full trajectories from it, with a confidence
-   gate. This is the largest accessible corpus by two orders of magnitude.
+   games since early 2021. It is not a full log, but it is close enough that a
+   constrained reconstruction search — new driver code over engine primitives
+   this repository already has (single-step application, replay-search's
+   alternative evaluation, alignment-style repair reporting) — can plausibly
+   recover full trajectories from it, behind a confidence gate. This is the
+   largest accessible corpus by two orders of magnitude.
 2. **Full-text MTGO game logs already exist in bulk.** The Penny Dreadful
    community's PDBot has recorded league and tournament games since 2016 and
    publishes complete textual game logs with linked decklists
@@ -67,7 +69,7 @@ estimate below.
 | Own logs | "Too few preserved" | Arena's `Player.log` rotates, but if the 17lands client (or Untapped) was running, the vendor retains full personal history — 17lands offers complete-history export to Mythic patrons, and a support request for one's own data is reasonable regardless. Partial recovery is plausible. |
 | Ask 17lands | "No relationship; unsure they store it" | They store it — the site renders per-game replays, and replay-level public files exist. The ask has precedent (academic use of 17lands data is common and they invite citation). Reframe the ask around *research access or an expanded replay export*, referencing the public replay schema. Cheap letter, moderate odds. |
 | Opt-in product | "Too much overhead, not ready" | Agree for a public product. But the expensive parts are already built and parked (`arena_mirror` GUI, `upload/` consent-envelope + redaction). A *private* donation pilot — a dozen recruited grinders, not a launch — reuses them with near-zero new surface. See approach G. |
-| MTGO video parsing | "Most viable; fix scaling/overlays; estimate throughput" | Pipeline is real and verified, and the scaling work is done: the ≥1080p floor is measured and enforced, refusals are safe. Compute math below says CPU is trivial; supply, bandwidth, and rights dominate. Two upgrades change its value class: read the hero's hand strip (streamer's hand is on screen; battlefield art-matching already exists) and prefer creator-provided raw recordings over YouTube re-encodes. See approach D. |
+| MTGO video parsing | "Most viable; fix scaling/overlays; estimate throughput" | Pipeline is real and verified, and the layout work is done. One gap for batch use: unlocatable layouts hard-fail, but a capture whose log glyphs sit below the reliable floor (`MIN_RELIABLE_TEXT_HEIGHT`) only *warns* and continues, so unattended ingest needs a fail-closed gate. Compute math below says CPU is trivial; supply, bandwidth, and rights dominate. Two upgrades change its value class: read the hero's hand strip (streamer's hand is on screen; battlefield art-matching already exists) and prefer creator-provided raw recordings over YouTube re-encodes. See approach D. |
 | MTGA video parsing | "Maybe as easy; worth trying" | Deprioritize. MTGA shows no persistent textual log pane, so the log-OCR architecture does not transfer — it becomes a much harder general vision problem, to recover data the client will hand over perfectly in `Player.log`. The only unique asset MTGA VODs hold is *historical streamer archives*; revisit only if a specific corpus is identified and the owner won't run the recorder. |
 
 ## New or adjusted approaches, ranked
@@ -81,14 +83,21 @@ blocked/unblocked, lands played, mana spent, and end-of-turn life and creature
 counts ([schema helper][17l-dtypes], [datasets page][17l-data]). Coverage runs
 back to early 2021 across every premier set — order 10^7 limited games.
 
-What is missing is within-turn ordering, targets, and resolution detail. That
-gap is exactly the shape of problem `mtgo_video/rules.py` already solves for
-OCR damage: find the event stream a rules engine accepts that satisfies the
-observed constraints, propose the smallest edits where none does, and report
-confidence instead of guessing. Here the constraints are *clean* — merely
-underdetermined — and limited-format turns are short and low-interaction, so a
-large fraction of games should admit a unique (or unique-up-to-irrelevance)
-legal ordering. End-of-turn life for both players every turn is a strong
+What is missing is within-turn ordering, targets, and resolution detail. The
+repository holds the *checking* half of that problem, not the search half.
+`mtgo_video/rules.py` walks an already ordered stream one step ahead of the
+board and proposes the smallest edit where an event is impossible — it cannot
+enumerate orderings, and the mirror path it runs on does not model the stack
+or targets. `magic-cabt-replay-search` is the closer primitive: it replays an
+action prefix through the full engine (which does own the stack and targeting)
+and evaluates alternative actions in fresh processes. Approach A needs a new
+driver on top of those primitives: enumerate candidate within-turn orderings
+and target assignments, play each forward through the full engine, keep the
+candidates that satisfy the per-turn observables, and measure whether exactly
+one survives. That driver is new engineering, not reuse. The constraints are
+at least *clean* — merely underdetermined — and limited-format turns are short
+and low-interaction, so a large fraction of games should admit a unique (or
+unique-up-to-irrelevance) legal ordering. End-of-turn life for both players every turn is a strong
 disambiguator for combat and burn. Games that don't reconstruct uniquely get
 flagged or dropped; capture-confidence plumbing for exactly this already exists
 in the manifests.
@@ -98,11 +107,13 @@ Decisive quality property: the hero's opening hand and every draw are named, so
 Ranks and win rates are attached, so the corpus can be filtered by skill.
 
 - Ceiling: 10^6+ hero-perspective limited games — two orders beyond the target.
-- Cost: a reconstruction spike (~1–2 weeks) reusing rules/replay-search code;
-  then batch compute.
+- Cost: a spike (~2–4 weeks) to build the constrained-search driver on the
+  replay-search primitives and run it on ~100 games; then batch compute.
 - Risk: ambiguity rate is unknown until measured; instants held at instant
-  speed and combat tricks are the hard cases. The spike's deliverable is a
-  measured unique-reconstruction rate on ~100 games; that number decides.
+  speed and combat tricks are the hard cases, and worst-case search cost per
+  game is combinatorial — cap it and count capped games as failures. The
+  spike's deliverable is a measured unique-reconstruction rate on ~100 games;
+  that number decides.
 - Terms: the datasets are published for public analysis (17lands asks for
   citation); confirm their data-use terms cover model training, which is also a
   good pretext for the research-access letter.
@@ -154,7 +165,7 @@ For 100k games at ~2.4 games per match VOD ≈ 42k VODs:
 | CPU | 10k–21k core-hours (~2–4 weeks on one 32-core box; ~$200–600 spot) | Non-issue |
 | Bandwidth/storage | 0.7–2 GB per 1080p VOD → 30–80 TB transfer; keep bundles+crops, discard video | Real logistics; weeks-to-months at polite rates |
 | Supply at ≥1080p | Unknown; guess 30k–100k usable VODs across 20–50 archive channels | **The open question** |
-| Accuracy | 97% parse and five-way verification on the reference; sub-1080p and odd layouts refuse safely | Yield haircut, not correctness risk — expect 40–70% of downloaded VODs usable; measure on the first 200 |
+| Accuracy | 97% parse and five-way verification on the reference at 13 px glyphs; 7 px (720p full-screen) measurably decodes a wrong game. Unlocatable layouts refuse; low glyphs today only **warn** and continue | Correctness risk until gated: batch ingest must reject on the glyph floor and on any failed verification, turning bad captures into a yield haircut — then expect 40–70% of downloaded VODs usable; measure on the first 200 |
 
 So the plan's missing number is supply, and it is cheap to get: a metadata-only
 crawler (channel lists, durations, resolutions, upload dates — no video
