@@ -17,7 +17,7 @@ MTG Arena logs or XMage games
 
 XMage owns legality. Models rank the legal choices that the engine supplies; they do not reproduce the rules or emit an unrestricted action vocabulary.
 
-See [Project scope](docs/SCOPE.md) for the supported/experimental boundary, [the July 2026 scope audit](docs/SCOPE_AUDIT_2026-07.md) for the current cleanup decisions, and [the July 2026 dataset feasibility reanalysis](docs/DATASET_FEASIBILITY_2026-07.md) for how the training corpus is expected to be acquired.
+See [Project scope](docs/SCOPE.md) for the supported/experimental boundary, [the July 2026 scope audit](docs/SCOPE_AUDIT_2026-07.md) for the current cleanup decisions, [the July 2026 dataset feasibility reanalysis](docs/DATASET_FEASIBILITY_2026-07.md) for how the training corpus is acquired, and [the August 2026 IL training-run plan](docs/IL_TRAINING_RUN_2026-08.md) for the first run on the personal 17lands corpus.
 
 ## Project status
 

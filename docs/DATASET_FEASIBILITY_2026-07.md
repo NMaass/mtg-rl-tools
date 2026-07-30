@@ -280,6 +280,30 @@ points: benchmarks and scaling evidence, not acquisition.
   keep the pilot invite-only to stay inside the scope audit's parking
   decision.
 
+## Addendum — decisions taken (2026-07-30)
+
+Reviewing this analysis, the project owner decided:
+
+- **Primary gameplay corpus: the owner's complete 17lands history** via
+  Mythic-patron personal export (10k+ limited games, back to ~2021). The
+  export's fidelity (event-level vs per-turn aggregate) must be verified
+  with 17lands before ingestion work; the Arena mirror recorder runs on all
+  play going forward either way.
+- **Approach A demoted from policy corpus to supporting corpus.** Per-turn
+  aggregates lose phase, order, and sequence, which the owner judges too
+  low-fidelity for gameplay policy training even with reconstruction.
+  Retained roles: win-probability/value training, opponent-holding priors,
+  and mulligan/draft/deck-build/sideboard modeling — all decisions or
+  targets that survive aggregation intact.
+- **Approach B demoted for the same fidelity reason from the other side**
+  (hands hidden). Retained role: opponent-model and public-state value
+  pretraining, if ever needed for constructed.
+- Reconstruction (the search driver) is **deferred, not rejected** — "try
+  and see" once the export and recorder corpora exist as its ground truth.
+
+The training plan built on these decisions is
+[IL_TRAINING_RUN_2026-08.md](IL_TRAINING_RUN_2026-08.md).
+
 [17l-data]: https://www.17lands.com/public_datasets
 [17l-dtypes]: https://17lands-public.s3.amazonaws.com/analysis_data/helper_files/replay_dtypes.py
 [pd-logs]: https://logs.pennydreadfulmagic.com/
