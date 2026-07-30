@@ -56,6 +56,11 @@ Splits (per the research architecture: never split decisions within a game):
   calls for;
 - per-format strata (draft vs sealed; Bo1 vs Bo3).
 
+These gates are automated: `magic-cabt-training-run` (see the README's fast
+path) runs ingest → validate → audit → manifest → whole-game split → compile
+→ baselines → training → evaluation as one resumable command over saved
+`Player.log` files or existing bundles, failing closed at each gate.
+
 At ~25–40 strategic decisions per limited game, 10k games ≈ 250–400k
 decisions: this covers the 10k/30k/100k/300k points of the architecture doc's
 scaling grid exactly. The scaling curve *is* the first experiment; it also

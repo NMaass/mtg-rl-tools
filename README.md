@@ -43,6 +43,31 @@ This is active research software, not a complete competitive Magic agent platfor
 
 ## Supported workflow
 
+### Fast path: one command from saved Arena logs
+
+`magic-cabt-training-run` chains the whole supported pipeline — batch
+ingest of saved `Player.log` files, validation, trust audit, manifest,
+whole-game splits, IL compilation, baselines, training, evaluation — into
+one resumable run directory with a final report. It needs no XMage build.
+
+```sh
+cd python && python -m pip install -e .
+
+# Smoke-test the pipeline end to end on a synthetic corpus (seconds):
+magic-cabt-training-run --toy 30 --out runs/toy
+
+# Real run: point it at saved Player.log files (or directories of them):
+magic-cabt-training-run --log captures/Player.log --log captures/old-logs \
+  --out runs/first-run --name arena-personal-v1
+```
+
+Re-running the same command resumes: stages whose inputs did not change are
+skipped. Torch model stages run when `.[torch]` is installed and are
+recorded as skipped otherwise. `--dry-run` prints the resolved plan;
+`report.md` in the run directory summarizes corpus, splits, metrics, stage
+timings, and warnings. The steps below remain the manual, stage-by-stage
+version of the same path.
+
 ### 1. Build and verify the XMage overlay
 
 This repository is an overlay for an XMage checkout, not a fork.
