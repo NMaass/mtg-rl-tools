@@ -27,6 +27,15 @@ schema** of the public replay files. Everything forks on this:
 | Event-level (GRE-derived actions) | Full-fidelity policy corpus. Ingestion is a normalizer in the shape of `arena_log.py` (which already maps GRE decision prompts to DecisionRecords via the mirror) — moderate, well-understood work. |
 | Per-turn aggregates | The owner's own history has the same fidelity ceiling as public approach A. The historical corpus then serves value/belief/mulligan training, and the *policy* corpus is built going forward at full fidelity by running the already-implemented Arena mirror recorder during play. |
 
+**Answered in part (2026-08).** 17Lands has no self-serve bulk export, but its
+site API does: `/data/user` lists your entire draft history uncapped, while
+`/data/user_game_list` is bounded at roughly your last hundred games.
+`magic-cabt-17lands-export` harvests the former — see
+[SEVENTEENLANDS_EXPORT.md](SEVENTEENLANDS_EXPORT.md), which also carries the
+letter asking 17Lands to lift the game ceiling. So the self-serve path yields
+a complete *draft* corpus and only a recent *game* sample: the aggregate-row
+of the table below is the operating assumption for gameplay until they reply.
+
 Actions: ask 17lands support for the replay-level JSON explicitly (the replay
 viewer is the evidence it exists); regardless of the answer, **start the Arena
 mirror recorder now** for all future play — the export covers the past at
