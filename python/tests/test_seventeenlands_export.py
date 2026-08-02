@@ -7,10 +7,14 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
 
+from magic_cabt import seventeenlands_export
 from magic_cabt.seventeenlands_export import (
     DEFAULT_DELAY_SECONDS,
     DRAFT_PARTS,
+    PACE_PRESETS,
     ExportError,
+    parse_duration,
+    render_schedule,
     SeventeenLandsClient,
     build_parser,
     estimate,
@@ -50,8 +54,12 @@ class FakeTransport(object):
         return status, body, out_headers
 
 
-class FakeClock(object):
-    """Records every sleep so pacing can be asserted without waiting."""
+class SleepRecorder(object):
+    """Records every sleep so pacing can be asserted without waiting.
+
+    Distinct from the client's monotonic ``clock``, which tests inject
+    separately to drive wall-clock limits.
+    """
 
     def __init__(self):
         self.sleeps = []
@@ -69,9 +77,10 @@ def client_for(routes, **kwargs):
     kwargs.setdefault("cookie", "session=abc")
     kwargs.setdefault("delay", 0)
     kwargs.setdefault("jitter", 0)
-    clock = kwargs.pop("clock", None) or FakeClock()
-    client = SeventeenLandsClient(opener=transport, sleep=clock, **kwargs)
-    client.clock = clock
+    sleeper = kwargs.pop("sleeper", None) or SleepRecorder()
+    client = SeventeenLandsClient(opener=transport, sleep=sleeper,
+                                  **kwargs)
+    client.sleeper = sleeper
     return client, transport
 
 
@@ -143,8 +152,8 @@ class ClientTest(unittest.TestCase):
         client, _ = client_for(full_routes(), delay=1.0)
         client.user_drafts()
         client.user_drafts()
-        self.assertTrue(client.clock.sleeps, "second request must wait")
-        self.assertLessEqual(client.clock.sleeps[-1], 1.0)
+        self.assertTrue(client.sleeper.sleeps, "second request must wait")
+        self.assertLessEqual(client.sleeper.sleeps[-1], 1.0)
 
 
 class PolitenessTest(unittest.TestCase):
@@ -164,7 +173,7 @@ class PolitenessTest(unittest.TestCase):
 
         client, _ = client_for({"/data/user": busy}, delay=1.0)
         client.user_drafts()
-        self.assertIn(37.0, client.clock.sleeps,
+        self.assertIn(37.0, client.sleeper.sleeps,
                       "the server's own number must win")
 
     def test_unparsable_retry_after_still_waits(self):
@@ -178,7 +187,7 @@ class PolitenessTest(unittest.TestCase):
 
         client, _ = client_for({"/data/user": busy})
         client.user_drafts()
-        self.assertTrue(any(sleep >= 60 for sleep in client.clock.sleeps))
+        self.assertTrue(any(sleep >= 60 for sleep in client.sleeper.sleeps))
 
     def test_absurd_retry_after_stops_the_run(self):
         client, _ = client_for(
@@ -240,7 +249,7 @@ class PolitenessTest(unittest.TestCase):
         client, _ = client_for(full_routes(), delay=2.0, jitter=1.0,
                                rng=Rng())
         client.user_drafts()
-        self.assertAlmostEqual(2.5, client.clock.sleeps[0], places=6)
+        self.assertAlmostEqual(2.5, client.sleeper.sleeps[0], places=6)
 
     def test_request_budget_stops_cleanly_and_says_how_to_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -262,7 +271,7 @@ class PolitenessTest(unittest.TestCase):
                                pause_every=2, pause_for=90.0)
         with tempfile.TemporaryDirectory() as tmp:
             export_all(client, tmp, skip_games=True)
-        self.assertIn(90.0, client.clock.sleeps)
+        self.assertIn(90.0, client.sleeper.sleeps)
 
     def test_manifest_records_what_the_run_cost_the_service(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -272,6 +281,131 @@ class PolitenessTest(unittest.TestCase):
             self.assertIn("sleptSeconds", manifest)
             self.assertIn("throttleEvents", manifest)
             self.assertIn("plan", manifest)
+
+
+class ManagedSlowRunTest(unittest.TestCase):
+    """A very slow harvest has to be a drip you can leave alone."""
+
+    def test_default_pace_is_slow_not_fastest(self):
+        args = build_parser().parse_args(["--out", "x"])
+        self.assertEqual("slow", args.pace)
+        self.assertLess(PACE_PRESETS["slow"]["delay"],
+                        PACE_PRESETS["glacial"]["delay"])
+        self.assertGreater(PACE_PRESETS["slow"]["delay"],
+                           PACE_PRESETS["steady"]["delay"])
+
+    def test_presets_fill_unset_flags_and_yield_to_explicit_ones(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            captured = {}
+            original = seventeenlands_export.SeventeenLandsClient
+
+            def spy(**kwargs):
+                captured.update(kwargs)
+                raise ExportError("stop here")
+
+            seventeenlands_export.SeventeenLandsClient = spy
+            stderr, original_stderr = io.StringIO(), sys.stderr
+            sys.stderr = stderr
+            try:
+                main(["--out", tmp, "--sharing-token", "t",
+                      "--pace", "glacial"])
+                self.assertEqual(PACE_PRESETS["glacial"]["delay"],
+                                 captured["delay"])
+                main(["--out", tmp, "--sharing-token", "t",
+                      "--pace", "glacial", "--delay", "42"])
+                self.assertEqual(42.0, captured["delay"])
+                self.assertEqual(PACE_PRESETS["glacial"]["jitter"],
+                                 captured["jitter"],
+                                 "unset flags still take the preset")
+            finally:
+                sys.stderr = original_stderr
+                seventeenlands_export.SeventeenLandsClient = original
+
+    def test_duration_parsing(self):
+        self.assertEqual(90.0, parse_duration("90"))
+        self.assertEqual(90.0, parse_duration("90s"))
+        self.assertEqual(2700.0, parse_duration("45m"))
+        self.assertEqual(7200.0, parse_duration("2h"))
+        self.assertEqual(259200.0, parse_duration("3d"))
+        for bad in ("", "soon", "-5m"):
+            with self.assertRaises(ExportError):
+                parse_duration(bad)
+
+    def test_max_duration_stops_the_session_cleanly(self):
+        ticks = {"t": 0.0}
+
+        def clock():
+            ticks["t"] += 30.0
+            return ticks["t"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client, transport = client_for(full_routes(("a", "b", "c", "d")),
+                                           max_duration=60.0, clock=clock)
+            manifest = export_all(client, tmp)
+            self.assertFalse(manifest["complete"])
+            self.assertTrue(any("max-duration" in note
+                                for note in manifest["notes"]), manifest)
+            self.assertTrue(any("re-run" in note
+                                for note in manifest["notes"]))
+
+    def test_days_long_durations_read_naturally(self):
+        self.assertEqual("2d 3h", format_duration(2 * 86400 + 3 * 3600))
+
+    def test_schedule_snippets_repeat_the_command_without_the_flag(self):
+        argv = ["magic-cabt-17lands-export", "--out", "exp",
+                "--cookie-file", "~/.c", "--max-duration", "45m"]
+        for kind in ("cron", "systemd", "launchd"):
+            text = render_schedule(kind, argv)
+            self.assertIn("--max-duration", text)
+            self.assertNotIn("--schedule", text)
+            self.assertIn("exp", text)
+
+    def test_unknown_schedule_kind_is_rejected(self):
+        with self.assertRaises(ExportError):
+            render_schedule("windows-task-scheduler", ["x"])
+
+    def test_schedule_command_is_runnable_from_cron(self):
+        """argv[0] under ``-m`` is a file path cron cannot execute."""
+        stdout, original = io.StringIO(), sys.stdout
+        saved_argv = sys.argv
+        sys.stdout = stdout
+        sys.argv = ["/usr/lib/python3/magic_cabt/seventeenlands_export.py"]
+        try:
+            main(["--out", "exp", "--sharing-token", "t",
+                  "--schedule", "cron"])
+        finally:
+            sys.stdout = original
+            sys.argv = saved_argv
+        text = stdout.getvalue()
+        self.assertIn("-m magic_cabt.seventeenlands_export", text)
+        self.assertNotIn("seventeenlands_export.py --out", text)
+
+    def test_schedule_cli_prints_and_makes_no_request(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        out_o, err_o = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = stdout, stderr
+        try:
+            code = main(["--out", "exp", "--sharing-token", "t",
+                         "--schedule", "cron", "--max-duration", "45m"])
+        finally:
+            sys.stdout, sys.stderr = out_o, err_o
+        self.assertEqual(0, code)
+        text = stdout.getvalue()
+        self.assertIn("crontab", text)
+        self.assertIn("--max-duration 45m", text)
+        self.assertNotIn("--schedule", text)
+        self.assertFalse(os.path.exists("exp"),
+                         "printing a schedule must not create anything")
+
+    def test_progress_reports_percent_and_sessions_remaining(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            said = []
+            client, _ = client_for(full_routes(tuple("abcdefgh")),
+                                   max_requests=4)
+            export_all(client, tmp, say=said.append)
+            joined = " ".join(said)
+            self.assertIn("%", joined)
+            self.assertIn("session", joined)
 
 
 class EstimateTest(unittest.TestCase):

@@ -37,9 +37,10 @@ requests, so the whole design is about spending them carefully:
   does not go back to its old pace.
 - *Give up early.* A run of consecutive failures trips a breaker and stops. A
   struggling server should not also have to carry us.
-- *Stop before it hurts.* ``--max-requests`` and ``--pause-every`` let a
-  harvest be spread over days. Stopping is free: finished drafts are skipped
-  on the next run.
+- *Stop before it hurts.* ``--max-requests``, ``--max-duration`` and
+  ``--pause-every`` let a harvest be spread over days, and ``--schedule``
+  emits a cron/systemd/launchd entry so nobody has to remember to restart it.
+  Stopping is free: finished drafts are skipped on the next run.
 - *Know the cost first.* ``--plan`` spends exactly one request and prints how
   many the real run would need and how long it would take.
 
@@ -66,6 +67,8 @@ import urllib.request
 __all__ = [
     "BASE_URL",
     "DRAFT_PARTS",
+    "PACE_PRESETS",
+    "SCHEDULE_TEMPLATES",
     "ExportError",
     "SeventeenLandsClient",
     "build_parser",
@@ -73,6 +76,8 @@ __all__ = [
     "export_all",
     "format_duration",
     "main",
+    "parse_duration",
+    "render_schedule",
 ]
 
 BASE_URL = "https://www.17lands.com"
@@ -98,6 +103,23 @@ DEFAULT_USER_AGENT = ("magic-cabt-17lands-export/1 "
 # Deliberately slower than the service could take.
 DEFAULT_DELAY_SECONDS = 2.0
 DEFAULT_JITTER_SECONDS = 0.75
+
+# Named paces, so "very slowly" is one word rather than four flags. A harvest
+# is thousands of requests against a free service and nothing about it is
+# urgent, so the default is deliberately not the fastest option.
+PACE_PRESETS = {
+    # ~230 requests/hour: a drip you can leave running for weeks.
+    "glacial": {"delay": 15.0, "jitter": 5.0,
+                "pause_every": 100, "pause_for": 900.0},
+    # ~510 requests/hour: the default. A few thousand drafts over some days.
+    "slow": {"delay": 5.0, "jitter": 2.0,
+             "pause_every": 250, "pause_for": 300.0},
+    # ~1300 requests/hour: for a short catch-up run, not a full history.
+    "steady": {"delay": DEFAULT_DELAY_SECONDS,
+               "jitter": DEFAULT_JITTER_SECONDS,
+               "pause_every": 0, "pause_for": 0.0},
+}
+DEFAULT_PACE = "slow"
 DEFAULT_RETRIES = 3
 DEFAULT_TIMEOUT = 30
 # A 429 multiplies the delay by this for the remainder of the run.
@@ -131,8 +153,9 @@ class SeventeenLandsClient(object):
     def __init__(self, cookie=None, sharing_token=None, base_url=BASE_URL,
                  delay=DEFAULT_DELAY_SECONDS, jitter=DEFAULT_JITTER_SECONDS,
                  retries=DEFAULT_RETRIES, timeout=DEFAULT_TIMEOUT,
-                 max_requests=0, pause_every=0, pause_for=0.0,
-                 breaker=DEFAULT_BREAKER, opener=None, sleep=None, rng=None,
+                 max_requests=0, max_duration=0.0, pause_every=0,
+                 pause_for=0.0, breaker=DEFAULT_BREAKER, opener=None,
+                 sleep=None, rng=None, clock=None,
                  user_agent=DEFAULT_USER_AGENT, on_slowdown=None):
         self.cookie = cookie
         self.sharing_token = sharing_token
@@ -143,6 +166,7 @@ class SeventeenLandsClient(object):
         self.retries = retries
         self.timeout = timeout
         self.max_requests = max_requests
+        self.max_duration = max_duration
         self.pause_every = pause_every
         self.pause_for = pause_for
         self.breaker = breaker
@@ -150,6 +174,8 @@ class SeventeenLandsClient(object):
         self._opener = opener or self._urlopen
         self._sleep = sleep if sleep is not None else time.sleep
         self._rng = rng or random.Random()
+        self._clock = clock if clock is not None else time.monotonic
+        self.started = self._clock()
         self._on_slowdown = on_slowdown or (lambda old, new, why: None)
         self._last_request = None
         self.requests = 0
@@ -177,6 +203,9 @@ class SeventeenLandsClient(object):
 
     # -- pacing ------------------------------------------------------------
 
+    def elapsed(self):
+        return self._clock() - self.started
+
     def _wait(self, seconds):
         if seconds <= 0:
             return
@@ -188,7 +217,7 @@ class SeventeenLandsClient(object):
         target = self.delay + (self._rng.random() * self.jitter
                                if self.jitter else 0.0)
         if self._last_request is not None:
-            elapsed = time.monotonic() - self._last_request
+            elapsed = self._clock() - self._last_request
             target -= elapsed
         self._wait(target)
 
@@ -237,6 +266,8 @@ class SeventeenLandsClient(object):
         say = say or (lambda text: None)
         if self.max_requests and self.requests >= self.max_requests:
             raise BudgetReached()
+        if self.max_duration and self.elapsed() >= self.max_duration:
+            raise BudgetReached()
 
         url = self.base_url + path
         if params:
@@ -248,7 +279,7 @@ class SeventeenLandsClient(object):
         while True:
             self._throttle()
             status, body, headers = self._opener(url, self._headers())
-            self._last_request = time.monotonic()
+            self._last_request = self._clock()
             self.requests += 1
 
             if status in _FATAL_STATUS:
@@ -346,7 +377,30 @@ def format_duration(seconds):
         return "%ds" % seconds
     if seconds < 3600:
         return "%dm %ds" % (seconds // 60, seconds % 60)
-    return "%dh %dm" % (seconds // 3600, (seconds % 3600) // 60)
+    if seconds < 86400:
+        return "%dh %dm" % (seconds // 3600, (seconds % 3600) // 60)
+    return "%dd %dh" % (seconds // 86400, (seconds % 86400) // 3600)
+
+
+def parse_duration(text):
+    """Accept ``90``, ``90s``, ``45m``, ``2h``, ``3d`` as seconds."""
+    raw = str(text).strip().lower()
+    if not raw:
+        raise ExportError("empty duration")
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    multiplier = 1
+    if raw[-1] in units:
+        multiplier = units[raw[-1]]
+        raw = raw[:-1]
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ExportError(
+            "could not read '%s' as a duration -- use forms like 45m, 2h, "
+            "or 3d" % text)
+    if value < 0:
+        raise ExportError("duration must not be negative: %s" % text)
+    return value * multiplier
 
 
 def estimate(drafts, parts, delay, jitter=0.0, include_games=True,
@@ -365,6 +419,32 @@ def estimate(drafts, parts, delay, jitter=0.0, include_games=True,
 
 # ---------------------------------------------------------------------------
 # Harvest
+
+
+def _percent(done, total):
+    if not total:
+        return "0%"
+    return "%d%%" % int(round(100.0 * done / total))
+
+
+def _sessions_remaining(plan, client):
+    """How many more capped sessions this harvest needs, if it is capped.
+
+    A managed harvest is a drip: the useful number is not "seven hours" but
+    "six more evenings".
+    """
+    if client.max_requests:
+        per = client.max_requests
+        count = -(-plan["requests"] // per) if per else 0
+        return {"count": count, "per_session": "%d requests" % per}
+    if client.max_duration:
+        per_request = client.delay + client.jitter / 2.0
+        per = max(1, int(client.max_duration // per_request)) \
+            if per_request else 0
+        count = -(-plan["requests"] // per) if per else 0
+        return {"count": count,
+                "per_session": format_duration(client.max_duration)}
+    return None
 
 
 def _draft_rows(payload):
@@ -442,9 +522,14 @@ def export_all(client, out_dir, limit=0, parts=DEFAULT_PARTS, say=None,
                     include_games=not skip_games,
                     pause_every=client.pause_every,
                     pause_for=client.pause_for, done=already)
-    say("account has %d draft(s); %d already saved" % (len(rows), already))
-    say("this run would make %d request(s) over about %s"
+    say("account has %d draft(s); %d already saved (%s)"
+        % (len(rows), already, _percent(already, len(ordered))))
+    say("remaining: %d request(s), about %s at this pace"
         % (plan["requests"], plan["human"]))
+    sessions = _sessions_remaining(plan, client)
+    if sessions:
+        say("at %s per session that is about %d more session(s)"
+            % (sessions["per_session"], sessions["count"]))
 
     manifest = {
         "schemaVersion": 1,
@@ -526,11 +611,15 @@ def export_all(client, out_dir, limit=0, parts=DEFAULT_PARTS, say=None,
         manifest["complete"] = True
     except BudgetReached:
         budget_hit = True
+        if client.max_duration and client.elapsed() >= client.max_duration:
+            reason = "the --max-duration limit of %s" % format_duration(
+                client.max_duration)
+        else:
+            reason = "the --max-requests budget of %d" % client.max_requests
         manifest["notes"].append(
-            "stopped at the --max-requests budget of %d. Nothing is lost: "
-            "re-run the same command to continue from here."
-            % client.max_requests)
-        say("request budget reached; stopping cleanly")
+            "stopped at %s. Nothing is lost: re-run the same command to "
+            "continue from here." % reason)
+        say("reached %s; stopping cleanly" % reason)
 
     if not budget_hit and manifest["draftsWritten"] and \
             manifest["draftsWritten"] + manifest["draftsCached"] < \
@@ -539,6 +628,67 @@ def export_all(client, out_dir, limit=0, parts=DEFAULT_PARTS, say=None,
             "some drafts were listed but not written; see failures")
     _finish(manifest, client, out_dir)
     return manifest
+
+
+SCHEDULE_TEMPLATES = {
+    "cron": """# Harvest a little of your 17Lands history every evening at 21:10.
+# Each run stops at its own budget and the next one resumes; when the
+# history is complete the runs become two requests and cost nothing.
+#   crontab -e   and paste:
+10 21 * * *  %(command)s >> %(log)s 2>&1
+""",
+    "systemd": """# ~/.config/systemd/user/17lands-export.service
+[Unit]
+Description=Harvest 17Lands history, slowly
+
+[Service]
+Type=oneshot
+ExecStart=%(command)s
+
+# ~/.config/systemd/user/17lands-export.timer
+[Unit]
+Description=Nightly slow 17Lands harvest
+
+[Timer]
+OnCalendar=*-*-* 21:10:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+
+# then:  systemctl --user enable --now 17lands-export.timer
+""",
+    "launchd": """<!-- ~/Library/LaunchAgents/com.local.17lands-export.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.local.17lands-export</string>
+  <key>ProgramArguments</key><array>
+%(argv_xml)s  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>21</integer>
+        <key>Minute</key><integer>10</integer></dict>
+  <key>StandardOutPath</key><string>%(log)s</string>
+</dict></plist>
+<!-- then: launchctl load ~/Library/LaunchAgents/com.local.17lands-export.plist -->
+""",
+}
+
+
+def render_schedule(kind, argv, log_path="~/17lands-export.log"):
+    """Emit a scheduler snippet that reruns this exact command nightly.
+
+    A very slow harvest is measured in days, and nobody should have to
+    remember to restart it. The snippet repeats the command the user just
+    typed, minus the flag that asked for the snippet.
+    """
+    if kind not in SCHEDULE_TEMPLATES:
+        raise ExportError("unknown --schedule kind: %s (choose from %s)"
+                          % (kind, ", ".join(sorted(SCHEDULE_TEMPLATES))))
+    command = " ".join(argv)
+    argv_xml = "".join("    <string>%s</string>\n" % item for item in argv)
+    return SCHEDULE_TEMPLATES[kind] % {"command": command,
+                                       "argv_xml": argv_xml,
+                                       "log": log_path}
 
 
 def _finish(manifest, client, out_dir):
@@ -636,22 +786,34 @@ def build_parser():
                        help="spend one request to list your drafts, print "
                             "what a full run would cost, and stop")
 
-    pace = parser.add_argument_group("pace")
-    pace.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS,
-                      help="seconds between requests (default: %(default)s). "
-                           "Raise it freely; there is no hurry.")
-    pace.add_argument("--jitter", type=float, default=DEFAULT_JITTER_SECONDS,
+    pace = parser.add_argument_group(
+        "pace", "nothing here is urgent; slower is the better default")
+    pace.add_argument("--pace", default=DEFAULT_PACE,
+                      choices=sorted(PACE_PRESETS),
+                      help="named pace (default: %(default)s). glacial ~230 "
+                           "requests/hour, slow ~510, steady ~1300. Any "
+                           "individual flag below overrides the preset.")
+    pace.add_argument("--delay", type=float, default=None,
+                      help="seconds between requests. Raise it freely; there "
+                           "is no hurry.")
+    pace.add_argument("--jitter", type=float, default=None,
                       help="random extra delay up to this many seconds, so "
-                           "the traffic is not a metronome "
-                           "(default: %(default)s)")
+                           "the traffic is not a metronome")
     pace.add_argument("--max-requests", type=int, default=0, metavar="N",
                       help="stop cleanly after N requests this run; re-run to "
                            "continue (0 = no limit)")
-    pace.add_argument("--pause-every", type=int, default=0, metavar="N",
+    pace.add_argument("--max-duration", default=None, metavar="DURATION",
+                      help="stop cleanly after this much wall-clock time, "
+                           "e.g. 45m, 2h. Pairs well with --schedule for a "
+                           "little-every-night harvest.")
+    pace.add_argument("--pause-every", type=int, default=None, metavar="N",
                       help="take a long breather every N requests")
-    pace.add_argument("--pause-for", type=float, default=0.0,
+    pace.add_argument("--pause-for", type=float, default=None,
                       metavar="SECONDS",
                       help="how long that breather is")
+    pace.add_argument("--schedule", choices=sorted(SCHEDULE_TEMPLATES),
+                      help="print a cron/systemd/launchd snippet that reruns "
+                           "this exact command nightly, and exit")
     pace.add_argument("--retries", type=int, default=DEFAULT_RETRIES,
                       help="retries per request (default: %(default)s)")
     pace.add_argument("--breaker", type=int, default=DEFAULT_BREAKER,
@@ -667,7 +829,17 @@ def build_parser():
 
 
 def main(argv=None):
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
+
+    # An explicit flag beats the named pace; anything unset takes the preset.
+    preset = PACE_PRESETS[args.pace]
+    for name, key in (("delay", "delay"), ("jitter", "jitter"),
+                      ("pause_every", "pause_every"),
+                      ("pause_for", "pause_for")):
+        if getattr(args, name) is None:
+            setattr(args, name, preset[key])
+
     for name, value, floor in (("--limit", args.limit, 0),
                                ("--delay", args.delay, 0),
                                ("--jitter", args.jitter, 0),
@@ -681,6 +853,35 @@ def main(argv=None):
             sys.stderr.write("error: %s must be >= %s\n" % (name, floor))
             return 2
 
+    if args.schedule:
+        # Repeat the command without the flag that asked for the snippet.
+        # Invoked as a module, argv[0] is a file path that will not run from
+        # cron, so emit the module form; installed, the console script is
+        # already the right name.
+        program = os.path.basename(sys.argv[0] or "")
+        if not program or program.endswith(".py") or program == "__main__":
+            command = [sys.executable or "python3", "-m",
+                       "magic_cabt.seventeenlands_export"]
+        else:
+            command = [program]
+        skip_next = False
+        for item in raw_argv:
+            if skip_next:
+                skip_next = False
+                continue
+            if item == "--schedule":
+                skip_next = True
+                continue
+            if item.startswith("--schedule="):
+                continue
+            command.append(item)
+        try:
+            sys.stdout.write(render_schedule(args.schedule, command))
+        except ExportError as error:
+            sys.stderr.write("error: %s\n" % error)
+            return 1
+        return 0
+
     def say(text):
         if not args.quiet:
             sys.stderr.write("[17lands-export] %s\n" % text)
@@ -691,6 +892,8 @@ def main(argv=None):
 
     try:
         parts = _parse_parts(args.parts)
+        max_duration = parse_duration(args.max_duration) \
+            if args.max_duration else 0.0
         cookie = _read_cookie(args)
         if not cookie and not args.sharing_token:
             raise ExportError(
@@ -701,9 +904,9 @@ def main(argv=None):
             cookie=cookie, sharing_token=args.sharing_token,
             base_url=args.base_url, delay=args.delay, jitter=args.jitter,
             retries=args.retries, timeout=args.timeout,
-            max_requests=args.max_requests, pause_every=args.pause_every,
-            pause_for=args.pause_for, breaker=args.breaker,
-            on_slowdown=on_slowdown)
+            max_requests=args.max_requests, max_duration=max_duration,
+            pause_every=args.pause_every, pause_for=args.pause_for,
+            breaker=args.breaker, on_slowdown=on_slowdown)
         out_dir = os.path.abspath(os.path.expanduser(args.out))
         os.makedirs(out_dir, exist_ok=True)
         manifest = export_all(
