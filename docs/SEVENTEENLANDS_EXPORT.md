@@ -74,27 +74,54 @@ Open one of the files in `17lands-export/drafts/` and check it holds what you
 expect. If the API has moved, you have found out at a cost of sixteen
 requests.
 
-**3. Spread the real harvest over several days.** There is no prize for
-finishing today. A budget per session turns thousands of requests into a
-background errand:
+**3. Spread the real harvest over several evenings.** There is no prize for
+finishing today. Time-box a session and stop:
 
 ```sh
 magic-cabt-17lands-export --cookie-file ~/.17lands-cookie \
-    --out 17lands-export --delay 4 --max-requests 900
+    --out 17lands-export --max-duration 45m
 ```
 
-That is about an hour a day, and roughly 900 requests — a rounding error in
-anyone's traffic. Run it again tomorrow; finished drafts are skipped, so each
-session picks up exactly where the last stopped. Repeat until it prints
-`complete`.
+Forty-five minutes at the default pace is a few hundred requests — a rounding
+error in anyone's traffic. Run it again tomorrow; finished drafts are skipped,
+so each session picks up exactly where the last stopped, and each run tells
+you how far along you are and how many sessions remain:
 
-**4. Or leave it running gently overnight**, taking a five-minute breather
-every couple of hundred requests:
+```text
+account has 2148 draft(s); 1305 already saved (61%)
+remaining: 2530 request(s), about 4h 12m at this pace
+at 45m per session that is about 6 more session(s)
+```
+
+`--max-requests N` is the same idea measured in requests instead of minutes.
+Either way, stopping costs nothing, so stop often.
+
+**4. Better still, stop remembering to run it.** `--schedule` prints a
+scheduler entry that reruns the exact command you just typed, nightly, until
+the history is complete — after which each run costs two requests and does
+nothing:
 
 ```sh
 magic-cabt-17lands-export --cookie-file ~/.17lands-cookie \
-    --out 17lands-export --delay 5 --pause-every 200 --pause-for 300
+    --out 17lands-export --max-duration 45m --schedule cron
 ```
+
+`--schedule systemd` and `--schedule launchd` emit a timer unit and a
+LaunchAgent plist respectively. Printing a snippet makes no request at all.
+
+### Choosing a pace
+
+`--pace` sets the delay, jitter, and breather in one word. The default is
+`slow`, not the fastest option, because none of this is urgent:
+
+| Pace | Roughly | Good for |
+| --- | --- | --- |
+| `glacial` | 230 requests/hour | Leave it running for weeks; barely visible in anyone's logs |
+| `slow` (default) | 510 requests/hour | A few thousand drafts across some evenings |
+| `steady` | 1300 requests/hour | A short catch-up run, not a full history |
+
+Any individual flag overrides the preset, so `--pace glacial --delay 20` is
+glacial's breathers with an even longer gap.
 
 ### What it does to stay a good guest
 
@@ -105,7 +132,8 @@ magic-cabt-17lands-export --cookie-file ~/.17lands-cookie \
 | `Retry-After` obeyed exactly when given | The service knows better than our backoff formula |
 | Any 429 slows the **rest of the run** permanently | If it says it is busy once, we do not go back to the old pace |
 | A run of consecutive failures trips a breaker and stops | A struggling server should not also have to carry us |
-| `--max-requests` / `--pause-every` | Spread the cost over days |
+| `--max-requests` / `--max-duration` / `--pause-every` | Spread the cost over days |
+| `--pace` defaults to `slow`, not the fastest option | The gentle path is the one you get without thinking |
 | Stops instantly on 401/403 | An auth problem is not something to retry |
 | Resume on re-run | Stopping is free, so stopping is easy |
 
