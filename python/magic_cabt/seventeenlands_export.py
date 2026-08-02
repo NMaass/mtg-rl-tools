@@ -58,8 +58,10 @@ import hashlib
 import json
 import os
 import random
+import shlex
 import sys
 import time
+from xml.sax.saxutils import escape as xml_escape
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -78,6 +80,7 @@ __all__ = [
     "main",
     "parse_duration",
     "render_schedule",
+    "requests_in_duration",
 ]
 
 BASE_URL = "https://www.17lands.com"
@@ -438,13 +441,35 @@ def _sessions_remaining(plan, client):
         count = -(-plan["requests"] // per) if per else 0
         return {"count": count, "per_session": "%d requests" % per}
     if client.max_duration:
-        per_request = client.delay + client.jitter / 2.0
-        per = max(1, int(client.max_duration // per_request)) \
-            if per_request else 0
+        per = requests_in_duration(
+            client.max_duration, client.delay, client.jitter,
+            client.pause_every, client.pause_for)
         count = -(-plan["requests"] // per) if per else 0
         return {"count": count,
                 "per_session": format_duration(client.max_duration)}
     return None
+
+
+def requests_in_duration(duration, delay, jitter=0.0, pause_every=0,
+                         pause_for=0.0):
+    """How many requests fit in a session of ``duration`` seconds.
+
+    The long breather has to be counted: at the glacial preset a
+    forty-five-minute session spends a quarter of itself in one fifteen-minute
+    pause, so ignoring it would overstate the session and understate how many
+    evenings the harvest needs.
+    """
+    per_request = delay + jitter / 2.0
+    if per_request <= 0:
+        return 0
+    if not pause_every or not pause_for:
+        return max(1, int(duration // per_request))
+    block_requests = pause_every
+    block_seconds = block_requests * per_request + pause_for
+    blocks = int(duration // block_seconds)
+    remainder = duration - blocks * block_seconds
+    extra = min(block_requests, int(remainder // per_request))
+    return max(1, blocks * block_requests + extra)
 
 
 def _draft_rows(payload):
@@ -667,7 +692,7 @@ WantedBy=timers.target
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>21</integer>
         <key>Minute</key><integer>10</integer></dict>
-  <key>StandardOutPath</key><string>%(log)s</string>
+  <key>StandardOutPath</key><string>%(log_abs)s</string>
 </dict></plist>
 <!-- then: launchctl load ~/Library/LaunchAgents/com.local.17lands-export.plist -->
 """,
@@ -680,15 +705,27 @@ def render_schedule(kind, argv, log_path="~/17lands-export.log"):
     A very slow harvest is measured in days, and nobody should have to
     remember to restart it. The snippet repeats the command the user just
     typed, minus the flag that asked for the snippet.
+
+    Two things have to survive the trip into a scheduler. Arguments are
+    quoted for the target format -- a shell word for cron and systemd, an
+    XML-escaped element for launchd -- because a path like
+    ``/home/me/17lands export`` would otherwise become two arguments, and an
+    ``&`` in one would produce an invalid plist. And launchd resolves no
+    ``~``, so its paths are expanded here.
     """
     if kind not in SCHEDULE_TEMPLATES:
         raise ExportError("unknown --schedule kind: %s (choose from %s)"
                           % (kind, ", ".join(sorted(SCHEDULE_TEMPLATES))))
-    command = " ".join(argv)
-    argv_xml = "".join("    <string>%s</string>\n" % item for item in argv)
-    return SCHEDULE_TEMPLATES[kind] % {"command": command,
-                                       "argv_xml": argv_xml,
-                                       "log": log_path}
+    command = " ".join(shlex.quote(item) for item in argv)
+    argv_xml = "".join("    <string>%s</string>\n" % xml_escape(item)
+                       for item in argv)
+    return SCHEDULE_TEMPLATES[kind] % {
+        "command": command,
+        "argv_xml": argv_xml,
+        # cron runs through a shell, so ~ expands there; launchd does not.
+        "log": log_path,
+        "log_abs": xml_escape(os.path.expanduser(log_path)),
+    }
 
 
 def _finish(manifest, client, out_dir):
@@ -703,6 +740,20 @@ def _finish(manifest, client, out_dir):
 
 # ---------------------------------------------------------------------------
 # CLI
+
+
+def _schedule_program(argv0=None, executable=None):
+    """The program part of a scheduled command, resolvable from bare cron.
+
+    ``PATH`` under cron is typically ``/usr/bin:/bin``, so a console script
+    installed in a virtualenv or ``~/.local/bin`` must keep its directory.
+    """
+    argv0 = sys.argv[0] if argv0 is None else argv0
+    executable = executable or sys.executable or "python3"
+    name = os.path.basename(argv0 or "")
+    if not name or name.endswith(".py") or name == "__main__":
+        return [executable, "-m", "magic_cabt.seventeenlands_export"]
+    return [os.path.abspath(argv0)]
 
 
 def _read_cookie(args):
@@ -855,15 +906,11 @@ def main(argv=None):
 
     if args.schedule:
         # Repeat the command without the flag that asked for the snippet.
-        # Invoked as a module, argv[0] is a file path that will not run from
-        # cron, so emit the module form; installed, the console script is
-        # already the right name.
-        program = os.path.basename(sys.argv[0] or "")
-        if not program or program.endswith(".py") or program == "__main__":
-            command = [sys.executable or "python3", "-m",
-                       "magic_cabt.seventeenlands_export"]
-        else:
-            command = [program]
+        # A scheduler runs with a minimal PATH, so the program has to be
+        # resolvable on its own: keep the console script's *full* path, and
+        # when invoked as a module emit the interpreter plus -m instead,
+        # since argv[0] is then a file path cron cannot execute.
+        command = _schedule_program()
         skip_next = False
         for item in raw_argv:
             if skip_next:

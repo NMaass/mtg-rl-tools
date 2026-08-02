@@ -15,6 +15,7 @@ from magic_cabt.seventeenlands_export import (
     ExportError,
     parse_duration,
     render_schedule,
+    requests_in_duration,
     SeventeenLandsClient,
     build_parser,
     estimate,
@@ -379,6 +380,53 @@ class ManagedSlowRunTest(unittest.TestCase):
         text = stdout.getvalue()
         self.assertIn("-m magic_cabt.seventeenlands_export", text)
         self.assertNotIn("seventeenlands_export.py --out", text)
+
+    def test_console_script_keeps_its_directory_for_cron_path(self):
+        """cron's PATH is ~/usr/bin:/bin; a venv script must keep its dir."""
+        program = seventeenlands_export._schedule_program(
+            "/home/me/.local/bin/magic-cabt-17lands-export")
+        self.assertEqual(["/home/me/.local/bin/magic-cabt-17lands-export"],
+                         program)
+
+    def test_module_invocation_uses_an_absolute_interpreter(self):
+        program = seventeenlands_export._schedule_program(
+            "/x/magic_cabt/seventeenlands_export.py",
+            executable="/venv/bin/python3")
+        self.assertEqual(["/venv/bin/python3", "-m",
+                          "magic_cabt.seventeenlands_export"], program)
+
+    def test_arguments_with_spaces_survive_the_shell(self):
+        import shlex
+        argv = ["/usr/local/bin/magic-cabt-17lands-export",
+                "--out", "/home/me/17lands export"]
+        text = render_schedule("cron", argv)
+        command = [line for line in text.splitlines()
+                   if line.startswith("10 21")][0]
+        command = command.split("  ", 1)[1].split(" >>")[0]
+        self.assertEqual(argv, shlex.split(command),
+                         "the scheduled command must reparse to the same argv")
+
+    def test_launchd_escapes_xml_metacharacters(self):
+        text = render_schedule(
+            "launchd", ["prog", "--out", "/tmp/a&b<c>"])
+        self.assertIn("<string>/tmp/a&amp;b&lt;c&gt;</string>", text)
+        self.assertNotIn("a&b<c>", text)
+
+    def test_launchd_log_path_is_absolute(self):
+        text = render_schedule("launchd", ["prog"],
+                               log_path="~/17lands-export.log")
+        self.assertNotIn("<string>~/", text)
+        self.assertIn(os.path.expanduser("~"), text)
+
+    def test_session_estimate_counts_the_long_breather(self):
+        # glacial: 15s delay, 5s jitter -> 17.5s/request, 900s pause per 100.
+        without = requests_in_duration(2700, 15.0, 5.0)
+        with_pause = requests_in_duration(2700, 15.0, 5.0,
+                                          pause_every=100, pause_for=900.0)
+        self.assertLess(with_pause, without)
+        self.assertLessEqual(with_pause, 110)
+        # Sanity: no pause configured means no discount.
+        self.assertEqual(without, requests_in_duration(2700, 15.0, 5.0, 0, 0))
 
     def test_schedule_cli_prints_and_makes_no_request(self):
         stdout, stderr = io.StringIO(), io.StringIO()
