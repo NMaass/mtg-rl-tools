@@ -66,7 +66,7 @@ estimate below.
 | Approach | Prior verdict | Reassessment |
 | --- | --- | --- |
 | 17lands public data | "Too nerfed, no full logs" | True of `game_data`/`draft_data`. **False of `replay_data`**, which was easy to miss: per-turn, per-player card-level events plus end-of-turn life. See approach A. |
-| Own logs | "Too few preserved" | Arena's `Player.log` rotates, but if the 17lands client (or Untapped) was running, the vendor retains full personal history — 17lands offers complete-history export to Mythic patrons, and a support request for one's own data is reasonable regardless. Partial recovery is plausible. |
+| Own logs | "Too few preserved" | Arena's `Player.log` rotates, but if the 17lands client (or Untapped) was running, the vendor retains full personal history — Mythic patronage backfills that history into the site (it is *not* an export; see [SEVENTEENLANDS_EXPORT.md](SEVENTEENLANDS_EXPORT.md)), and a support request for one's own data is reasonable regardless. Partial recovery is plausible. |
 | Ask 17lands | "No relationship; unsure they store it" | They store it — the site renders per-game replays, and replay-level public files exist. The ask has precedent (academic use of 17lands data is common and they invite citation). Reframe the ask around *research access or an expanded replay export*, referencing the public replay schema. Cheap letter, moderate odds. |
 | Opt-in product | "Too much overhead, not ready" | Agree for a public product. But the expensive parts are already built and parked (`arena_mirror` GUI, `upload/` consent-envelope + redaction). A *private* donation pilot — a dozen recruited grinders, not a launch — reuses them with near-zero new surface. See approach G. |
 | MTGO video parsing | "Most viable; fix scaling/overlays; estimate throughput" | Pipeline is real and verified, and the layout work is done. One gap for batch use: unlocatable layouts hard-fail, but a capture whose log glyphs sit below the reliable floor (`MIN_RELIABLE_TEXT_HEIGHT`) only *warns* and continues, so unattended ingest needs a fail-closed gate. Compute math below says CPU is trivial; supply, bandwidth, and rights dominate. Two upgrades change its value class: read the hero's hand strip (streamer's hand is on screen; battlefield art-matching already exists) and prefer creator-provided raw recordings over YouTube re-encodes. See approach D. |
@@ -284,11 +284,16 @@ points: benchmarks and scaling evidence, not acquisition.
 
 Reviewing this analysis, the project owner decided:
 
-- **Primary gameplay corpus: the owner's complete 17lands history** via
-  Mythic-patron personal export (10k+ limited games, back to ~2021). The
-  export's fidelity (event-level vs per-turn aggregate) must be verified
-  with 17lands before ingestion work; the Arena mirror recorder runs on all
-  play going forward either way.
+- **Primary gameplay corpus: the owner's complete 17lands history** (10k+
+  limited games, back to ~2021). Mythic patronage backfills that history into
+  the site; it does **not** come with an export — see the correction in
+  [IL_TRAINING_RUN_2026-08.md](IL_TRAINING_RUN_2026-08.md). Retrieval is by
+  harvesting the site's own API
+  ([SEVENTEENLANDS_EXPORT.md](SEVENTEENLANDS_EXPORT.md)), which reaches the
+  full *draft* history but only ~100 recent *games*. Fidelity of the per-game
+  data (event-level vs per-turn aggregate) must still be settled with
+  17lands; the Arena mirror recorder runs on all play going forward either
+  way, and is the only full-fidelity gameplay source.
 - **Approach A demoted from policy corpus to supporting corpus.** Per-turn
   aggregates lose phase, order, and sequence, which the owner judges too
   low-fidelity for gameplay policy training even with reconstruction.

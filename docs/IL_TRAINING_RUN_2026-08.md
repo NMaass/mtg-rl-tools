@@ -4,7 +4,7 @@
 
 The corpus decision from the [feasibility reanalysis](DATASET_FEASIBILITY_2026-07.md)
 is made: the primary gameplay corpus is the owner's complete 17lands history,
-obtained via Mythic-patron personal export (10k+ games). Public 17lands replay
+harvested from the site's own API (10k+ games). Public 17lands replay
 aggregates are demoted to supporting roles — value/belief priors and
 mulligan/draft/deck-build modeling — because per-turn aggregates lose phase,
 order, and sequence, which matter for policy training. PD logs are demoted for
@@ -15,17 +15,37 @@ Scope note that shapes everything below: 17lands computes statistics for
 **limited events only**, so this is a *limited-format* gameplay corpus (draft
 and sealed, back to ~2021). Constructed remains future work on other sources.
 
-## Step zero — pin down the export's fidelity before building anything
+## Step zero — pin down what is actually retrievable, before building anything
 
-The single load-bearing unknown: whether the personal export is
-**event-level** (the data behind the site's action-by-action replay viewer,
-which proves event-level data exists server-side) or the **per-turn aggregate
-schema** of the public replay files. Everything forks on this:
+**Correction (2026-08).** An earlier draft of this plan asserted that Mythic
+patronage comes with a "personal export." **It does not, and no 17Lands
+material ever said so.** The FAQ says Mythic patrons "get personal data for
+their entire history," which means their personal statistics are computed and
+displayed on the site over their whole history — where lower tiers are
+backfilled only ~30 days. That is a *backfill of what the site shows you*, not
+a downloadable archive. 17Lands provides no data export, and their developers
+have said as much directly. The paragraphs below originally treated the
+export's *fidelity* as the open question, which quietly presumed its
+existence; the existence was the thing that was wrong.
+
+What is genuinely retrievable, and the fork that still matters: the site's own
+JSON API serves your account's data to you, and whether the per-game data
+behind its replay viewer is **event-level** or the **per-turn aggregate
+schema** of the public replay files still decides everything below: [SEVENTEENLANDS_EXPORT.md](SEVENTEENLANDS_EXPORT.md)
 
 | Export turns out to be | Consequence |
 | --- | --- |
 | Event-level (GRE-derived actions) | Full-fidelity policy corpus. Ingestion is a normalizer in the shape of `arena_log.py` (which already maps GRE decision prompts to DecisionRecords via the mirror) — moderate, well-understood work. |
 | Per-turn aggregates | The owner's own history has the same fidelity ceiling as public approach A. The historical corpus then serves value/belief/mulligan training, and the *policy* corpus is built going forward at full fidelity by running the already-implemented Arena mirror recorder during play. |
+
+**Answered in part (2026-08).** 17Lands has no self-serve bulk export, but its
+site API does: `/data/user` lists your entire draft history uncapped, while
+`/data/user_game_list` is bounded at roughly your last hundred games.
+`magic-cabt-17lands-export` harvests the former — see
+[SEVENTEENLANDS_EXPORT.md](SEVENTEENLANDS_EXPORT.md), which also carries the
+letter asking 17Lands to lift the game ceiling. So the self-serve path yields
+a complete *draft* corpus and only a recent *game* sample: the aggregate-row
+of the table below is the operating assumption for gameplay until they reply.
 
 Actions: ask 17lands support for the replay-level JSON explicitly (the replay
 viewer is the evidence it exists); regardless of the answer, **start the Arena

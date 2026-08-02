@@ -61,6 +61,13 @@ magic-cabt-training-run --log captures/Player.log --log captures/old-logs \
   --out runs/first-run --name arena-personal-v1
 ```
 
+To pull your own 17Lands draft history (Mythic patronage backfills it in
+full), see [docs/SEVENTEENLANDS_EXPORT.md](docs/SEVENTEENLANDS_EXPORT.md):
+
+```sh
+magic-cabt-17lands-export --cookie-file ~/.17lands-cookie --out 17lands-export
+```
+
 Re-running the same command resumes: stages whose inputs did not change are
 skipped. Torch model stages run when `.[torch]` is installed and are
 recorded as skipped otherwise. `--dry-run` prints the resolved plan;

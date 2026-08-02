@@ -6,6 +6,9 @@ __pycache__/
 # local recording/replay output
 arena-mirror-runs/
 
+# training-run output directories (README fast path writes runs/<name>)
+runs/
+
 python/magic_cabt.egg-info/
 
 # python venv for the vendored mtgo_video_toolkit

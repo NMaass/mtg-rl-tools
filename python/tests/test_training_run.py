@@ -8,7 +8,10 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
 
 from magic_cabt.training_run import (
+    RunContext,
     StageError,
+    _ingest_one_log,
+    _stage_fingerprint,
     build_parser,
     generate_toy_records,
     main,
@@ -95,6 +98,15 @@ class ToyEndToEndTest(unittest.TestCase):
             # its own status lives in state.json only.
             state = _read_json(os.path.join(out, "state.json"))
             self.assertEqual("ok", state["stages"]["report"]["status"])
+
+            comparison = {row["name"]: row
+                          for row in report.get("comparison") or []}
+            self.assertIn("first", comparison)
+            self.assertIn("random", comparison)
+            self.assertIsNotNone(comparison["first"]["playedTop1"])
+            with open(os.path.join(out, "report.md"),
+                      encoding="utf-8") as handle:
+                self.assertIn("Head-to-head", handle.read())
             metrics = report["testMetrics"]
             bc = metrics["bag-of-words-bc"]["top1Accuracy"]
             rnd = metrics["baseline:random"]["top1Accuracy"]
@@ -137,12 +149,46 @@ class ToyEndToEndTest(unittest.TestCase):
             first_state = _read_json(os.path.join(out, "state.json"))
             code, stderr = _run(["--toy", "12", "--out", out])
             self.assertEqual(0, code, stderr)
-            self.assertIn("collect: cached", stderr)
-            self.assertIn("train-bc: cached", stderr)
+            self.assertRegex(stderr, r"collect\s+cached")
+            self.assertRegex(stderr, r"train-bc\s+cached")
             second_state = _read_json(os.path.join(out, "state.json"))
             self.assertEqual(
                 first_state["stages"]["train-bc"]["finishedAt"],
                 second_state["stages"]["train-bc"]["finishedAt"])
+
+    def test_skipped_stages_do_not_republish_previous_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "run")
+            code, _ = _run(["--toy", "12", "--out", out, "--quiet"])
+            self.assertEqual(0, code)
+            first_report = _read_json(os.path.join(out, "report.json"))
+            self.assertTrue(first_report["testMetrics"])
+            self.assertTrue(first_report["comparison"])
+
+            # Same run dir, a different corpus, and the metric-producing
+            # stages skipped: the old eval artifacts still sit on disk and
+            # must not resurface as this run's results.
+            code, stderr = _run(["--toy", "16", "--out", out, "--quiet",
+                                 "--skip", "baselines",
+                                 "--skip", "train-bc",
+                                 "--skip", "compare"])
+            self.assertEqual(0, code, stderr)
+            report = _read_json(os.path.join(out, "report.json"))
+            self.assertEqual({}, report["testMetrics"])
+            self.assertFalse(report.get("comparison"))
+            self.assertIsNone(report.get("bcValTop1"))
+            with open(os.path.join(out, "report.md"),
+                      encoding="utf-8") as handle:
+                self.assertNotIn("Head-to-head", handle.read())
+
+    def test_data_integrity_stages_cannot_be_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for stage in ("audit", "split", "compile"):
+                code, stderr = _run(["--toy", "6", "--skip", stage,
+                                     "--out", os.path.join(tmp, "run-" + stage),
+                                     "--quiet"])
+                self.assertEqual(1, code, stage)
+                self.assertIn("cannot be skipped", stderr)
 
     def test_torch_stage_is_skipped_not_failed_without_torch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -227,6 +273,80 @@ class FailureModeTest(unittest.TestCase):
             self.assertEqual(2, code)
             self.assertIn("sum to < 1", stderr)
 
+    def test_hyperparameter_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "run")
+            for argv, message in (
+                    (["--toy", "6", "--epochs", "0", "--out", out],
+                     "--epochs"),
+                    (["--toy", "6", "--batch-size", "0", "--out", out],
+                     "--batch-size"),
+                    (["--toy", "6", "--lr", "0", "--out", out], "--lr"),
+                    (["--toy", "6", "--min-games", "0", "--out", out],
+                     "--min-games")):
+                code, stderr = _run(argv)
+                self.assertEqual(2, code, argv)
+                self.assertIn(message, stderr)
+
+
+class IngestRecoveryTest(unittest.TestCase):
+    """A bundle whose ingest died mid-way must be rebuilt, never appended."""
+
+    def _context(self, tmp):
+        args = build_parser().parse_args(
+            ["--out", os.path.join(tmp, "run"), "--quiet"])
+        return RunContext(args)
+
+    def _jsonl_line_counts(self, bundle_dir):
+        counts = {}
+        for name in sorted(os.listdir(bundle_dir)):
+            if name.endswith(".jsonl"):
+                with open(os.path.join(bundle_dir, name),
+                          encoding="utf-8") as handle:
+                    counts[name] = sum(1 for _ in handle)
+        return counts
+
+    def test_missing_marker_triggers_rebuild_not_append(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "Player.log")
+            with open(log_path, "w", encoding="utf-8") as handle:
+                handle.write("[UnityCrossThreadLogger]plain chatter\n")
+                handle.write("not arena json at all\n")
+            ctx = self._context(tmp)
+            first = _ingest_one_log(ctx, log_path)
+            bundle_dir = first["bundle"]
+            baseline = self._jsonl_line_counts(bundle_dir)
+
+            os.remove(os.path.join(bundle_dir, "ingest_source.json"))
+            second = _ingest_one_log(ctx, log_path)
+            self.assertEqual(bundle_dir, second["bundle"])
+            self.assertFalse(second.get("cached"))
+            self.assertEqual(baseline, self._jsonl_line_counts(bundle_dir),
+                             "rebuild must not append to the old bundle")
+
+            third = _ingest_one_log(ctx, log_path)
+            self.assertTrue(third.get("cached"))
+
+
+class CompareInvalidationTest(unittest.TestCase):
+    """Retrained torch checkpoints must invalidate a cached comparison."""
+
+    def test_compare_fingerprint_tracks_train_torch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = build_parser().parse_args(
+                ["--out", os.path.join(tmp, "run")])
+            ctx = RunContext(args)
+            ctx.stage_meta["collect"] = {"sha256": "abc"}
+            ctx.state["stages"]["train-torch"] = {"status": "ok",
+                                                  "fingerprint": "one"}
+            before = _stage_fingerprint(ctx, "compare")
+            ctx.state["stages"]["train-torch"]["fingerprint"] = "two"
+            after = _stage_fingerprint(ctx, "compare")
+            self.assertNotEqual(before, after)
+            unrelated = _stage_fingerprint(ctx, "split")
+            ctx.state["stages"]["train-torch"]["fingerprint"] = "three"
+            self.assertEqual(unrelated, _stage_fingerprint(ctx, "split"))
+
 
 class DryRunTest(unittest.TestCase):
 
@@ -249,6 +369,75 @@ class DryRunTest(unittest.TestCase):
             self.assertFalse(os.path.exists(out))
 
 
+class ConsoleUxTest(unittest.TestCase):
+    """The terminal presentation contract: stable when piped, informative."""
+
+    def test_piped_output_has_no_control_codes_and_numbered_stages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "run")
+            code, stderr = _run(["--toy", "12", "--out", out, "--seed", "3"])
+            self.assertEqual(0, code, stderr)
+            self.assertNotIn("\x1b", stderr, "piped output must be plain")
+            self.assertNotIn("\r", stderr, "piped output must not rewrite")
+            self.assertRegex(stderr, r"\[ ?\d+/\d+\] collect\s+ok\s+\d")
+            self.assertRegex(stderr, r"audit\s+ok.*trusted")
+            self.assertRegex(stderr, r"train-torch\s+skipped")
+            self.assertRegex(stderr, r"done in \d+\.\ds -- report:")
+
+    def test_quiet_suppresses_stages_but_not_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, stderr = _run(["--toy", "3", "--min-games", "50",
+                                 "--out", os.path.join(tmp, "run"),
+                                 "--quiet"])
+            self.assertEqual(1, code)
+            self.assertNotRegex(stderr, r"\[ ?\d+/\d+\]")
+            self.assertIn("error:", stderr)
+
+    def test_keyboard_interrupt_records_stage_and_hints_resume(self):
+        from magic_cabt import training_run
+
+        def boom(ctx):
+            raise KeyboardInterrupt()
+
+        original = training_run._STAGE_FUNCTIONS["macro"]
+        training_run._STAGE_FUNCTIONS["macro"] = boom
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "run")
+                code, stderr = _run(["--toy", "8", "--out", out])
+                self.assertEqual(130, code)
+                self.assertIn("re-run the same command to resume", stderr)
+                state = _read_json(os.path.join(out, "state.json"))
+                self.assertEqual("interrupted",
+                                 state["stages"]["macro"]["status"])
+        finally:
+            training_run._STAGE_FUNCTIONS["macro"] = original
+
+    def test_interrupted_run_resumes_and_completes(self):
+        from magic_cabt import training_run
+
+        calls = {"n": 0}
+        original = training_run._STAGE_FUNCTIONS["macro"]
+
+        def boom_once(ctx):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise KeyboardInterrupt()
+            return original(ctx)
+
+        training_run._STAGE_FUNCTIONS["macro"] = boom_once
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "run")
+                code, _ = _run(["--toy", "8", "--out", out])
+                self.assertEqual(130, code)
+                code, stderr = _run(["--toy", "8", "--out", out])
+                self.assertEqual(0, code, stderr)
+                self.assertRegex(stderr, r"collect\s+cached")
+        finally:
+            training_run._STAGE_FUNCTIONS["macro"] = original
+
+
 class ParserTest(unittest.TestCase):
 
     def test_parser_defaults(self):
@@ -257,6 +446,12 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(0.1, args.test_fraction)
         self.assertEqual(2, args.min_games)
         self.assertEqual([], args.log)
+
+    def test_help_is_grouped_with_examples(self):
+        text = build_parser().format_help()
+        for expected in ("inputs", "corpus and splits", "training",
+                         "run control", "examples:"):
+            self.assertIn(expected, text)
 
 
 def _read_json(path):
