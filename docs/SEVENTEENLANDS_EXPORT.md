@@ -4,8 +4,13 @@ Mythic patronage backfills your 17Lands account with your **entire** history
 (draft and sealed only — 17Lands computes no statistics for constructed), and
 allow up to 48 hours after upgrading for it to finish populating.
 
-What it does not come with is a download button. 17Lands has no self-serve
-bulk export. So there are two paths, and they are complementary rather than
+**17Lands does not offer data exports.** Their FAQ's promise that Mythic
+patrons "get personal data for their entire history" means their site computes
+and displays your personal statistics over your whole history — lower tiers
+are backfilled only about 30 days. It is a backfill of what the site shows
+you, not an archive you can download, and their developers have said plainly
+that they do not provide exports. Do not buy a tier expecting a download
+button; there isn't one at any price. So there are two paths, and they are complementary rather than
 alternatives:
 
 1. **Harvest it yourself** through the same JSON API the site's own pages
