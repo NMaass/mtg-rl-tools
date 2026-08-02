@@ -50,27 +50,81 @@ The cookie is a live credential for your 17Lands account: treat it like a
 password, do not commit it, and expect it to expire (the exporter says so
 plainly when it does, rather than writing empty files).
 
-### Run it
+### Run it — slowly, in four steps
 
-Start small to confirm the endpoints still answer for your account:
-
-```sh
-magic-cabt-17lands-export --cookie-file ~/.17lands-cookie \
-    --out 17lands-export --limit 3
-```
-
-Then take the lot. This is slow on purpose — one request at a time with a
-pause between them, because this is a free service and an undocumented API:
+**1. Find out what it would cost.** `--plan` spends exactly one request (the
+draft list) and then tells you what the real run needs:
 
 ```sh
 magic-cabt-17lands-export --cookie-file ~/.17lands-cookie \
-    --out 17lands-export
+    --out 17lands-export --plan
 ```
 
-A few thousand drafts at four requests each and a one-second delay is a
-several-hour run. It is resumable: drafts already written are skipped, so
-interrupt it freely and start it again. `--delay` tunes the pace; leave it at
-or above the default unless you have a reason.
+> `account has 2148 draft(s); 0 already saved`
+> `this run would make 6445 request(s) over about 7h 10m`
+
+**2. Prove it works on five drafts** before pointing it at thousands:
+
+```sh
+magic-cabt-17lands-export --cookie-file ~/.17lands-cookie \
+    --out 17lands-export --limit 5
+```
+
+Open one of the files in `17lands-export/drafts/` and check it holds what you
+expect. If the API has moved, you have found out at a cost of sixteen
+requests.
+
+**3. Spread the real harvest over several days.** There is no prize for
+finishing today. A budget per session turns thousands of requests into a
+background errand:
+
+```sh
+magic-cabt-17lands-export --cookie-file ~/.17lands-cookie \
+    --out 17lands-export --delay 4 --max-requests 900
+```
+
+That is about an hour a day, and roughly 900 requests — a rounding error in
+anyone's traffic. Run it again tomorrow; finished drafts are skipped, so each
+session picks up exactly where the last stopped. Repeat until it prints
+`complete`.
+
+**4. Or leave it running gently overnight**, taking a five-minute breather
+every couple of hundred requests:
+
+```sh
+magic-cabt-17lands-export --cookie-file ~/.17lands-cookie \
+    --out 17lands-export --delay 5 --pause-every 200 --pause-for 300
+```
+
+### What it does to stay a good guest
+
+| Behaviour | Why |
+| --- | --- |
+| One request at a time, `--delay` seconds apart, plus jitter | Never a burst, never a metronome |
+| Only the `--parts` you ask for | Requests per draft is the multiplier on everything; three parts instead of four is a quarter less load |
+| `Retry-After` obeyed exactly when given | The service knows better than our backoff formula |
+| Any 429 slows the **rest of the run** permanently | If it says it is busy once, we do not go back to the old pace |
+| A run of consecutive failures trips a breaker and stops | A struggling server should not also have to carry us |
+| `--max-requests` / `--pause-every` | Spread the cost over days |
+| Stops instantly on 401/403 | An auth problem is not something to retry |
+| Resume on re-run | Stopping is free, so stopping is easy |
+
+Measured on a stub server that pushed back mid-run: request gaps of 1.8s,
+1.9s, 1.8s, 1.6s, then exactly 3.0s when the server sent `Retry-After: 3`,
+then 2.3–2.7s for every subsequent request — the slowdown persisted rather
+than decaying back.
+
+The one lever that reduces load more than any pacing flag is asking for less.
+`--parts draft` fetches only the pick-by-pick data — one request per draft
+instead of three — and that alone is the training signal:
+
+```sh
+magic-cabt-17lands-export --cookie-file ~/.17lands-cookie \
+    --out 17lands-export --parts draft
+```
+
+Please do not raise the pace or disable the breaker. If you want the data
+faster, the letter below is the right lever — not more parallelism.
 
 ### What lands on disk
 
@@ -107,13 +161,6 @@ supply the gameplay policy corpus. For that, keep the Arena mirror recorder
 running on your own play — it captures full-fidelity DecisionRecords with
 legal options, which even a perfect 17Lands export would not contain.
 
-### A note on being a good guest
-
-This is an undocumented API on a free, community-funded service. The exporter
-serializes requests, waits between them, backs off on 429, and stops dead on
-401/403 rather than retrying. Please do not remove those. If you want the data
-faster, the letter below is the right lever — not more parallelism.
-
 ## 2. Ask 17Lands for the full export
 
 Worth sending regardless: it is the only route to your complete *game*
@@ -146,8 +193,13 @@ before. Contact them via the address on their site, their Discord, or
 > S3 link, a raised limit on my account, anything.
 >
 > Entirely my own data, no redistribution, and I'll cite 17Lands in anything
-> that comes of it. If there's a rate limit or a window you'd prefer I stay
-> inside while pulling my draft history, tell me and I'll respect it.
+> that comes of it.
+>
+> On that last point — I'm currently pulling my own draft history through the
+> site's API at one request every four seconds, in sessions of a few hundred,
+> spread over several days, and I stop entirely if I see a 429. If you'd
+> rather I went slower, stayed inside a particular window, or didn't do it at
+> all, say the word and I'll follow it.
 >
 > Thanks for building and running this — it's a remarkable resource.
 >
