@@ -234,7 +234,12 @@ def _semantic_action_details(payload, cards, aliases):
 
 
 def _state_key(record):
-    current = (record.get("observation") or {}).get("current") or {}
+    observation = record.get("observation") or {}
+    if not isinstance(observation, dict):
+        return None
+    current = observation.get("current") or {}
+    if not isinstance(current, dict):
+        return None
     if current.get("seq") is not None:
         return ("game", current.get("gameInstance"), current.get("seq"))
     if record.get("gameId") is not None and record.get("sequence") is not None:
@@ -389,6 +394,9 @@ def make_point(record, ordinal, cards=None, frame_index=None):
             raw_label = option.get("label")
             if not isinstance(raw_label, str) or not raw_label.strip():
                 raise ValueError("A captured option has no descriptive label.")
+            if len(raw_label.encode("utf-8")) > MAX_REQUEST_BYTES:
+                raise ValueError(
+                    "Captured option label exceeds the review payload limit.")
             indices.add(index)
             payload = option.get("payload") or {}
             if not isinstance(payload, dict):
