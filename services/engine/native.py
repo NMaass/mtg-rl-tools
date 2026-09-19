@@ -1,13 +1,15 @@
-"""Bounded native agent interface using the pinned XMage bridge, not a rules clone."""
+"""Bounded native agent interface over the declared XMage reference build."""
 
 import copy
 import json
 import sys
 from magic_cabt import CabtBridge
 from magic_cabt.agents import make_agent, is_legal_selection
+from magic_cabt.protocol import CabtProtocolError
 from magic_cabt.search.replay_search import observation_signature, ReplayDivergenceError
 
 REFERENCE = 'fd40ad5c29a92cef824cf12ba6d0e4daa25db975'
+SETUP = 'declared-library-order-v1'
 MAX_STEPS = 2000
 
 
@@ -24,6 +26,7 @@ class NativeSession:
         self.spec = {'decks': copy.deepcopy(spec['decks']), 'seed': seed, 'maxTurns': turns}
         self.bridge = bridge_factory()
         self.steps = []
+        self.failed = False
         try:
             self.response = self.bridge.game_start(*self.spec['decks'], seed=seed, max_turns=turns)
         except Exception:
@@ -35,10 +38,13 @@ class NativeSession:
         return self.bridge.finished
 
     def observation(self):
+        if self.failed:
+            raise ValueError('This session failed and cannot be continued.')
         if self.finished:
             return {'finished': True, 'result': self.bridge.result}
         observation = self.response['observation']
-        return {'finished': False, 'revision': REFERENCE, 'position': len(self.steps),
+        return {'finished': False, 'revision': REFERENCE, 'setup': SETUP,
+                'position': len(self.steps),
                 'fingerprint': observation_signature(observation)['sha256'],
                 'observation': copy.deepcopy(observation)}
 
@@ -52,32 +58,42 @@ class NativeSession:
             raise ReplayDivergenceError('Stale observation: no action was applied.')
         if not is_legal_selection(selection, self.response['observation']['select']):
             raise ValueError('Selection is not legal for the current engine prompt.')
-        self.steps.append({'fingerprint': fingerprint, 'selection': list(selection)})
         try:
             self.response = self.bridge.game_select(selection)
         except Exception:
-            self.steps.pop()
+            self.failed = True
+            self.close()
             raise
+        self.steps.append({'fingerprint': fingerprint, 'selection': list(selection)})
         return self.observation()
 
     def checkpoint(self):
-        return {'kind': 'native-xmage-replay-root', 'version': 1, 'revision': REFERENCE,
+        if self.finished:
+            raise ValueError('A terminal game is a result, not a resumable root.')
+        return {'kind': 'native-xmage-replay-root', 'version': 2,
+                'revision': REFERENCE, 'setup': SETUP,
                 'spec': copy.deepcopy(self.spec), 'steps': copy.deepcopy(self.steps),
                 'root': self.observation()}
 
     @classmethod
     def restore(cls, checkpoint, bridge_factory=CabtBridge):
-        if not isinstance(checkpoint, dict) or checkpoint.get('kind') != 'native-xmage-replay-root' or checkpoint.get('version') != 1 or checkpoint.get('revision') != REFERENCE:
-            raise ValueError('Only a native root from the pinned engine can be restored.')
+        if (not isinstance(checkpoint, dict) or
+                checkpoint.get('kind') != 'native-xmage-replay-root' or
+                checkpoint.get('version') != 2 or
+                checkpoint.get('revision') != REFERENCE or
+                checkpoint.get('setup') != SETUP):
+            raise ValueError('Only a native root from this engine and ordered-setup protocol can be restored.')
         steps = checkpoint.get('steps')
-        if not isinstance(steps, list) or len(steps) > MAX_STEPS:
-            raise ValueError('Invalid replay prefix.')
+        expected = checkpoint.get('root')
+        if (not isinstance(steps, list) or len(steps) > MAX_STEPS or
+                not isinstance(expected, dict) or expected.get('finished') is not False):
+            raise ValueError('Invalid replay prefix or non-resumable root.')
         session = cls(checkpoint['spec'], bridge_factory)
         try:
             for step in steps:
                 session.step(step['selection'], step['fingerprint'])
-            actual, expected = session.observation(), checkpoint['root']
-            if actual.get('finished') != expected.get('finished') or actual.get('fingerprint') != expected.get('fingerprint'):
+            actual = session.observation()
+            if actual.get('finished') or actual.get('fingerprint') != expected.get('fingerprint'):
                 raise ReplayDivergenceError('Rebuilt root does not match the recorded decision.')
             return session
         except Exception:
@@ -85,11 +101,11 @@ class NativeSession:
             raise
 
     def autoplay(self, agent_specs=('random', 'first'), decisions=100):
-        if len(agent_specs) != 2 or any(a not in ('random', 'first') for a in agent_specs):
+        if len(agent_specs) != 2 or any(agent not in ('random', 'first') for agent in agent_specs):
             raise ValueError('Bundled controls are random and first. External agents use step.')
         if type(decisions) is not int or not 1 <= decisions <= MAX_STEPS:
             raise ValueError('Invalid decision budget.')
-        agents = [make_agent(name, seed=self.spec['seed'] + i) for i, name in enumerate(agent_specs)]
+        agents = [make_agent(name, seed=self.spec['seed'] + index) for index, name in enumerate(agent_specs)]
         frames = []
         for _ in range(decisions):
             if self.finished:
@@ -117,6 +133,8 @@ def main():
                 continue
             try:
                 request = json.loads(line)
+                if not isinstance(request, dict):
+                    raise ValueError('Request must be an object.')
                 command = request.get('command')
                 if command in ('new', 'restore'):
                     if session is not None:
@@ -137,7 +155,7 @@ def main():
                 else:
                     raise ValueError('Unknown command.')
                 print(json.dumps({'ok': True, 'data': result}), flush=True)
-            except (ValueError, KeyError, TypeError, ReplayDivergenceError) as error:
+            except (ValueError, KeyError, TypeError, ReplayDivergenceError, CabtProtocolError, OSError) as error:
                 print(json.dumps({'ok': False, 'error': str(error)}), flush=True)
     finally:
         if session is not None:
