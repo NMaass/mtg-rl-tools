@@ -1,0 +1,35 @@
+name: Web workspace
+on:
+  push:
+    branches: [feat/browser-replay-workspace]
+  pull_request:
+    paths: ['web/**', 'services/**', '.github/workflows/web-workspace.yml']
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare offline development toolchain
+        run: |
+          mkdir -p /tmp/mtg-toolchain
+          cd /tmp/mtg-toolchain
+          npm init -y
+          npm install react@19 react-dom@19 vite@7 @vitejs/plugin-react@5 typescript@5 @types/react@19 @types/react-dom@19 @types/node@22 vitest@3 @playwright/test@1 wrangler@4 @cloudflare/workers-types@4 jose@6
+          tar -czf /tmp/toolchain.tar.gz .
+          cd "$GITHUB_WORKSPACE"
+          git archive --format=tar HEAD > /tmp/source.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: workspace-source-and-toolchain
+          path: |
+            /tmp/source.tar
+            /tmp/toolchain.tar.gz
+          retention-days: 1
