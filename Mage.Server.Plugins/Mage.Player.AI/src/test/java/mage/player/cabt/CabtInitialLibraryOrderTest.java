@@ -14,7 +14,7 @@ class CabtInitialLibraryOrderTest {
     void nativeSetupRetainsDeclaredCardOrderBeforeTheEngineShuffle() {
         for (int repetition = 0; repetition < 8; repetition++) {
             CabtLiveDuel game = new CabtLiveDuel();
-            CabtBridgePlayer player = new CabtBridgePlayer("P0", RangeOfInfluence.ALL, false,
+            CabtBridgePlayer player = new CabtBridgePlayer("P0", RangeOfInfluence.ALL,
                     (ignoredGame, ignoredPlayer, decision) -> {
                         throw new AssertionError("Setup must not request a move");
                     });
