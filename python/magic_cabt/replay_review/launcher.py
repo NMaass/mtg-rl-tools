@@ -69,7 +69,8 @@ class ReviewLibraryMixin:
         if panel is None or kind != "replay_progress":
             return
         generation, info = payload
-        if generation != self._replay_generation or                 self._replay_controller is None:
+        if (generation != self._replay_generation or
+                self._replay_controller is None):
             return
         manual_step = bool(
             self._review_manual_navigation and not info.get("playing"))
