@@ -27,6 +27,8 @@ class GuiTests(unittest.TestCase):
     def tearDown(self):
         if self.window is not None and not self.window._closed:
             self.window.close()
+        for callback in self.root.tk.call("after", "info"):
+            self.root.after_cancel(callback)
         self.root.destroy()
 
     def pump(self, predicate=lambda: False, duration=.2):
