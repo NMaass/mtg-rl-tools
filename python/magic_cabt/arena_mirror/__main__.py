@@ -73,7 +73,7 @@ def main(argv=None):
     if args.mode == "live":
         return run_live(args)
     if args.mode == "gui":
-        from . import gui as gui_mod
+        from ..replay_review import launcher as gui_mod
         return gui_mod.main(
             ["--java", args.java]
             + (["--classpath", args.classpath] if args.classpath else []))
