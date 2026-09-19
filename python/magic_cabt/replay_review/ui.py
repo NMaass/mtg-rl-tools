@@ -84,8 +84,15 @@ class ReplayReviewPanel(ttk.Frame):
 
         self.recommendation = tk.StringVar(
             value="Step the replay to a priority decision to analyze it.")
-        _label(self, self.recommendation, style="Card.TLabel",
-               wraplength=390).grid(row=5, column=0, sticky="ew", pady=(4, 8))
+        recommendation_space = ttk.Frame(
+            self, height=54, style="Card.TFrame")
+        recommendation_space.grid(
+            row=5, column=0, sticky="ew", pady=(4, 8))
+        recommendation_space.grid_propagate(False)
+        _label(
+            recommendation_space, self.recommendation,
+            style="Card.TLabel", wraplength=390
+        ).pack(fill=tk.X, anchor="w")
 
         table_parent = ttk.Frame(self, style="Card.TFrame")
         table_parent.grid(row=6, column=0, sticky="nsew")
