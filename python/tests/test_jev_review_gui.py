@@ -11,7 +11,7 @@ from unittest.mock import patch
 from magic_cabt.replay_review import client
 from magic_cabt.replay_review.data import make_point
 from magic_cabt.replay_review.session import ReviewSession
-from magic_cabt.replay_review.ui import ReviewWindow
+from magic_cabt.replay_review.ui import ReplayReviewPanel
 from test_jev_review import record, response
 
 
@@ -22,14 +22,15 @@ class GuiTests(unittest.TestCase):
         except tk.TclError:
             self.skipTest("A display is required (run with xvfb-run).")
         self.root.withdraw()
-        self.window = None
+        self.panel = None
 
     def tearDown(self):
-        if self.window is not None and not self.window._closed:
-            self.window.close()
-        for callback in self.root.tk.call("after", "info"):
-            self.root.after_cancel(callback)
-        self.root.destroy()
+        if self.panel is not None and not self.panel._closed:
+            self.panel.close()
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
 
     def pump(self, predicate=lambda: False, duration=.2):
         deadline = time.monotonic() + duration
@@ -39,77 +40,83 @@ class GuiTests(unittest.TestCase):
                 return
             time.sleep(.005)
 
-    def open(self, analyzer=None, key="fixture-key"):
-        session = ReviewSession(analyzer or (lambda p, k: client.analyze(p, k, lambda p, k: response())))
-        self.window = ReviewWindow(self.root, "fixture", api_key=key, session=session,
-                                   points=[make_point(record(t), t) for t in (3, 4, 5)])
-        self.pump(lambda: bool(self.window.points))
-        return self.window
-
-    def test_no_call_on_open_and_cached_revisit(self):
-        window = self.open()
-        self.assertEqual(window.session.summary()["calls"], 0)
-        window.step(1)
-        self.pump(lambda: window.session.summary()["calls"] == 1)
-        window.step(-1)
-        self.pump(lambda: window.session.summary()["calls"] == 2)
-        window.step(1)
+    def open_panel(self, analyzer=None, key="fixture-key"):
+        session = ReviewSession(
+            analyzer or
+            (lambda p, k: client.analyze(
+                p, k, lambda payload, key: response())))
+        self.panel = ReplayReviewPanel(self.root, session=session)
+        self.panel.pack(fill=tk.BOTH, expand=True)
+        if key:
+            self.panel.key_var.set(key)
+        self.panel.points = [
+            make_point(record(3), 0, frame_index=2),
+            make_point(record(4), 1, frame_index=5),
+        ]
         self.pump()
-        self.assertEqual(window.session.summary()["calls"], 2)
+        return self.panel
 
-    def test_no_key_offline_and_manual_mode(self):
-        window = self.open(key="")
-        window.step(1)
+    def test_call_happens_after_manual_step_not_on_load(self):
+        panel = self.open_panel()
+        panel.sync_frame(2, analyze_after_step=False)
         self.pump()
-        self.assertEqual(window.session.summary()["calls"], 0)
-        window.session.connect("fixture-key")
-        window.auto.set(False)
-        window.step(1)
-        self.pump()
-        self.assertEqual(window.session.summary()["calls"], 0)
-        window.analyze()
-        self.pump(lambda: window.session.summary()["calls"] == 1)
+        self.assertEqual(panel.session.summary()["calls"], 0)
+        panel.sync_frame(5, analyze_after_step=True)
+        self.pump(lambda: panel.session.summary()["calls"] == 1)
+        self.assertEqual(panel.session.summary()["calls"], 1)
+        self.assertIn("Lightning Bolt", panel.recorded.get())
+        self.assertIn("Lightning Bolt", panel.recommendation.get())
 
-    def test_delayed_result_preserves_position_focus_and_geometry(self):
+    def test_autoplay_style_progress_does_not_spend(self):
+        panel = self.open_panel()
+        panel.sync_frame(2, analyze_after_step=False)
+        panel.sync_frame(5, analyze_after_step=False)
+        self.pump()
+        self.assertEqual(panel.session.summary()["calls"], 0)
+
+    def test_delayed_result_does_not_move_panel_or_focus(self):
         started, release = threading.Event(), threading.Event()
+
         def delayed(payload, key):
             started.set()
             release.wait(2)
-            return client.analyze(payload, key, lambda p, k: response())
-        window = self.open(delayed)
-        window.step(1)
+            return client.analyze(
+                payload, key, lambda p, k: response())
+
+        panel = self.open_panel(delayed)
+        panel.sync_frame(2, analyze_after_step=True)
         self.pump(started.is_set)
-        window.next.focus_force()
-        before = (window.ratings.winfo_rootx(), window.ratings.winfo_rooty(),
-                  window.ratings.winfo_width(), window.ratings.winfo_height())
-        window.step(1)
+        panel.key_entry.focus_force()
+        before = (
+            panel.ratings.winfo_rootx(), panel.ratings.winfo_rooty(),
+            panel.ratings.winfo_width(), panel.ratings.winfo_height())
         release.set()
-        self.pump(lambda: window.session.summary()["calls"] == 2, duration=2)
+        self.pump(
+            lambda: panel.session.summary()["calls"] == 1, duration=2)
         self.pump()
-        self.assertEqual(window.index, 2)
-        self.assertEqual(window.caption.get(), window.points[2].caption)
-        self.assertIn("Lightning Bolt", window.recommendation.get())
-        self.assertEqual(before, (window.ratings.winfo_rootx(), window.ratings.winfo_rooty(),
-                                 window.ratings.winfo_width(), window.ratings.winfo_height()))
-        self.assertEqual(window.focus_get(), window.next)
+        self.assertEqual(
+            before,
+            (panel.ratings.winfo_rootx(), panel.ratings.winfo_rooty(),
+             panel.ratings.winfo_width(), panel.ratings.winfo_height()))
+        self.assertEqual(panel.focus_get(), panel.key_entry)
 
     def test_feedback_and_export_never_contain_key(self):
-        window = self.open()
-        window.feedback_value.set("Useful")
-        window._rate()
-        window.auto.set(False)
-        window.step(1)
-        window.step(-1)
-        self.assertEqual(window.feedback_value.get(), "Useful")
+        panel = self.open_panel()
+        panel.sync_frame(2, analyze_after_step=False)
+        panel.feedback_value.set("Useful")
+        panel._rate()
         with tempfile.TemporaryDirectory() as tmp:
             output = str(Path(tmp) / "review.json")
-            with patch("magic_cabt.replay_review.ui.filedialog.asksaveasfilename", return_value=output):
-                window.export()
+            with patch(
+                    "magic_cabt.replay_review.ui.filedialog.asksaveasfilename",
+                    return_value=output):
+                panel.export()
             raw = Path(output).read_text()
             self.assertNotIn("fixture-key", raw)
-            self.assertEqual(json.loads(raw)["decisions"][0]["humanRating"], "Useful")
+            self.assertEqual(
+                json.loads(raw)["decisions"][0]["humanRating"], "Useful")
 
-    def test_existing_library_integration_and_settings(self):
+    def test_existing_replay_library_contains_embedded_panel_and_does_not_save_key(self):
         try:
             from magic_cabt.arena_mirror.gui import ArenaMirrorApp
         except ModuleNotFoundError:
@@ -117,18 +124,31 @@ class GuiTests(unittest.TestCase):
                 raise
             self.skipTest("Full repository required for launcher integration.")
         from magic_cabt.replay_review.launcher import ReviewLibraryMixin
+
         class Integrated(ReviewLibraryMixin, ArenaMirrorApp):
             pass
+
+        self.panel = None
         with tempfile.TemporaryDirectory() as tmp:
             settings = str(Path(tmp) / "settings.json")
-            with patch("magic_cabt.arena_mirror.gui.SETTINGS_PATH", settings):
+            with patch(
+                    "magic_cabt.arena_mirror.gui.SETTINGS_PATH", settings):
                 app = Integrated(self.root)
-                app._review_key.set("fixture-key")
-                app._save_settings()
-                self.assertNotIn("fixture-key", Path(settings).read_text())
-                app._clear_review_key()
-                self.assertEqual(app._review_key.get(), "")
+                self.panel = app._review_panel
+                self.root.update_idletasks()
+                self.assertIs(
+                    app._review_panel.winfo_toplevel(), self.root)
                 self.assertTrue(app.replay_table.winfo_exists())
+                self.assertTrue(app._review_panel.winfo_exists())
+                self.assertGreater(
+                    app._review_panel.winfo_rootx(),
+                    app.replay_table.winfo_rootx())
+                app._review_panel.key_var.set("fixture-key")
+                app._save_settings()
+                self.assertNotIn(
+                    "fixture-key", Path(settings).read_text())
+                app._review_panel.clear_key()
+                self.assertEqual(app._review_panel.key_var.get(), "")
 
 
 if __name__ == "__main__":
