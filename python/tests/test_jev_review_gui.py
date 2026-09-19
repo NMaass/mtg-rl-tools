@@ -129,6 +129,7 @@ class GuiTests(unittest.TestCase):
             pass
 
         self.panel = None
+        self.root.deiconify()
         with tempfile.TemporaryDirectory() as tmp:
             settings = str(Path(tmp) / "settings.json")
             with patch(
