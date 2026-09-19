@@ -25,6 +25,7 @@ jobs:
           git -C /tmp/xmage fetch --depth 1 origin fd40ad5c29a92cef824cf12ba6d0e4daa25db975
           git -C /tmp/xmage checkout --detach FETCH_HEAD
           rsync -a Mage.Server.Plugins/Mage.Player.AI/ /tmp/xmage/Mage.Server.Plugins/Mage.Player.AI/
+          python3 services/engine/prepare_reference.py /tmp/xmage
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -52,4 +53,5 @@ jobs:
             /tmp/engine-tests.log
             /tmp/xmage/Mage.Server.Plugins/Mage.Player.AI/target/surefire-reports
             engine-native-result.json
+            engine-native-replay.jsonl
           retention-days: 7
