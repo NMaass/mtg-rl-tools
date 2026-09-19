@@ -46,8 +46,9 @@ Reference: [OpenRouter Decisions API](https://openrouter.ai/docs/api/api-referen
 The alpha API may change. There is no silent model/endpoint fallback.
 
 The key stays in process memory, is masked, is never included in GUI settings,
-exported reports, requests' JSON bodies, or error messages. **Clear key** in the
-library disconnects all review windows; closing clears their copies. A request
+exported reports, requests' JSON bodies, or error messages. **Clear** in the
+embedded panel disconnects the review session; closing the application clears the
+in-memory key. A request
 already sent cannot be recalled and may still incur a charge. The application
 does not clear the operating-system clipboard or guarantee secure memory erasure.
 HTTPS goes only to OpenRouter, with no redirects. OpenRouter forwards the submitted
