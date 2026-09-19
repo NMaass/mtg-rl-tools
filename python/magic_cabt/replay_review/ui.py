@@ -88,7 +88,7 @@ class ReplayReviewPanel(ttk.Frame):
             self, height=54, style="Card.TFrame")
         recommendation_space.grid(
             row=5, column=0, sticky="ew", pady=(4, 8))
-        recommendation_space.grid_propagate(False)
+        recommendation_space.pack_propagate(False)
         _label(
             recommendation_space, self.recommendation,
             style="Card.TLabel", wraplength=390
