@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+public/parser/
+public/catalog.json
+public/example-art/
+public/example-art.json
+test-results/
+playwright-report/

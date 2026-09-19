@@ -1,0 +1,60 @@
+name: Browser replay workspace
+on:
+  push:
+    branches: [feat/browser-replay-workspace]
+    paths: ['web/**', 'python/magic_cabt/browser_export.py', 'python/tests/test_browser_export.py', '.github/workflows/browser-workspace.yml']
+  pull_request:
+    paths: ['web/**', 'python/magic_cabt/browser_export.py', 'python/tests/test_browser_export.py', '.github/workflows/browser-workspace.yml']
+permissions:
+  contents: read
+concurrency:
+  group: browser-workspace-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install web dependencies
+        working-directory: web
+        run: npm install --no-audit --no-fund
+      - name: Original parser adapter tests
+        working-directory: python
+        run: python3 -m unittest discover -s tests -p test_browser_export.py -v
+      - name: Build native parity fixture
+        run: python3 web/scripts/make_fixture.py
+      - name: Optional example artwork and catalogue
+        continue-on-error: true
+        timeout-minutes: 4
+        run: python3 web/scripts/sync_cards.py
+      - name: Typecheck and production build
+        working-directory: web
+        run: npm run build
+      - name: Domain, security, and local D1/R2 tests
+        working-directory: web
+        run: npm test
+      - name: Install browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Browser integration and Wasm parity
+        working-directory: web
+        run: npm run test:browser
+      - name: Package review evidence
+        if: always()
+        run: tar --exclude=node_modules --exclude=.wrangler --exclude=.dev.vars --exclude=playwright-report --exclude=test-results -czf browser-workspace-evidence.tar.gz web python/magic_cabt/browser_export.py python/tests/test_browser_export.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-workspace-evidence
+          path: |
+            browser-workspace-evidence.tar.gz
+            web/screenshots/
+            web/test-results/
+            web/package-lock.json
+          retention-days: 7
