@@ -9,22 +9,22 @@ cd python
 python -m magic_cabt.arena_mirror gui
 ```
 
-On the **Replays** tab, paste an OpenRouter key into the masked field, select a
-match from the existing library, and click **Review with Jev**. The review window
-shows the recorded position on the left and action rankings on the right. Existing
-**Watch** playback in XMage is unchanged. Review itself needs no JVM or GPU.
+The **Replays** tab now has a persistent Jev panel on the right side of the
+existing replay viewer. Select a replay and use **Watch** plus the normal transport
+controls on the left. Paste an OpenRouter key directly into the masked field in
+the Jev panel.
 
-**Next priority** / **Previous** (or arrow keys) select recorded priority decisions,
-including recorded passes. The board updates first; analysis is then scheduled.
-Opening a replay does not make a paid call. **Analyze / retry** analyzes the first
-position or explicitly retries a failed request. Turn off **Analyze after stepping**
-for manual-only calls. Empty-key mode allows offline inspection; reopen the review
-after entering a key to enable calls.
+The panel follows the replay frame. A manual step, jump, or scrub seek updates the
+replay first; when the resulting frame is a captured hero priority decision, Jev
+is scheduled afterward. Normal autoplay does not issue Jev calls. Opening or
+selecting a replay does not make a paid call. **Analyze / retry** explicitly
+analyzes the currently displayed priority decision, and **Analyze after manual
+step** can be disabled for fully manual requests.
 
-Only one request runs at a time per review window. Fast stepping coalesces unsent
+Only one request runs at a time per replay panel. Fast stepping coalesces unsent
 work to the newest position. Revisiting an identical request uses a session cache.
-Failed requests are never automatically retried. Keep one review window open when
-measuring total spending; usage totals and caching are per window.
+Failed requests are never automatically retried. Usage totals and caching are per
+application session.
 
 The panel shows Jev's action probabilities, its selected action, the recorded
 choice, latency, input/output tokens, and actual `usage.cost`. Missing costs stay
@@ -59,8 +59,8 @@ contain game data and the local human/model comparison.
 ## Which recordings work?
 
 - Existing Arena bundles: `decisions.jsonl` plus optional static `card_cache.json`.
-- **Open decision file...** also accepts native XMage `game-NNNN.jsonl` streams from
-  `examples/run_selfplay.py` / `magic_cabt.eval.play`.
+- Native XMage `game-NNNN.jsonl` streams use the same readable projection layer,
+  although the primary UX in this PR is the existing Arena replay library.
 - Supported prompt types: Arena `ACTIONSAVAILABLEREQ` and XMage `PRIORITY`, with
   exactly one indexed root choice. Targets, modes, combat assignments, and mana
   payment subprompts are intentionally out of scope for this first review slice.
@@ -74,10 +74,14 @@ contain game data and the local human/model comparison.
   weaken analysis. Static cache enrichment is limited to already-visible IDs;
   future replay states are never scanned to recover card identities.
 
-The review panel is a read-only structured position view, not a replacement for
-XMage's card-art display. Existing Watch remains available for visual playback.
-These are retrospective recommendations computed from pre-action snapshots, not
-proof of predictions made before the human acted.
+The Jev panel is intentionally beside the existing replay transport instead of
+duplicating the board in another window. Existing Watch remains the visual
+playback. Raw Arena/XMage transport identifiers are translated to readable
+card/object names from the captured state and card cache before they are shown or
+sent as semantic action labels; unresolved identities are called out rather than
+presented as if an ID were a card name. These remain retrospective recommendations
+computed from pre-action snapshots, not proof of predictions made before the human
+acted.
 
 ## XMage findings: no rules-engine rewrite required
 
