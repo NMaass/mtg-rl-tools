@@ -65,7 +65,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(panel.session.summary()["calls"], 0)
         panel.sync_frame(5, analyze_after_step=True)
         self.pump(
-            lambda: panel.session.status(panel.current_point)[0] == "complete",
+            lambda: "Lightning Bolt" in panel.recommendation.get(),
             duration=2)
         self.assertEqual(panel.session.summary()["calls"], 1)
         self.assertIn("Lightning Bolt", panel.recorded.get())
@@ -89,7 +89,10 @@ class GuiTests(unittest.TestCase):
 
         panel = self.open_panel(delayed)
         panel.sync_frame(2, analyze_after_step=True)
-        self.pump(started.is_set)
+        self.pump(
+            lambda: started.is_set() and
+            panel.recommendation.get().startswith("Analyzing"),
+            duration=2)
         panel.key_entry.focus_force()
         before = (
             panel.ratings.winfo_rootx(), panel.ratings.winfo_rooty(),
