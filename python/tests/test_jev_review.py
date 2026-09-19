@@ -69,6 +69,28 @@ class ProjectionTests(unittest.TestCase):
         self.assertNotIn("SECRET", canonical(point.request))
         self.assertIn("Face-down object", canonical(point.request))
 
+    def test_transport_ids_are_replaced_with_readable_card_names(self):
+        rec = record()
+        rec["observation"]["current"]["zones"]["battlefield"] = [
+            {"grpId": 42, "instanceId": 9001, "controllerSeat": 1}
+        ]
+        rec["observation"]["select"]["option"][1] = {
+            "index": 1,
+            "type": "CAST_SPELL",
+            "label": "CAST_SPELL grpId=7 instance=9002",
+            "payload": {"grpId": 7, "instanceId": 9002},
+        }
+        point = make_point(
+            rec, 0,
+            {"7": {"name": "Lightning Bolt"},
+             "42": {"name": "Mountain"}})
+        text = canonical(point.request)
+        self.assertIn("Lightning Bolt", text)
+        self.assertIn("Mountain", text)
+        self.assertNotIn("grpId=7", text)
+        self.assertNotIn("instance=9002", text)
+        self.assertNotIn("9001", text)
+
     def test_fail_closed_bad_options_and_snapshots(self):
         changes = [
             lambda r: r["observation"]["select"].update(option=[]),
