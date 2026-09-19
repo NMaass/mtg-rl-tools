@@ -139,6 +139,7 @@ class ReplayReviewPanel(ttk.Frame):
         generation = self._load_generation
         self.bundle = bundle
         self.points = []
+        self.feedback = {}
         self.current_point = None
         self.current_frame = None
         self._render_signature = None
