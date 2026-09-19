@@ -28,6 +28,8 @@ class GuiTests(unittest.TestCase):
         if self.panel is not None and not self.panel._closed:
             self.panel.close()
         try:
+            for callback in self.root.tk.call("after", "info"):
+                self.root.after_cancel(callback)
             self.root.destroy()
         except tk.TclError:
             pass
@@ -62,7 +64,9 @@ class GuiTests(unittest.TestCase):
         self.pump()
         self.assertEqual(panel.session.summary()["calls"], 0)
         panel.sync_frame(5, analyze_after_step=True)
-        self.pump(lambda: panel.session.summary()["calls"] == 1)
+        self.pump(
+            lambda: panel.session.status(panel.current_point)[0] == "complete",
+            duration=2)
         self.assertEqual(panel.session.summary()["calls"], 1)
         self.assertIn("Lightning Bolt", panel.recorded.get())
         self.assertIn("Lightning Bolt", panel.recommendation.get())
@@ -136,7 +140,8 @@ class GuiTests(unittest.TestCase):
                     "magic_cabt.arena_mirror.gui.SETTINGS_PATH", settings):
                 app = Integrated(self.root)
                 self.panel = app._review_panel
-                self.root.update_idletasks()
+                app._notebook.select(app._replays_tab)
+                self.root.update()
                 self.assertIs(
                     app._review_panel.winfo_toplevel(), self.root)
                 self.assertTrue(app.replay_table.winfo_exists())
