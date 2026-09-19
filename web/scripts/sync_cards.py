@@ -64,8 +64,11 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         source = args.bulk
         if source is None:
-            with get('https://api.scryfall.com/bulk-data/default-cards') as response:
-                metadata = json.load(response)
+            with get('https://api.scryfall.com/bulk-data') as response:
+                listing = json.load(response)
+            metadata = next((entry for entry in listing.get('data', []) if entry.get('type') == 'default_cards'), None)
+            if not metadata or not metadata.get('download_uri'):
+                raise ValueError('Scryfall did not return the default_cards download descriptor.')
             source = Path(tmp) / 'default-cards.json'
             with get(metadata['download_uri']) as response, source.open('wb') as handle:
                 shutil.copyfileobj(response, handle)
