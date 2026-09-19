@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
-import { CardTile, PlayerBar } from './components';
+import { CardTile } from './components';
+import { PlayerBar } from './PlayerBar';
 import { humanPhase, nextPosition, type Analysis, type Card, type Decision, type Frame, type Replay, type View } from './domain';
 import { StableText } from './StableSwap';
+import './viewport.css';
 
 interface ViewerProps {
   replay: Replay; frame: Frame; view: View; decision?: Decision; result?: Analysis;
@@ -17,7 +19,8 @@ export function Viewer(props: ViewerProps) {
   const history = useRef<HTMLOListElement>(null);
   const sample = replay.source === 'example';
   const eligible = saved && !sample && view.priority === seat && !!decision?.supported && decision.min === 1 && decision.max === 1;
-  const opponent = view.players.find(player => player.id !== view.viewer)?.id;
+  const bottom = view.viewer === 'public' ? view.players[0].id : view.viewer;
+  const opponent = view.players.find(player => player.id !== bottom)?.id;
   const options = [...(decision?.options ?? [])].sort((a, b) => (result?.probabilities?.[b.id] ?? 0) - (result?.probabilities?.[a.id] ?? 0));
   useEffect(() => {
     const list = history.current;
@@ -27,8 +30,8 @@ export function Viewer(props: ViewerProps) {
     if (top < list.scrollTop || top + node.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = Math.max(0, top - list.clientHeight / 2);
   }, [position]);
   const tiles = (cards: Card[]) => cards.map(card => <CardTile key={card.ref} card={card} art={art} onInspect={inspect} />);
-  const heroField = view.cards.filter(card => card.zone === 'battlefield' && card.controller === view.viewer);
-  const opponentField = view.cards.filter(card => card.zone === 'battlefield' && card.controller !== view.viewer);
+  const heroField = view.cards.filter(card => card.zone === 'battlefield' && card.controller === bottom);
+  const opponentField = view.cards.filter(card => card.zone === 'battlefield' && card.controller !== bottom);
   const stack = view.cards.filter(card => card.zone === 'stack');
   const hand = view.players.find(player => player.id === view.viewer)?.hand ?? [];
   const other = view.cards.filter(card => !['battlefield', 'stack'].includes(card.zone));
@@ -38,7 +41,7 @@ export function Viewer(props: ViewerProps) {
       <div className="battlefield">
         <div className="board-half opponent-half">{opponent && <PlayerBar view={view} seat={opponent} />}<div className="card-lane">{tiles(opponentField)}{!opponentField.length && <span className="zone-empty">Opponent battlefield</span>}</div></div>
         <div className="stack-lane"><span>STACK</span>{stack.length ? stack.map(card => <button key={card.ref} onClick={() => inspect(card)}>{card.name}</button>) : <small>Empty</small>}</div>
-        <div className="board-half hero-half"><div className="card-lane">{tiles(heroField)}{!heroField.length && <span className="zone-empty">Your battlefield</span>}</div><PlayerBar view={view} seat={view.viewer} /></div>
+        <div className="board-half hero-half"><div className="card-lane">{tiles(heroField)}{!heroField.length && <span className="zone-empty">{view.viewer === 'public' ? 'Player 1 battlefield' : 'Your battlefield'}</span>}</div><PlayerBar view={view} seat={bottom} /></div>
       </div>
       <div className="hand-area"><span className="eyebrow">{view.viewer === 'public' ? 'PUBLIC RECORDING' : 'YOUR HAND'}</span><div className="hand-lane">{tiles(hand)}{!hand.length && <span className="zone-empty">No visible hand cards in this position</span>}</div></div>
       <details className="other-zones"><summary>Graveyards, exile & known information <span>{other.length} cards</span></summary><div>{other.map(card => <button key={card.ref} onClick={() => inspect(card)}>{card.name}<small>{card.zone}</small></button>)}{view.known.map((text, index) => <p key={index}>{text}</p>)}</div></details>

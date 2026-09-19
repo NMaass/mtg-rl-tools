@@ -39,11 +39,12 @@ jobs:
           mvn -B -pl Mage.Server.Plugins/Mage.Player.AI test > /tmp/engine-tests.log 2>&1
           mvn -q -pl Mage.Server.Plugins/Mage.Player.AI dependency:build-classpath -Dmdep.outputFile=target/runtime-classpath.txt
       - name: Test native agent and replay roots
-        if: hashFiles('services/engine/test_native.py') != ''
+        timeout-minutes: 5
         run: |
+          set -o pipefail
           export PYTHONPATH="$GITHUB_WORKSPACE/python:$GITHUB_WORKSPACE/services/engine"
           export MAGIC_CABT_CLASSPATH="/tmp/xmage/Mage.Server.Plugins/Mage.Player.AI/target/classes:$(cat /tmp/xmage/Mage.Server.Plugins/Mage.Player.AI/target/runtime-classpath.txt)"
-          python3 services/engine/test_native.py
+          python3 services/engine/test_native.py 2>&1 | tee /tmp/engine-native.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -51,7 +52,9 @@ jobs:
           path: |
             /tmp/engine-build.log
             /tmp/engine-tests.log
+            /tmp/engine-native.log
             /tmp/xmage/Mage.Server.Plugins/Mage.Player.AI/target/surefire-reports
             engine-native-result.json
             engine-native-replay.jsonl
+            engine-native-divergence.json
           retention-days: 7
