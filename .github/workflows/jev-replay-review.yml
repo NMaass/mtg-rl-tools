@@ -1,0 +1,24 @@
+name: Jev replay review
+on:
+  pull_request:
+    paths:
+      - 'python/**'
+      - '.github/workflows/jev-replay-review.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'python/**'
+      - '.github/workflows/jev-replay-review.yml'
+permissions:
+  contents: read
+jobs:
+  replay-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native UI test dependencies
+        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb
+      - name: Test replay projection, provider client, and native UI
+        working-directory: python
+        run: xvfb-run -a python3 -m unittest discover -s tests -p 'test_jev_review*.py' -v
