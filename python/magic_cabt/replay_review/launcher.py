@@ -1,64 +1,86 @@
-"""Add Jev review to the existing replay library without replacing XMage playback."""
+"""Embed Jev review beside the existing replay transport."""
 
 import argparse
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import ttk
 
-from .ui import ReviewWindow
+from .ui import ReplayReviewPanel
 
 
 class ReviewLibraryMixin:
+    def __init__(self, *args, **kwargs):
+        self._review_manual_navigation = False
+        super().__init__(*args, **kwargs)
+        self.root.geometry("1440x820")
+        self.root.minsize(1180, 700)
+
     def _build_replays_tab(self, frame):
-        self._review_windows = []
-        self._review_key = tk.StringVar()
-        toolbar = ttk.Frame(frame)
-        toolbar.pack(fill=tk.X, pady=(0, 4))
-        ttk.Label(toolbar, text="OpenRouter key").pack(side=tk.LEFT)
-        self._review_entry = ttk.Entry(toolbar, textvariable=self._review_key,
-                                       show="*", width=28)
-        self._review_entry.pack(side=tk.LEFT, padx=8)
-        ttk.Button(toolbar, text="Clear key", command=self._clear_review_key).pack(side=tk.LEFT)
-        ttk.Button(toolbar, text="Review with Jev", style="Accent.TButton",
-                   command=self._open_review).pack(side=tk.RIGHT)
-        ttk.Button(toolbar, text="Open decision file...", command=self._open_review_file).pack(side=tk.RIGHT, padx=6)
-        ttk.Label(frame, text="Session-only key. Review sends the visible pre-action state and captured choices to OpenRouter / TypeSafe. No calls on opening.",
-                  wraplength=940, style="Muted.TLabel").pack(anchor="w", pady=(0, 12))
-        super()._build_replays_tab(frame)
+        layout = tk.PanedWindow(
+            frame, orient=tk.HORIZONTAL, sashwidth=8, bd=0,
+            bg="#1b1d24", opaqueresize=True)
+        layout.pack(fill=tk.BOTH, expand=True)
 
-    def _open_review(self):
-        selected = self.replay_table.selection()
-        bundle = self._replay_paths.get(selected[0]) if selected else None
-        if not bundle:
-            messagebox.showinfo("Select a replay", "Select a recorded match from the replay library.", parent=self.root)
+        replay_side = ttk.Frame(layout)
+        review_side = ttk.Frame(layout, width=410, style="Card.TFrame")
+        layout.add(replay_side, stretch="always", minsize=700)
+        layout.add(review_side, stretch="never", minsize=360, width=410)
+
+        super()._build_replays_tab(replay_side)
+
+        self._review_panel = ReplayReviewPanel(review_side)
+        self._review_panel.pack(fill=tk.BOTH, expand=True)
+        selection = self.replay_table.selection()
+        if selection:
+            bundle = self._replay_paths.get(selection[0])
+            if bundle:
+                self._review_panel.load_bundle(bundle)
+
+    def _on_replay_selected(self, event=None):
+        super()._on_replay_selected(event)
+        panel = getattr(self, "_review_panel", None)
+        if panel is None:
             return
-        self._review(bundle)
+        selection = self.replay_table.selection()
+        bundle = self._replay_paths.get(selection[0]) if selection else None
+        if bundle and bundle != panel.bundle:
+            panel.load_bundle(bundle)
 
-    def _open_review_file(self):
-        path = filedialog.askopenfilename(parent=self.root, title="Open a captured decision stream",
-                                         filetypes=[("JSONL decisions / XMage game", "*.jsonl")])
-        if path:
-            self._review(path)
+    def watch_replay(self):
+        selection = self.replay_table.selection()
+        panel = getattr(self, "_review_panel", None)
+        if selection and panel is not None:
+            bundle = self._replay_paths.get(selection[0])
+            if bundle and bundle != panel.bundle:
+                panel.load_bundle(bundle)
+        return super().watch_replay()
 
-    def _review(self, bundle):
-        self._review_windows = [w for w in self._review_windows if not w._closed]
-        try:
-            window = ReviewWindow(self.root, bundle, api_key=self._review_key.get())
-        except ValueError:
-            messagebox.showerror("Invalid key", "Paste an OpenRouter key without spaces, or leave it blank to inspect offline.", parent=self.root)
+    def _transport(self, action, arg=None):
+        if action in ("step", "jump", "seek"):
+            self._review_manual_navigation = True
+        return super()._transport(action, arg)
+
+    def _on_scrub_seek(self, index):
+        self._review_manual_navigation = True
+        return super()._on_scrub_seek(index)
+
+    def _handle_event(self, kind, payload):
+        super()._handle_event(kind, payload)
+        panel = getattr(self, "_review_panel", None)
+        if panel is None or kind != "replay_progress":
             return
-        self._review_windows.append(window)
-
-    def _clear_review_key(self):
-        self._review_key.set("")
-        for window in self._review_windows:
-            if not window._closed:
-                window.disconnect()
+        generation, info = payload
+        if generation != self._replay_generation or                 self._replay_controller is None:
+            return
+        manual_step = bool(
+            self._review_manual_navigation and not info.get("playing"))
+        panel.sync_frame(info.get("index"), analyze_after_step=manual_step)
+        if manual_step:
+            self._review_manual_navigation = False
 
     def _on_close(self):
-        self._clear_review_key()
-        for window in self._review_windows:
-            if not window._closed:
-                window.close()
+        panel = getattr(self, "_review_panel", None)
+        if panel is not None:
+            panel.close()
         super()._on_close()
 
 
@@ -68,7 +90,8 @@ def main(argv=None):
     class JevArenaMirrorApp(ReviewLibraryMixin, ArenaMirrorApp):
         pass
 
-    parser = argparse.ArgumentParser(description="Arena mirror with post-step Jev replay review.")
+    parser = argparse.ArgumentParser(
+        description="Arena replay viewer with embedded post-step Jev review.")
     parser.add_argument("--classpath", default=None)
     parser.add_argument("--java", default="java")
     args = parser.parse_args(argv)
