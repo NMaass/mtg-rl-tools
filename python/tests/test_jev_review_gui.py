@@ -43,6 +43,8 @@ class GuiTests(unittest.TestCase):
             time.sleep(.005)
 
     def open_panel(self, analyzer=None, key="fixture-key"):
+        self.root.geometry("430x760")
+        self.root.deiconify()
         session = ReviewSession(
             analyzer or
             (lambda p, k: client.analyze(
