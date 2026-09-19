@@ -5,7 +5,8 @@ interface Job { id:string;position:number;seat:string;key:string;retry:boolean;e
 export function useAnalysis(){
   const [results,setResults]=useState<Record<string,Analysis>>({});
   const pending=useRef<Job|null>(null),running=useRef(false),epoch=useRef(0),cache=useRef<Record<string,Analysis>>({}),mounted=useRef(true);
-  useEffect(()=>()=>{mounted.current=false;pending.current=null;epoch.current++},[]);
+  const scheduled=useRef<ReturnType<typeof setTimeout>|null>(null);
+  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;pending.current=null;epoch.current++;if(scheduled.current)clearTimeout(scheduled.current)}},[]);
   const drain=useCallback(async()=>{
     if(running.current)return;running.current=true;
     try{
@@ -30,8 +31,14 @@ export function useAnalysis(){
   },[drain]);
   const cancel=useCallback(()=>{
     epoch.current++;
+    if(scheduled.current){clearTimeout(scheduled.current);scheduled.current=null}
     if(pending.current){const key=pending.current.key;delete cache.current[key];setResults(r=>{const next={...r};delete next[key];return next})}
     pending.current=null;
   },[]);
-  return {results,request,cancel};
+  const schedule=useCallback((id:string,position:number,seat:string)=>{
+    if(scheduled.current)clearTimeout(scheduled.current);
+    const version=epoch.current;
+    scheduled.current=setTimeout(()=>{scheduled.current=null;if(version===epoch.current)request(id,position,seat)},100);
+  },[request]);
+  return {results,request,cancel,schedule};
 }

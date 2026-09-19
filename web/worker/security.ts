@@ -34,7 +34,7 @@ export async function unseal(value:string,owner:string,secret:string) {
   const [version,iv,data]=value.split('.');if(version!=='v1'||!iv||!data)throw new Error('Unsupported stored key.');
   return new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:bytes(iv),additionalData:new TextEncoder().encode(owner)},await encryptionKey(secret),bytes(data)));
 }
-export async function readJson(request:Request,max=8*1024*1024):Promise<unknown> {
+export async function readJson(request:Pick<Request,'body'>,max=8*1024*1024):Promise<unknown> {
   const reader=request.body?.getReader();if(!reader)throw new Error('Missing request body.');
   const chunks:Uint8Array[]=[];let length=0;
   try{for(;;){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>max)throw new Error('Request is too large.');chunks.push(value)}}finally{await reader.cancel().catch(()=>{});reader.releaseLock()}
