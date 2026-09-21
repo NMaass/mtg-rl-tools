@@ -52,6 +52,7 @@ public final class CabtSemanticOrder {
                 ? "" : game.getState().getZone(id).name());
         key.append('|').append(safe(object.getName()));
         key.append('|').append(object.getClass().getName());
+        key.append("|zcc=").append(object.getZoneChangeCounter(game));
         if (object instanceof Ownerable) {
             key.append("|owner=").append(pad(playerIndex(
                     game, ((Ownerable) object).getOwnerId())));
@@ -68,6 +69,11 @@ public final class CabtSemanticOrder {
                     ? "" : permanent.getPower().getValue());
             key.append("|toughness=").append(permanent.getToughness() == null
                     ? "" : permanent.getToughness().getValue());
+            key.append("|damage=").append(permanent.getDamage());
+            key.append("|summoningSickness=").append(permanent.hasSummoningSickness());
+            key.append("|attacking=").append(permanent.isAttacking());
+            key.append("|blocked=").append(permanent.isBlocked(game));
+            key.append("|attachedTo=").append(targetKey(game, permanent.getAttachedTo()));
             List<String> counters = new ArrayList<String>();
             if (permanent.getCounters(game) != null) {
                 for (Counter counter : permanent.getCounters(game).values()) {
