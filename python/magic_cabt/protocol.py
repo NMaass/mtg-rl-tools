@@ -197,14 +197,30 @@ class CabtBridge(object):
         return self._track(self.request(request))
 
     def game_select(self, select_list):
-        """Answer the pending decision with option indices; returns the next
-        decision response (or the game result once ``finished``)."""
+        """Answer the pending decision with live option indices.
+
+        Persisted replay/checkpoint code should prefer game_select_ids.
+        """
         if not isinstance(select_list, list) or not all(
             isinstance(i, int) and not isinstance(i, bool) for i in select_list
         ):
             raise ValueError("select_list must be a list of ints")
         return self._track(
             self.request({"command": "game_select", "select": select_list})
+        )
+
+    def game_select_ids(self, action_ids):
+        """Answer by stable semantic action ids from select.option[].actionId.
+
+        The server resolves ids against the current engine prompt and rejects a
+        missing, duplicate, or stale id before advancing the game.
+        """
+        if not isinstance(action_ids, list) or not all(
+            isinstance(value, str) and value for value in action_ids
+        ):
+            raise ValueError("action_ids must be a list of non-empty strings")
+        return self._track(
+            self.request({"command": "game_select", "selectIds": action_ids})
         )
 
     def game_finish(self):
