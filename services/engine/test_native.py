@@ -46,7 +46,7 @@ try:
             Path('engine-native-divergence.json').write_text(json.dumps(diagnostic, indent=2))
             print(json.dumps(diagnostic, indent=2), flush=True)
             raise ReplayDivergenceError('Native reconstruction diverged at decision %d; see diagnostic.' % index)
-        probe.step(step['selection'], step['fingerprint'])
+        probe.step_action_ids(step['actionIds'], step['fingerprint'])
 finally:
     probe.close()
 
@@ -62,15 +62,18 @@ def deterministic_trace(spec, decisions=80, selector=None):
             current = session.observation()
             observation = current['observation']
             selection = selector(observation) if selector is not None else agent.select(observation)
+            options = observation['select'].get('option', [])
+            selected_action_ids = [options[index]['actionId'] for index in selection]
             trace.append({
                 'public': current['fingerprint'],
                 'engine': current['engineFingerprint'],
                 'selectType': observation['select'].get('type'),
                 'options': [
-                    (option.get('type'), option.get('label'))
-                    for option in observation['select'].get('option', [])
+                    (option.get('actionId'), option.get('type'), option.get('label'))
+                    for option in options
                 ],
                 'selection': list(selection),
+                'actionIds': selected_action_ids,
             })
             session.step(selection, current['fingerprint'])
         terminal = session.finished
@@ -153,7 +156,7 @@ assert any(row['selectType'] == 'TARGET' for row in spell_a), \
 
 branch_source = NativeSession(play_spec)
 branch_checkpoint = None
-branch_selection = None
+branch_action_ids = None
 branch_agent = make_agent('random', seed=4455)
 try:
     for _ in range(120):
@@ -166,7 +169,7 @@ try:
         maximum = select.get('maxCount', len(options))
         if minimum == 1 and maximum == 1 and len(options) >= 2:
             branch_checkpoint = branch_source.checkpoint()
-            branch_selection = [len(options) - 1]
+            branch_action_ids = [options[-1]['actionId']]
             break
         branch_source.step(
             branch_agent.select(current['observation']),
@@ -174,7 +177,7 @@ try:
 finally:
     branch_source.close()
 
-assert branch_checkpoint is not None and branch_selection is not None, \
+assert branch_checkpoint is not None and branch_action_ids is not None, \
     'Could not find a deterministic single-choice branch root.'
 
 branch_a = NativeSession.restore(branch_checkpoint)
@@ -184,8 +187,8 @@ try:
     before_b = branch_b.observation()
     assert before_a['fingerprint'] == before_b['fingerprint']
     assert before_a['engineFingerprint'] == before_b['engineFingerprint']
-    after_a = branch_a.step(branch_selection, before_a['fingerprint'])
-    after_b = branch_b.step(branch_selection, before_b['fingerprint'])
+    after_a = branch_a.step_action_ids(branch_action_ids, before_a['fingerprint'])
+    after_b = branch_b.step_action_ids(branch_action_ids, before_b['fingerprint'])
     assert after_a.get('finished') == after_b.get('finished')
     if not after_a.get('finished'):
         assert after_a['fingerprint'] == after_b['fingerprint']
@@ -213,6 +216,8 @@ try:
               'targetedSpellRepeatRuns': 2,
               'verifiedTargetPrompt': any(row['selectType'] == 'TARGET' for row in spell_a),
               'verifiedAlternativeBranch': True,
+              'verifiedSemanticActionIds': all(
+                  step.get('actionIds') for step in checkpoint['steps']),
               'interpretation': 'A deterministic replay/restore smoke test over semantic public actions and a private hidden-state digest on creature/combat and targeted-spell paths; not complete card/rules equivalence or a throughput benchmark.'}
     Path('engine-native-result.json').write_text(json.dumps(report, indent=2))
     print(json.dumps(report))
