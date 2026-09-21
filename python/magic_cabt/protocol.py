@@ -261,10 +261,12 @@ class CabtBridge(object):
         return self.request({"command": "visualize_data"})["text"]
 
     def engine_fingerprint(self):
-        """Private semantic digest of complete engine state, including hidden zones.
+        """Private semantic verification digest including hidden zones.
 
-        This is a verification surface, not an agent observation. It intentionally
-        exposes only the digest, never the hidden-state payload.
+        This is a verification surface, not an agent observation or a byte-for-byte
+        serialization of every XMage internal. It covers hidden card identity/order
+        plus decision-relevant player, battlefield, stack, exile and command state,
+        and exposes only the digest.
         """
         return self.request({"command": "engine_fingerprint"})["sha256"]
 
