@@ -123,7 +123,8 @@ public final class CabtEngineFingerprint {
     }
 
     private static String cardKey(Game game, Card card) {
-        return safe(card.getName()) + "|" + safe(card.getClass().getName())
+        String semanticId = CabtSemanticIds.get(game, card.getId());
+        return "ref=" + safe(semanticId) + "|" + safe(card.getName()) + "|" + safe(card.getClass().getName())
                 + "|owner=" + CabtSemanticOrder.playerIndex(game, card.getOwnerId())
                 + "|zone=" + (game.getState() == null || game.getState().getZone(card.getId()) == null
                 ? "" : game.getState().getZone(card.getId()).name())
