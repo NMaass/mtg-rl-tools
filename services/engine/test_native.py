@@ -17,7 +17,7 @@ try:
         current = session.observation()
         expected.append({
             'public': observation_signature(current['observation']),
-            'engine': current['engineFingerprint'],
+            'engine': session.verification_fingerprint(),
             'observation': current['observation'],
         })
         session.step(agent.select(current['observation']), current['fingerprint'])
@@ -39,7 +39,7 @@ try:
         observed = probe.observation()
         actual = {
             'public': observation_signature(observed['observation']),
-            'engine': observed['engineFingerprint'],
+            'engine': probe.verification_fingerprint(),
         }
         actual['observation'] = observed['observation']
         if (actual['public']['sha256'] != expected[index]['public']['sha256'] or
@@ -69,7 +69,7 @@ def deterministic_trace(spec, decisions=80, selector=None):
             selected_action_ids = [options[index]['actionId'] for index in selection]
             trace.append({
                 'public': current['fingerprint'],
-                'engine': current['engineFingerprint'],
+                'engine': session.verification_fingerprint(),
                 'selectType': observation['select'].get('type'),
                 'options': [
                     (option.get('actionId'), option.get('type'), option.get('label'))
@@ -99,6 +99,8 @@ trace_a, terminal_a, result_a = deterministic_trace(play_spec)
 trace_b, terminal_b, result_b = deterministic_trace(play_spec)
 trace_c, terminal_c, result_c = deterministic_trace(play_spec)
 assert trace_a == trace_b == trace_c, 'Same seed/action policy did not reproduce the same semantic and hidden-state trace.'
+assert all('engineFingerprint' not in row['observation'] for row in trace_a), \
+    'Private verification state leaked into an agent observation.'
 assert terminal_a == terminal_b == terminal_c
 assert result_a == result_b == result_c
 uuid_pattern = __import__('re').compile(
@@ -196,14 +198,14 @@ try:
     before_a = branch_a.observation()
     before_b = branch_b.observation()
     assert before_a['fingerprint'] == before_b['fingerprint']
-    assert before_a['engineFingerprint'] == before_b['engineFingerprint']
+    assert branch_a.verification_fingerprint() == branch_b.verification_fingerprint()
     assert before_a['observation'] == before_b['observation']
     after_a = branch_a.step_action_ids(branch_action_ids, before_a['fingerprint'])
     after_b = branch_b.step_action_ids(branch_action_ids, before_b['fingerprint'])
     assert after_a.get('finished') == after_b.get('finished')
     if not after_a.get('finished'):
         assert after_a['fingerprint'] == after_b['fingerprint']
-        assert after_a['engineFingerprint'] == after_b['engineFingerprint']
+        assert branch_a.verification_fingerprint() == branch_b.verification_fingerprint()
         assert after_a['observation'] == after_b['observation']
     else:
         assert after_a['result'] == after_b['result']
@@ -215,7 +217,7 @@ restored = NativeSession.restore(checkpoint)
 try:
     rebuilt = restored.observation()
     assert rebuilt['fingerprint'] == checkpoint['root']['fingerprint']
-    assert rebuilt['engineFingerprint'] == checkpoint['root']['engineFingerprint']
+    assert restored.verification_fingerprint() == checkpoint['root']['engineFingerprint']
     result = restored.autoplay(['random', 'first'], 200)
     Path('engine-native-replay.jsonl').write_text('\n'.join(json.dumps(frame) for frame in result['frames']) + '\n')
     report = {'reference': checkpoint['revision'], 'restoredPrefix': len(checkpoint['steps']),
