@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -80,8 +81,8 @@ class CabtTriggeredAbilityPromptBuilderTest {
         Collections.reverse(reversed);
         PendingDecision backward = builder.build(alice, game, reversed);
 
-        assertThat(backward.options().stream().map(MagicOption::label).toList())
-                .isEqualTo(forward.options().stream().map(MagicOption::label).toList());
+        assertThat(backward.options().stream().map(MagicOption::label).collect(Collectors.toList()))
+                .isEqualTo(forward.options().stream().map(MagicOption::label).collect(Collectors.toList()));
         TriggeredAbility picked = applier.apply(reversed, Selection.of(0), backward);
         assertThat(picked.getId().toString())
                 .isEqualTo(backward.options().get(0).payload().get("abilityId"));
