@@ -43,10 +43,16 @@ public final class CabtCombatOptionFactory {
     }
 
     public static MagicOption toMagicOption(CabtCombatAttackOption attack) {
+        return toMagicOption(null, attack);
+    }
+
+    public static MagicOption toMagicOption(Game game, CabtCombatAttackOption attack) {
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
         payload.put("attackerId", attack.getAttackerId().toString());
+        payload.put("attackerRef", CabtSemanticIds.get(game, attack.getAttackerId()));
         payload.put("attackerName", attack.getAttackerName());
         payload.put("defenderId", attack.getDefenderId().toString());
+        payload.put("defenderRef", CabtSemanticIds.get(game, attack.getDefenderId()));
         payload.put("defenderName", attack.getDefenderName());
         payload.put("defenderType", attack.getDefenderType());
         return new MagicOption(MagicOptionType.PROMPT_ATTACKER,
@@ -55,13 +61,21 @@ public final class CabtCombatOptionFactory {
     }
 
     public static MagicOption toMagicOption(CabtCombatBlockOption block) {
+        return toMagicOption(null, block);
+    }
+
+    public static MagicOption toMagicOption(Game game, CabtCombatBlockOption block) {
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
         payload.put("blockerId", block.getBlockerId().toString());
+        payload.put("blockerRef", CabtSemanticIds.get(game, block.getBlockerId()));
         payload.put("blockerName", block.getBlockerName());
         payload.put("attackerId", block.getAttackerId().toString());
+        payload.put("attackerRef", CabtSemanticIds.get(game, block.getAttackerId()));
         payload.put("attackerName", block.getAttackerName());
         payload.put("defendingPlayerId", block.getDefendingPlayerId() == null
                 ? null : block.getDefendingPlayerId().toString());
+        payload.put("defendingPlayerRef", block.getDefendingPlayerId() == null
+                ? null : CabtSemanticIds.get(game, block.getDefendingPlayerId()));
         return new MagicOption(MagicOptionType.PROMPT_BLOCKER,
                 "Block " + block.getAttackerName() + " with " + block.getBlockerName(),
                 payload);
