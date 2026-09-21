@@ -162,6 +162,8 @@ public final class CabtGameSession {
     private final MagicObservationSerializer serializer = new MagicObservationSerializer();
     private final List<Card> deckCards = new ArrayList<Card>();
     private final long decisionTimeoutSeconds;
+    private final Long seed;
+    private static final Object ENGINE_RANDOM_LOCK = new Object();
 
     private Thread gameThread;
     private Event currentEvent;
@@ -183,11 +185,7 @@ public final class CabtGameSession {
             config = new Config();
         }
         this.decisionTimeoutSeconds = config.decisionTimeoutSeconds;
-        if (config.seed != null) {
-            // engine-global randomness (shuffles, coin flips): best-effort
-            // determinism for single-session processes
-            RandomUtil.setSeed(config.seed);
-        }
+        this.seed = config.seed;
 
         this.game = new CabtLiveDuel();
         this.controller = new CabtBlockingBridgeController(events);
@@ -224,7 +222,17 @@ public final class CabtGameSession {
             @Override
             public void run() {
                 try {
-                    game.start(player0.getId());
+                    synchronized (ENGINE_RANDOM_LOCK) {
+                        if (seed != null) {
+                            // XMage's RNG is process-global. Seed immediately before
+                            // the engine begins consuming randomness, after all card
+                            // and player construction. Serializing CABT games in one
+                            // JVM makes seeded transcripts reproducible; parallel
+                            // deterministic actors use one JVM process per worker.
+                            RandomUtil.setSeed(seed);
+                        }
+                        game.start(player0.getId());
+                    }
                     events.put(Event.gameOver(game.getWinner(),
                             serializer.serializeCurrent(game, null)));
                 } catch (CabtSessionClosedException e) {
