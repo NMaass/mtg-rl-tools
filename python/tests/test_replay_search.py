@@ -103,6 +103,28 @@ class SignatureTest(unittest.TestCase):
             observation_signature(b)["sha256"],
         )
 
+    def test_preserves_controller_relationships_across_uuid_changes(self):
+        a = response(2, "PRIORITY", 0, ["Attack", "Hold"])["observation"]
+        b = response(2, "PRIORITY", 0, ["Attack", "Hold"])["observation"]
+        ids_a = ["11111111-1111-1111-1111-111111111111",
+                 "22222222-2222-2222-2222-222222222222"]
+        ids_b = ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                 "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
+        for index in range(2):
+            a["current"]["players"][index]["playerId"] = ids_a[index]
+            b["current"]["players"][index]["playerId"] = ids_b[index]
+        a["current"]["battlefield"] = [{
+            "ref": {"name": "Control Magic"}, "controllerId": ids_a[1],
+            "ownerId": ids_a[0], "tapped": False}]
+        b["current"]["battlefield"] = [{
+            "ref": {"name": "Control Magic"}, "controllerId": ids_b[1],
+            "ownerId": ids_b[0], "tapped": False}]
+        self.assertEqual(observation_signature(a)["sha256"],
+                         observation_signature(b)["sha256"])
+        b["current"]["battlefield"][0]["controllerId"] = ids_b[0]
+        self.assertNotEqual(observation_signature(a)["sha256"],
+                            observation_signature(b)["sha256"])
+
     def test_preserves_active_and_priority_player_semantics_across_uuid_changes(self):
         a = response(2, "PRIORITY", 0, ["Attack", "Hold"])["observation"]
         b = response(2, "PRIORITY", 0, ["Attack", "Hold"])["observation"]
