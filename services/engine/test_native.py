@@ -159,7 +159,7 @@ assert spell_a == spell_b, \
 assert spell_terminal_a == spell_terminal_b
 assert spell_result_a == spell_result_b
 assert any(
-    any(option[0] == 'CAST_SPELL' for option in row['options'])
+    any(option[1] == 'CAST_SPELL' for option in row['options'])
     for row in spell_a
 ), 'Targeted-spell fixture never exposed a cast-spell legal action.'
 assert any(row['selectType'] == 'TARGET' for row in spell_a), \
