@@ -40,12 +40,18 @@ public final class CabtBlockersPromptBuilder {
         pairs.sort(new Comparator<CabtCombatBlockOption>() {
             @Override
             public int compare(CabtCombatBlockOption left, CabtCombatBlockOption right) {
-                int byBlocker = left.getBlockerId().toString()
-                        .compareTo(right.getBlockerId().toString());
+                int byBlocker = CabtSemanticOrder.targetKey(game, left.getBlockerId())
+                        .compareTo(CabtSemanticOrder.targetKey(game, right.getBlockerId()));
                 if (byBlocker != 0) {
                     return byBlocker;
                 }
-                return left.getAttackerId().toString().compareTo(right.getAttackerId().toString());
+                int byAttacker = CabtSemanticOrder.targetKey(game, left.getAttackerId())
+                        .compareTo(CabtSemanticOrder.targetKey(game, right.getAttackerId()));
+                if (byAttacker != 0) {
+                    return byAttacker;
+                }
+                int idTie = left.getBlockerId().toString().compareTo(right.getBlockerId().toString());
+                return idTie != 0 ? idTie : left.getAttackerId().toString().compareTo(right.getAttackerId().toString());
             }
         });
         PendingDecision decision = new PendingDecision(
