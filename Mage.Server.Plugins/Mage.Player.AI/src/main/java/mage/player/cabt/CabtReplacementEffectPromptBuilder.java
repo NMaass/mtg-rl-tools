@@ -1,6 +1,8 @@
 package mage.player.cabt;
 
-import mage.MageObject;\nimport mage.game.Game;\nimport mage.players.Player;
+import mage.MageObject;
+import mage.game.Game;
+import mage.players.Player;
 
 import java.util.ArrayList;
 import java.util.Comparator;
