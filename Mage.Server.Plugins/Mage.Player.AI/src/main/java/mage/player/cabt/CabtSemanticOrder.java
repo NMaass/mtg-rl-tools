@@ -44,6 +44,10 @@ public final class CabtSemanticOrder {
 
         StringBuilder key = new StringBuilder();
         key.append("1|object|");
+        String semanticId = CabtSemanticIds.get(game, id);
+        if (semanticId != null) {
+            key.append("ref=").append(semanticId).append('|');
+        }
         key.append(game.getState() == null || game.getState().getZone(id) == null
                 ? "" : game.getState().getZone(id).name());
         key.append('|').append(safe(object.getName()));
