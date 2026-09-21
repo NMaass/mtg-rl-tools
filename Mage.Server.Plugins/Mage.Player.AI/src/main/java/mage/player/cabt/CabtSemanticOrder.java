@@ -1,0 +1,99 @@
+package mage.player.cabt;
+
+import mage.MageObject;
+import mage.counters.Counter;
+import mage.game.Controllable;
+import mage.game.Game;
+import mage.game.Ownerable;
+import mage.game.permanent.Permanent;
+import mage.players.Player;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * Stable semantic ordering keys for bridge options.
+ *
+ * XMage intentionally uses UUIDs as object identities. Those UUIDs are not
+ * reproducible across fresh JVM game constructions, so UUID ordering must not
+ * leak into the agent-facing option index contract. These keys use game
+ * semantics first (player seat, zone, card/object name, ownership/controller,
+ * and permanent state). Raw UUIDs may only be used by callers as a final
+ * within-run tie breaker for semantically indistinguishable objects.
+ */
+public final class CabtSemanticOrder {
+
+    private CabtSemanticOrder() {
+    }
+
+    public static String targetKey(Game game, UUID id) {
+        Player player = game.getPlayer(id);
+        if (player != null) {
+            return "0|player|" + pad(playerIndex(game, id)) + "|" + safe(player.getName());
+        }
+        MageObject object = game.getObject(id);
+        if (object == null) {
+            object = game.getCard(id);
+        }
+        if (object == null) {
+            return "9|unresolved";
+        }
+
+        StringBuilder key = new StringBuilder();
+        key.append("1|object|");
+        key.append(game.getState() == null || game.getState().getZone(id) == null
+                ? "" : game.getState().getZone(id).name());
+        key.append('|').append(safe(object.getName()));
+        key.append('|').append(object.getClass().getName());
+        if (object instanceof Ownerable) {
+            key.append("|owner=").append(pad(playerIndex(
+                    game, ((Ownerable) object).getOwnerId())));
+        }
+        if (object instanceof Controllable) {
+            key.append("|controller=").append(pad(playerIndex(
+                    game, ((Controllable) object).getControllerId())));
+        }
+        if (object instanceof Permanent) {
+            Permanent permanent = (Permanent) object;
+            key.append("|tapped=").append(permanent.isTapped());
+            key.append("|faceDown=").append(permanent.isFaceDown(game));
+            key.append("|power=").append(permanent.getPower() == null
+                    ? "" : permanent.getPower().getValue());
+            key.append("|toughness=").append(permanent.getToughness() == null
+                    ? "" : permanent.getToughness().getValue());
+            List<String> counters = new ArrayList<String>();
+            if (permanent.getCounters(game) != null) {
+                for (Counter counter : permanent.getCounters(game).values()) {
+                    counters.add(counter.getName() + "=" + counter.getCount());
+                }
+            }
+            Collections.sort(counters);
+            key.append("|counters=").append(counters);
+        }
+        return key.toString();
+    }
+
+    public static int playerIndex(Game game, UUID id) {
+        if (id == null || game.getPlayerList() == null) {
+            return Integer.MAX_VALUE;
+        }
+        int index = 0;
+        for (UUID playerId : game.getPlayerList()) {
+            if (id.equals(playerId)) {
+                return index;
+            }
+            index++;
+        }
+        return Integer.MAX_VALUE;
+    }
+
+    private static String pad(int value) {
+        return value == Integer.MAX_VALUE ? "x" : String.format("%03d", value);
+    }
+
+    private static String safe(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+}
