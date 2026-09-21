@@ -1,7 +1,6 @@
 package mage.player.cabt;
 
-import mage.MageObject;
-import mage.players.Player;
+import mage.MageObject;\nimport mage.game.Game;\nimport mage.players.Player;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -18,6 +17,11 @@ public final class CabtReplacementEffectPromptBuilder {
 
     public PendingDecision build(Player player, Map<String, String> effectsMap,
                                  Map<String, MageObject> objectsMap) {
+        return build(player, null, effectsMap, objectsMap);
+    }
+
+    public PendingDecision build(Player player, Game game, Map<String, String> effectsMap,
+                                 Map<String, MageObject> objectsMap) {
         PendingDecision decision = new PendingDecision(
                 MagicSelectType.REPLACEMENT_EFFECT, player.getId(), 1, 1);
         List<MagicOption> options = new ArrayList<MagicOption>();
@@ -25,7 +29,7 @@ public final class CabtReplacementEffectPromptBuilder {
         for (Map.Entry<String, String> entry : effectsMap.entrySet()) {
             MageObject object = objectsMap == null ? null : objectsMap.get(entry.getKey());
             options.add(CabtReplacementEffectOptionFactory.replacementEffectOption(
-                    entry.getKey(), entry.getValue(), object, originalIndex));
+                    game, entry.getKey(), entry.getValue(), object, originalIndex));
             originalIndex++;
         }
         options.sort(new Comparator<MagicOption>() {
