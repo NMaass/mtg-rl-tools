@@ -17,7 +17,7 @@ import java.util.UUID;
 public final class CabtTargetOptionFactory {
 
     static final String PAYLOAD_TARGET_ID = "targetId";
-    static final String PAYLOAD_TARGET_NAME = "targetName";
+    static final String PAYLOAD_TARGET_REF = "targetRef";\n    static final String PAYLOAD_TARGET_NAME = "targetName";
     static final String PAYLOAD_TARGET_CLASS = "targetClass";
     static final String PAYLOAD_ZONE = "zone";
     static final String PAYLOAD_ALREADY_CHOSEN = "alreadyChosen";
@@ -70,7 +70,7 @@ public final class CabtTargetOptionFactory {
     private static Map<String, Object> payload(Game game, UUID targetId, String name,
                                                String targetClass, boolean alreadyChosen) {
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
-        payload.put(PAYLOAD_TARGET_ID, targetId.toString());
+        payload.put(PAYLOAD_TARGET_ID, targetId.toString());\n        payload.put(PAYLOAD_TARGET_REF, CabtSemanticIds.get(game, targetId));
         payload.put(PAYLOAD_TARGET_NAME, name);
         payload.put(PAYLOAD_TARGET_CLASS, targetClass);
         payload.put(PAYLOAD_ZONE, zoneName(game, targetId));
