@@ -87,6 +87,25 @@ public final class CabtSemanticOrder {
         return key.toString();
     }
 
+    public static String optionKey(MagicOption option) {
+        StringBuilder key = new StringBuilder();
+        key.append(option.type() == null ? "" : option.type().name());
+        key.append('|').append(safe(option.label()));
+        String[] semanticFields = new String[]{
+                "sourceName", "rule", "manaCost", "modeText", "selectedCount",
+                "objectName", "objectClass", "abilityRule", "manaType", "available",
+                "effectText", "choiceValue", "choiceLabel", "targetName",
+                "targetClass", "zone", "abilityClass", "unpaid", "promptText"
+        };
+        for (String field : semanticFields) {
+            if (option.payload().containsKey(field)) {
+                key.append('|').append(field).append('=')
+                        .append(safe(option.payload().get(field)));
+            }
+        }
+        return key.toString();
+    }
+
     public static int playerIndex(Game game, UUID id) {
         if (id == null || game.getPlayerList() == null) {
             return Integer.MAX_VALUE;
