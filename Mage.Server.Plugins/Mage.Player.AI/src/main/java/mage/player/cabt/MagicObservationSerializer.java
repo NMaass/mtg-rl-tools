@@ -13,6 +13,7 @@ import mage.players.Player;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -204,24 +205,36 @@ public final class MagicObservationSerializer {
         return game.getStep() == null ? null : game.getStep().getType();
     }
 
-    private static List<UUID> orderedPlayerIds(Game game) {
+    private static List<UUID> orderedPlayerIds(final Game game) {
         List<UUID> ids = new ArrayList<UUID>();
         if (game.getPlayerList() != null) {
             for (UUID playerId : game.getPlayerList()) {
                 ids.add(playerId);
             }
         }
+        ids.sort(new Comparator<UUID>() {
+            @Override
+            public int compare(UUID left, UUID right) {
+                int leftSeat = CabtSemanticOrder.playerIndex(game, left);
+                int rightSeat = CabtSemanticOrder.playerIndex(game, right);
+                int bySeat = Integer.compare(leftSeat, rightSeat);
+                if (bySeat != 0) {
+                    return bySeat;
+                }
+                Player leftPlayer = game.getPlayer(left);
+                Player rightPlayer = game.getPlayer(right);
+                String leftName = leftPlayer == null ? "" : leftPlayer.getName();
+                String rightName = rightPlayer == null ? "" : rightPlayer.getName();
+                int byName = leftName.compareTo(rightName);
+                return byName != 0 ? byName : left.toString().compareTo(right.toString());
+            }
+        });
         return ids;
     }
 
     private static int indexOf(Game game, UUID playerId) {
-        List<UUID> ids = orderedPlayerIds(game);
-        for (int i = 0; i < ids.size(); i++) {
-            if (ids.get(i).equals(playerId)) {
-                return i;
-            }
-        }
-        return -1;
+        int seat = CabtSemanticOrder.playerIndex(game, playerId);
+        return seat == Integer.MAX_VALUE ? -1 : seat;
     }
 
     private static String nullableToString(Object value) {
