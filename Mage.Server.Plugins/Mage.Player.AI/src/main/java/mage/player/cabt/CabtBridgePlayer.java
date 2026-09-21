@@ -249,7 +249,7 @@ public final class CabtBridgePlayer extends ComputerPlayer {
     @Override
     public boolean choosePile(Outcome outcome, String message,
                               List<? extends Card> pile1, List<? extends Card> pile2, Game game) {
-        PendingDecision decision = pilePromptBuilder.build(this, message, pile1, pile2);
+        PendingDecision decision = pilePromptBuilder.build(this, game, message, pile1, pile2);
         TracedSelection traced = prompt("CHOOSE_PILE", decision, game);
         return applyTraced(traced, () -> {
             MagicOption selected = decision.options().get(traced.selection.indices().get(0));
@@ -331,7 +331,7 @@ public final class CabtBridgePlayer extends ComputerPlayer {
             // same single-effect shortcut as HumanPlayer.chooseReplacementEffect
             return 0;
         }
-        PendingDecision decision = replacementEffectPromptBuilder.build(this, effectsMap, objectsMap);
+        PendingDecision decision = replacementEffectPromptBuilder.build(this, game, effectsMap, objectsMap);
         TracedSelection traced = prompt("CHOOSE_REPLACEMENT_EFFECT", decision, game);
         return applyTraced(traced, () -> replacementEffectSelectionApplier.apply(
                 traced.selection, decision));
