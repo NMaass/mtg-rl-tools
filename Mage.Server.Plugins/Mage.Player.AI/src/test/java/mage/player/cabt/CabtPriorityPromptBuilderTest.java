@@ -21,6 +21,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -88,7 +89,7 @@ class CabtPriorityPromptBuilderTest {
 
         MagicOption landOption = options.stream()
                 .filter(option -> option.type() == MagicOptionType.PLAY_LAND)
-                .findFirst().orElseThrow();
+                .findFirst().orElseThrow(() -> new AssertionError("expected option"));
         assertThat(landOption.label()).isEqualTo("Play Forest");
         assertThat(landOption.payload().get("abilityType")).isEqualTo("PLAY_LAND");
         assertThat(landOption.payload().get("sourceId")).isEqualTo(forestId.toString());
@@ -96,13 +97,13 @@ class CabtPriorityPromptBuilderTest {
 
         MagicOption castOption = options.stream()
                 .filter(option -> option.type() == MagicOptionType.CAST_SPELL)
-                .findFirst().orElseThrow();
+                .findFirst().orElseThrow(() -> new AssertionError("expected option"));
         assertThat(castOption.label()).isEqualTo("Cast Grizzly Bears");
         assertThat(castOption.payload().get("manaCost")).isEqualTo("{1}{G}");
 
         MagicOption manaOption = options.stream()
                 .filter(option -> option.type() == MagicOptionType.ACTIVATE_ABILITY)
-                .findFirst().orElseThrow();
+                .findFirst().orElseThrow(() -> new AssertionError("expected option"));
         assertThat(manaOption.payload().get("abilityType")).isEqualTo("ACTIVATED_MANA");
 
         // Agent-facing order is canonicalized, while playableIndex stays aligned
@@ -117,8 +118,8 @@ class CabtPriorityPromptBuilderTest {
         CabtPriorityPrompt reversed = builder.build(
                 player, game, Arrays.<ActivatedAbility>asList(mana, cast, land));
         assertThat(reversed.getDecision().options().stream()
-                .map(MagicOption::label).toList())
-                .isEqualTo(options.stream().map(MagicOption::label).toList());
+                .map(MagicOption::label).collect(Collectors.toList()))
+                .isEqualTo(options.stream().map(MagicOption::label).collect(Collectors.toList()));
     }
 
     @Test
