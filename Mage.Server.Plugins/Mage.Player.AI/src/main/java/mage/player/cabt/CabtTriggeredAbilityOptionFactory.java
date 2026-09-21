@@ -25,7 +25,8 @@ public final class CabtTriggeredAbilityOptionFactory {
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
         payload.put("abilityId", nullableToString(ability.getId()));
         payload.put("originalId", nullableToString(ability.getOriginalId()));
-        payload.put("sourceId", nullableToString(ability.getSourceId()));\n        payload.put("sourceRef", CabtSemanticIds.get(game, ability.getSourceId()));
+        payload.put("sourceId", nullableToString(ability.getSourceId()));
+        payload.put("sourceRef", CabtSemanticIds.get(game, ability.getSourceId()));
         payload.put("sourceName", sourceName);
         payload.put("rule", rule);
         payload.put("abilityClass", ability.getClass().getSimpleName());
