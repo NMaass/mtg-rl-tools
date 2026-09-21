@@ -155,8 +155,9 @@ public final class MagicObservationSerializer {
             // id known but object unresolvable: keep the bare reference so the
             // observation stays complete
             return new MagicObjectView(
-                    new MagicObjectReference(cardId.toString(), null, zone.name(),
-                            null, null, null, null),
+                    new MagicObjectReference(cardId.toString(),
+                            CabtSemanticIds.get(game, cardId),
+                            null, zone.name(), null, null, null, null),
                     null, null);
         }
         return MagicObjectViewFactory.objectView(game, object, zone);
