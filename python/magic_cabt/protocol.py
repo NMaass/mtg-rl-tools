@@ -260,6 +260,14 @@ class CabtBridge(object):
         """Human-readable board render of the current state."""
         return self.request({"command": "visualize_data"})["text"]
 
+    def engine_fingerprint(self):
+        """Private semantic digest of complete engine state, including hidden zones.
+
+        This is a verification surface, not an agent observation. It intentionally
+        exposes only the digest, never the hidden-state payload.
+        """
+        return self.request({"command": "engine_fingerprint"})["sha256"]
+
     # --- helpers ---
 
     @staticmethod
