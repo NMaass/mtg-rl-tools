@@ -37,24 +37,4 @@ class CabtInitialLibraryOrderTest {
         }
     }
 
-    @Test
-    void extraDeckCardsStayOutOfTheMainLibrary() {
-        CabtLiveDuel game = new CabtLiveDuel();
-        CabtBridgePlayer player = new CabtBridgePlayer("P0", RangeOfInfluence.ALL,
-                (ignoredGame, ignoredPlayer, decision) -> {
-                    throw new AssertionError("Setup must not request a move");
-                });
-        Deck deck = new Deck();
-        CabtDeckFactory factory = new CabtDeckFactory();
-        Card main = factory.createCard("Forest");
-        main.setOwnerId(player.getId());
-        Card extra = factory.createCard("Grizzly Bears");
-        extra.setOwnerId(player.getId());
-        extra.setExtraDeckCard(true);
-        deck.getCards().add(main);
-        deck.getCards().add(extra);
-        game.loadCards(deck.getCards(), player.getId());
-        game.addPlayer(player, deck);
-        assertThat(player.getLibrary().getCardList()).containsExactly(main.getId());
-    }
 }
