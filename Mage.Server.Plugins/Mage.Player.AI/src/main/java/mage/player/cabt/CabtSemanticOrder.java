@@ -1,6 +1,7 @@
 package mage.player.cabt;
 
 import mage.MageObject;
+import mage.abilities.ActivatedAbility;
 import mage.counters.Counter;
 import mage.game.Controllable;
 import mage.game.Game;
@@ -72,6 +73,17 @@ public final class CabtSemanticOrder {
             Collections.sort(counters);
             key.append("|counters=").append(counters);
         }
+        return key.toString();
+    }
+
+    public static String abilityKey(Game game, ActivatedAbility ability) {
+        StringBuilder key = new StringBuilder();
+        key.append(ability.getAbilityType() == null ? "" : ability.getAbilityType().name());
+        key.append('|').append(targetKey(game, ability.getSourceId()));
+        key.append('|').append(safe(ability.getClass().getName()));
+        key.append('|').append(safe(ability.getRule()));
+        key.append('|').append(ability.getManaCostsToPay() == null
+                ? "" : safe(ability.getManaCostsToPay().getText()));
         return key.toString();
     }
 
