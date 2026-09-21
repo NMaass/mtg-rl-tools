@@ -379,31 +379,7 @@ def _options(select):
     return options if isinstance(options, list) else []
 
 
-def _normalize_current(current):
-    """Normalize a public state while preserving player-role semantics.
-
-    XMage player ids are process-local UUIDs, so direct comparison would make
-    deterministic replay appear divergent. Before generic id scrubbing, map
-    active/priority player ids to their stable playerIndex/seat labels.
-    """
-    current = current if isinstance(current, dict) else {}
-    id_to_seat = {}
-    for player in current.get("players") or []:
-        if not isinstance(player, dict):
-            continue
-        player_id = player.get("playerId")
-        seat = player.get("playerIndex", player.get("seat"))
-        if player_id is not None and seat is not None:
-            id_to_seat[str(player_id)] = seat
-    value = dict(current)
-    for key in ("activePlayerId", "priorityPlayerId", "startingPlayerId"):
-        player_id = value.get(key)
-        if player_id is not None:
-            value[key[:-2] + "Index"] = id_to_seat.get(str(player_id), "unknown")
-    return _normalize_value(value)
-
-
-def _option_signature(option):
+def _normalize_current(current):\n    """Normalize a state while preserving player relationships.\n\n    XMage UUIDs are process-local. Dropping every ID field used to erase\n    meaningful controller/owner relationships along with transport identity.\n    Map UUIDs that name known players to stable seats before generic object\n    identifiers are scrubbed.\n    """\n    current = current if isinstance(current, dict) else {}\n    id_to_seat = {}\n    for player in current.get("players") or []:\n        if not isinstance(player, dict):\n            continue\n        player_id = player.get("playerId")\n        seat = player.get("playerIndex", player.get("seat"))\n        if player_id is not None and seat is not None:\n            id_to_seat[str(player_id)] = seat\n    return _normalize_value(_rewrite_player_ids(current, id_to_seat))\n\n\ndef _rewrite_player_ids(value, id_to_seat):\n    if isinstance(value, dict):\n        result = {}\n        for key, item in value.items():\n            if (key.endswith("Id") and item is not None\n                    and str(item) in id_to_seat):\n                result[key[:-2] + "Index"] = id_to_seat[str(item)]\n            else:\n                result[key] = _rewrite_player_ids(item, id_to_seat)\n        return result\n    if isinstance(value, list):\n        return [_rewrite_player_ids(item, id_to_seat) for item in value]\n    return value\n\n\ndef _option_signature(option):
     option = option if isinstance(option, dict) else {}
     payload = option.get("payload") if isinstance(option.get("payload"), dict) else {}
     return {
