@@ -179,9 +179,30 @@ public final class CabtProtocolServer {
             return error(id, "NO_ACTIVE_GAME", "no game is active; send game_start first");
         }
         JsonElement selectElement = request.get("select");
+        JsonElement actionElement = request.get("selectIds");
+        if (selectElement != null && actionElement != null) {
+            return error(id, "MALFORMED_REQUEST",
+                    "game_select accepts either select indices or selectIds, not both");
+        }
+        if (actionElement != null) {
+            if (!actionElement.isJsonArray()) {
+                return error(id, "MALFORMED_REQUEST",
+                        "selectIds must be an array of action ids");
+            }
+            List<String> actionIds = new ArrayList<String>();
+            for (JsonElement element : actionElement.getAsJsonArray()) {
+                if (!element.isJsonPrimitive()
+                        || !element.getAsJsonPrimitive().isString()) {
+                    return error(id, "MALFORMED_REQUEST",
+                            "selectIds entries must be strings");
+                }
+                actionIds.add(element.getAsString());
+            }
+            return eventResponse(id, session.selectActionIds(actionIds));
+        }
         if (selectElement == null || !selectElement.isJsonArray()) {
             return error(id, "MALFORMED_REQUEST",
-                    "game_select needs \"select\": [option indices]");
+                    "game_select needs select indices or selectIds");
         }
         List<Integer> indices = new ArrayList<Integer>();
         for (JsonElement element : selectElement.getAsJsonArray()) {
