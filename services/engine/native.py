@@ -46,6 +46,7 @@ class NativeSession:
         return {'finished': False, 'revision': REFERENCE, 'setup': SETUP,
                 'position': len(self.steps),
                 'fingerprint': observation_signature(observation)['sha256'],
+                'engineFingerprint': self.bridge.engine_fingerprint(),
                 'observation': copy.deepcopy(observation)}
 
     def step(self, selection, fingerprint):
@@ -93,8 +94,15 @@ class NativeSession:
             for step in steps:
                 session.step(step['selection'], step['fingerprint'])
             actual = session.observation()
-            if actual.get('finished') or actual.get('fingerprint') != expected.get('fingerprint'):
-                raise ReplayDivergenceError('Rebuilt root does not match the recorded decision.')
+            if (actual.get('finished') or
+                    actual.get('fingerprint') != expected.get('fingerprint') or
+                    actual.get('engineFingerprint') != expected.get('engineFingerprint')):
+                raise ReplayDivergenceError(
+                    'Rebuilt root does not match the recorded public and hidden engine state.',
+                    expected={'public': expected.get('fingerprint'),
+                              'engine': expected.get('engineFingerprint')},
+                    actual={'public': actual.get('fingerprint'),
+                            'engine': actual.get('engineFingerprint')})
             return session
         except Exception:
             session.close()
