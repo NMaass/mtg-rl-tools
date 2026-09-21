@@ -51,7 +51,7 @@ finally:
     probe.close()
 
 
-def deterministic_trace(spec, decisions=80):
+def deterministic_trace(spec, decisions=80, selector=None):
     session = NativeSession(spec)
     agent = make_agent('random', seed=99173)
     trace = []
@@ -61,7 +61,7 @@ def deterministic_trace(spec, decisions=80):
                 break
             current = session.observation()
             observation = current['observation']
-            selection = agent.select(observation)
+            selection = selector(observation) if selector is not None else agent.select(observation)
             trace.append({
                 'public': current['fingerprint'],
                 'engine': current['engineFingerprint'],
@@ -102,6 +102,53 @@ other_trace, _, _ = deterministic_trace(other_seed, decisions=1)
 assert other_trace and trace_a
 assert other_trace[0]['engine'] != trace_a[0]['engine'], \
     'Different shuffle seed unexpectedly produced the same hidden-state digest.'
+
+
+def exercise_priority_action(observation):
+    select = observation.get('select') or {}
+    options = select.get('option') or []
+    minimum = select.get('minCount', 0)
+    if not options:
+        return []
+    prompt = select.get('type')
+    if prompt == 'MULLIGAN':
+        return [0]  # keep; this fixture is about in-game action semantics
+    if prompt == 'PRIORITY':
+        for index, option in enumerate(options):
+            if option.get('type') != 'PASS_PRIORITY':
+                return [index]
+        return [0]
+    if prompt == 'PAY_MANA':
+        for index, option in enumerate(options):
+            if option.get('type') != 'PROMPT_CANCEL_PAYMENT':
+                return [index]
+    if minimum and minimum > 0:
+        return list(range(min(minimum, len(options))))
+    return []
+
+
+spell_spec = {
+    'decks': [
+        '24 Mountain\n36 Lightning Bolt',
+        '24 Mountain\n36 Lightning Bolt',
+    ],
+    'seed': 20260923,
+    'maxTurns': 6,
+}
+spell_a, spell_terminal_a, spell_result_a = deterministic_trace(
+    spell_spec, decisions=120, selector=exercise_priority_action)
+spell_b, spell_terminal_b, spell_result_b = deterministic_trace(
+    spell_spec, decisions=120, selector=exercise_priority_action)
+assert spell_a == spell_b, \
+    'Targeted-spell fixture did not reproduce the same semantic and hidden-state trace.'
+assert spell_terminal_a == spell_terminal_b
+assert spell_result_a == spell_result_b
+assert any(
+    any(option[0] == 'CAST_SPELL' for option in row['options'])
+    for row in spell_a
+), 'Targeted-spell fixture never exposed a cast-spell legal action.'
+assert any(row['selectType'] == 'TARGET' for row in spell_a), \
+    'Targeted-spell fixture never exercised an engine target prompt.'
 
 
 branch_source = NativeSession(play_spec)
@@ -162,8 +209,11 @@ try:
               'verifiedHiddenRoot': True,
               'repeatTraceDecisions': len(trace_a),
               'repeatTraceRuns': 3,
+              'targetedSpellTraceDecisions': len(spell_a),
+              'targetedSpellRepeatRuns': 2,
+              'verifiedTargetPrompt': any(row['selectType'] == 'TARGET' for row in spell_a),
               'verifiedAlternativeBranch': True,
-              'interpretation': 'A deterministic replay/restore smoke test over public actions and a private full-state digest; not complete card/rules equivalence or a throughput benchmark.'}
+              'interpretation': 'A deterministic replay/restore smoke test over semantic public actions and a private hidden-state digest on creature/combat and targeted-spell paths; not complete card/rules equivalence or a throughput benchmark.'}
     Path('engine-native-result.json').write_text(json.dumps(report, indent=2))
     print(json.dumps(report))
 finally:
