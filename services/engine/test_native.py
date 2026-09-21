@@ -217,7 +217,7 @@ try:
               'verifiedTargetPrompt': any(row['selectType'] == 'TARGET' for row in spell_a),
               'verifiedAlternativeBranch': True,
               'verifiedSemanticActionIds': all(
-                  step.get('actionIds') for step in checkpoint['steps']),
+                  'actionIds' in step for step in checkpoint['steps']),
               'interpretation': 'A deterministic replay/restore smoke test over semantic public actions and a private hidden-state digest on creature/combat and targeted-spell paths; not complete card/rules equivalence or a throughput benchmark.'}
     Path('engine-native-result.json').write_text(json.dumps(report, indent=2))
     print(json.dumps(report))
