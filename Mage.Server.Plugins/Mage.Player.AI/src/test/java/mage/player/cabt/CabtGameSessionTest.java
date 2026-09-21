@@ -128,7 +128,7 @@ class CabtGameSessionTest {
         List<String> second = firstDecisionSignature();
 
         assertThat(second).isEqualTo(first);
-        assertThat(first).contains("chooser=0", "option=Target Player0", "option=Target Player1");
+        assertThat(first).contains("chooser=0", "option=Target Alice", "option=Target Bob");
         assertThat(first.indexOf("option=Target Player0"))
                 .isLessThan(first.indexOf("option=Target Player1"));
     }
