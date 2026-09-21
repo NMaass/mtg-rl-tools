@@ -43,22 +43,28 @@ public final class CabtEngineFingerprint {
         out.append("|ended=").append(game.hasEnded());
         out.append("|winner=").append(safe(game.getWinner())).append('\n');
 
-        int seat = 0;
+        List<UUID> playerIds = new ArrayList<UUID>();
         if (game.getPlayerList() != null) {
             for (UUID playerId : game.getPlayerList()) {
-                Player player = game.getPlayer(playerId);
-                if (player != null) {
-                    out.append("P").append(seat)
-                            .append("|name=").append(safe(player.getName()))
-                            .append("|life=").append(player.getLife())
-                            .append("|passed=").append(player.isPassed())
-                            .append("|inGame=").append(player.isInGame())
-                            .append("|hand=").append(sortedCardNames(game, player.getHand()))
-                            .append("|library=").append(orderedCardNames(game, player.getLibrary().getCardList()))
-                            .append("|graveyard=").append(orderedCardNames(game, player.getGraveyard()))
-                            .append('\n');
-                }
-                seat++;
+                playerIds.add(playerId);
+            }
+        }
+        playerIds.sort((left, right) -> Integer.compare(
+                CabtSemanticOrder.playerIndex(game, left),
+                CabtSemanticOrder.playerIndex(game, right)));
+        for (UUID playerId : playerIds) {
+            Player player = game.getPlayer(playerId);
+            if (player != null) {
+                int seat = CabtSemanticOrder.playerIndex(game, playerId);
+                out.append("P").append(seat)
+                        .append("|name=").append(safe(player.getName()))
+                        .append("|life=").append(player.getLife())
+                        .append("|passed=").append(player.isPassed())
+                        .append("|inGame=").append(player.isInGame())
+                        .append("|hand=").append(sortedCardNames(game, player.getHand()))
+                        .append("|library=").append(orderedCardNames(game, player.getLibrary().getCardList()))
+                        .append("|graveyard=").append(orderedCardNames(game, player.getGraveyard()))
+                        .append('\n');
             }
         }
 
