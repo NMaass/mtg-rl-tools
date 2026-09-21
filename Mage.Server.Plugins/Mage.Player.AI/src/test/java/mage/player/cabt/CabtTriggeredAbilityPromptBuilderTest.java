@@ -18,8 +18,8 @@ import java.util.stream.Collectors;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Task 11: TRIGGER_ORDER prompts carry one option per waiting triggered
- * ability, in the input list's order, with rule text and source context.
+ * TRIGGER_ORDER prompts carry one option per waiting triggered ability in
+ * canonical semantic order, with rule text and source context.
  */
 class CabtTriggeredAbilityPromptBuilderTest {
 
@@ -59,18 +59,22 @@ class CabtTriggeredAbilityPromptBuilderTest {
         assertThat(decision.minCount()).isEqualTo(1);
         assertThat(decision.maxCount()).isEqualTo(1);
         assertThat(decision.options()).hasSize(2);
-        for (int i = 0; i < 2; i++) {
-            MagicOption option = decision.options().get(i);
+        for (MagicOption option : decision.options()) {
             assertThat(option.type()).isEqualTo(MagicOptionType.PROMPT_TRIGGERED_ABILITY);
             assertThat(option.label()).startsWith("Put trigger on stack: ");
-            assertThat(option.payload().get("abilityId"))
-                    .isEqualTo(triggers.get(i).getId().toString());
+            String abilityId = String.valueOf(option.payload().get("abilityId"));
+            TriggeredAbility matching = triggers.stream()
+                    .filter(trigger -> trigger.getId().toString().equals(abilityId))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("option does not map to an engine trigger"));
             assertThat(option.payload().get("sourceId"))
-                    .isEqualTo(triggers.get(i).getSourceId().toString());
+                    .isEqualTo(matching.getSourceId().toString());
             assertThat(option.payload().get("rule")).isNotNull();
         }
-        assertThat(decision.options().get(0).payload().get("sourceName")).isEqualTo("Grizzly Bears");
-        assertThat(decision.options().get(1).payload().get("rule").toString()).contains("Young Wolf");
+        assertThat(decision.options().stream()
+                .map(option -> option.payload().get("sourceName"))
+                .collect(Collectors.toList()))
+                .containsExactly("Grizzly Bears", "Young Wolf");
     }
 
     @Test
@@ -93,8 +97,18 @@ class CabtTriggeredAbilityPromptBuilderTest {
         setUpTwoTriggers();
         PendingDecision decision = builder.build(alice, game, triggers);
 
-        TriggeredAbility selected = applier.apply(triggers, Selection.of(1), decision);
+        TriggeredAbility expected = triggers.get(1);
+        int optionIndex = -1;
+        for (int i = 0; i < decision.options().size(); i++) {
+            if (expected.getId().toString().equals(
+                    decision.options().get(i).payload().get("abilityId"))) {
+                optionIndex = i;
+                break;
+            }
+        }
+        assertThat(optionIndex).isGreaterThanOrEqualTo(0);
+        TriggeredAbility selected = applier.apply(triggers, Selection.of(optionIndex), decision);
 
-        assertThat(selected).isSameAs(triggers.get(1));
+        assertThat(selected).isSameAs(expected);
     }
 }
