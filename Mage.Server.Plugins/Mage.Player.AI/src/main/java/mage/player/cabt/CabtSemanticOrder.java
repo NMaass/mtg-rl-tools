@@ -96,7 +96,7 @@ public final class CabtSemanticOrder {
         key.append(option.type() == null ? "" : option.type().name());
         key.append('|').append(safe(option.label()));
         String[] semanticFields = new String[]{
-                "sourceName", "rule", "manaCost", "modeText", "selectedCount",
+                "sourceRef", "targetRef", "objectRef", "attackerRef", "defenderRef",\n                "blockerRef", "defendingPlayerRef", "sourceName", "rule", "manaCost", "modeText", "selectedCount",
                 "objectName", "objectClass", "abilityRule", "manaType", "available",
                 "effectText", "choiceValue", "choiceLabel", "targetName",
                 "targetClass", "zone", "abilityClass", "unpaid", "promptText"
