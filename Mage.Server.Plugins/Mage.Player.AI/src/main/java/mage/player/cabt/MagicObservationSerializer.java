@@ -176,9 +176,11 @@ public final class MagicObservationSerializer {
     private MagicSelectView serializeSelect(Game game, Player selectingPlayer, PendingDecision decision) {
         List<MagicOptionView> options = new ArrayList<MagicOptionView>();
         List<MagicOption> decisionOptions = decision.options();
+        List<String> actionIds = CabtActionIds.forOptions(decisionOptions);
         for (int i = 0; i < decisionOptions.size(); i++) {
             MagicOption option = decisionOptions.get(i);
-            options.add(new MagicOptionView(i, option.type().name(), option.label(), option.payload()));
+            options.add(new MagicOptionView(
+                    i, actionIds.get(i), option.type().name(), option.label(), option.payload()));
         }
         UUID selectingPlayerId = selectingPlayer.getId();
         return new MagicSelectView(
