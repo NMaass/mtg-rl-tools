@@ -24,6 +24,7 @@ __all__ = [
     "branch_replay",
     "branch_to_transition",
     "candidate_selections",
+    "determinism_signature",
     "observation_signature",
     "replay_to_root",
 ]
@@ -105,6 +106,50 @@ def observation_signature(observation, select=None):
             "maxCount": select.get("maxCount"),
             "playerIndex": select.get("playerIndex"),
             "options": [_option_signature(option) for option in _options(select)],
+        },
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return {
+        "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        "payload": payload,
+    }
+
+
+def determinism_signature(state):
+    """Hash the engine-only hidden verification projection.
+
+    The protocol projection contains no transport UUIDs in hidden card zones.
+    Its public current/select payload still contains process-local ids, so use
+    the same semantic normalization as observation_signature before hashing.
+    """
+    state = state if isinstance(state, dict) else {}
+    players = []
+    for player in state.get("players") or []:
+        if not isinstance(player, dict):
+            continue
+        players.append({
+            "playerIndex": player.get("playerIndex"),
+            "name": player.get("name"),
+            "life": player.get("life"),
+            "inGame": player.get("inGame"),
+            "passed": player.get("passed"),
+            "library": _normalize_value(player.get("library") or []),
+            "hand": _normalize_value(player.get("hand") or []),
+            "graveyard": _normalize_value(player.get("graveyard") or []),
+            "sideboard": _normalize_value(player.get("sideboard") or []),
+        })
+    select = state.get("select") if isinstance(state.get("select"), dict) else {}
+    payload = {
+        "eventKind": state.get("eventKind"),
+        "players": players,
+        "current": _normalize_current(state.get("current") or {}),
+        "select": {
+            "type": select.get("type"),
+            "minCount": select.get("minCount"),
+            "maxCount": select.get("maxCount"),
+            "playerIndex": select.get("playerIndex"),
+            "options": [_option_signature(option)
+                        for option in _options(select)],
         },
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
