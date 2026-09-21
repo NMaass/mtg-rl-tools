@@ -26,13 +26,14 @@ public final class CabtActionIds {
 
     public static List<String> forOptions(List<MagicOption> options) {
         List<String> ids = new ArrayList<String>();
-        Map<String, Integer> occurrences = new HashMap<String, Integer>();
+        Set<String> semantics = new HashSet<String>();
         for (MagicOption option : options) {
             String semantic = CabtSemanticOrder.optionKey(option);
-            Integer previous = occurrences.get(semantic);
-            int occurrence = previous == null ? 0 : previous.intValue() + 1;
-            occurrences.put(semantic, occurrence);
-            ids.add("a_" + sha256(semantic + "\u0000" + occurrence));
+            if (!semantics.add(semantic)) {
+                throw new IllegalStateException(
+                        "AMBIGUOUS_SEMANTIC_ACTION: two legal options have no stable distinguishing identity");
+            }
+            ids.add("a_" + sha256(semantic));
         }
         return ids;
     }
