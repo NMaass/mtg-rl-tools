@@ -43,7 +43,7 @@ _VOLATILE_KEYS = {
     "seq",
     "gameInstance",
 }
-_STABLE_ID_KEYS = {"grpId", "playerIndex", "seat", "gameNumber", "turnNumber"}
+_STABLE_ID_KEYS = {"grpId", "semanticId", "playerIndex", "seat", "gameNumber", "turnNumber"}
 _UNORDERED_LIST_KEYS = {
     "battlefield",
     "graveyard",
@@ -406,13 +406,17 @@ def _normalize_current(current):
 def _option_signature(option):
     option = option if isinstance(option, dict) else {}
     payload = option.get("payload") if isinstance(option.get("payload"), dict) else {}
+    # Keep semantic action identity while dropping process-local engine ids and
+    # adapter-only routing indices. This makes a replay root sensitive to which
+    # physical duplicate is offered without requiring XMage UUID equality.
+    semantic_payload = {
+        key: value for key, value in payload.items()
+        if key not in {"playableIndex", "originalIndex"}
+    }
     return {
         "type": option.get("type"),
         "label": _scrub_text(option.get("label")),
-        "canonicalKey": payload.get("canonicalKey"),
-        "source": _semantic_name(payload.get("source")),
-        "card": _semantic_name(payload.get("card")),
-        "name": payload.get("name"),
+        "payload": _normalize_value(semantic_payload),
     }
 
 
