@@ -326,6 +326,14 @@ public final class CabtGameSession {
      * Public-information state snapshot for visualize_data, from the pending
      * player's perspective (or fully hidden hands when the game is over).
      */
+    public String engineFingerprint() {
+        Event event = currentEvent;
+        if (event == null) {
+            throw new IllegalStateException("NO_ENGINE_STATE");
+        }
+        return CabtEngineFingerprint.sha256(game);
+    }
+
     public MagicCurrent snapshotCurrent() {
         Event event = currentEvent;
         java.util.UUID perspective = null;
