@@ -1,6 +1,8 @@
 package mage.player.cabt;
 
-import mage.cards.Card;\nimport mage.game.Game;\nimport mage.players.Player;
+import mage.cards.Card;
+import mage.game.Game;
+import mage.players.Player;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -10,7 +12,7 @@ import java.util.Map;
 /**
  * CABT bridge: builds the PILE prompt for choosePile. Option 0 is pile 1,
  * option 1 is pile 2; each payload carries the pile's cards as
- * objectId/name pairs.
+ * runtime object id, stable semantic id, and name.
  */
 public final class CabtPilePromptBuilder {
 
