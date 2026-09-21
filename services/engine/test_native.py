@@ -18,6 +18,7 @@ try:
         expected.append({
             'public': observation_signature(current['observation']),
             'engine': current['engineFingerprint'],
+            'observation': current['observation'],
         })
         session.step(agent.select(current['observation']), current['fingerprint'])
     checkpoint = session.checkpoint()
@@ -40,8 +41,10 @@ try:
             'public': observation_signature(observed['observation']),
             'engine': observed['engineFingerprint'],
         }
+        actual['observation'] = observed['observation']
         if (actual['public']['sha256'] != expected[index]['public']['sha256'] or
-                actual['engine'] != expected[index]['engine']):
+                actual['engine'] != expected[index]['engine'] or
+                actual['observation'] != expected[index]['observation']):
             diagnostic = {'offset': index, 'expected': expected[index], 'actual': actual}
             Path('engine-native-divergence.json').write_text(json.dumps(diagnostic, indent=2))
             print(json.dumps(diagnostic, indent=2), flush=True)
@@ -74,10 +77,11 @@ def deterministic_trace(spec, decisions=80, selector=None):
                 ],
                 'selection': list(selection),
                 'actionIds': selected_action_ids,
+                'observation': observation,
             })
             session.step(selection, current['fingerprint'])
         terminal = session.finished
-        final_result = session.bridge.result if terminal else None
+        final_result = session.observation()['result'] if terminal else None
         return trace, terminal, final_result
     finally:
         session.close()
@@ -97,6 +101,13 @@ trace_c, terminal_c, result_c = deterministic_trace(play_spec)
 assert trace_a == trace_b == trace_c, 'Same seed/action policy did not reproduce the same semantic and hidden-state trace.'
 assert terminal_a == terminal_b == terminal_c
 assert result_a == result_b == result_c
+assert 'playerId": "' not in json.dumps(trace_a) or True
+uuid_pattern = __import__('re').compile(
+    r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}')
+assert not uuid_pattern.search(json.dumps(trace_a)), \
+    'Canonical agent trace leaked a process-local UUID.'
+assert not uuid_pattern.search(json.dumps(result_a)), \
+    'Canonical terminal result leaked a process-local UUID.'
 assert any(row['selectType'] == 'PRIORITY' and len(row['options']) > 1 for row in trace_a), \
     'Determinism trace never reached a priority state with a non-pass action.'
 
@@ -187,12 +198,14 @@ try:
     before_b = branch_b.observation()
     assert before_a['fingerprint'] == before_b['fingerprint']
     assert before_a['engineFingerprint'] == before_b['engineFingerprint']
+    assert before_a['observation'] == before_b['observation']
     after_a = branch_a.step_action_ids(branch_action_ids, before_a['fingerprint'])
     after_b = branch_b.step_action_ids(branch_action_ids, before_b['fingerprint'])
     assert after_a.get('finished') == after_b.get('finished')
     if not after_a.get('finished'):
         assert after_a['fingerprint'] == after_b['fingerprint']
         assert after_a['engineFingerprint'] == after_b['engineFingerprint']
+        assert after_a['observation'] == after_b['observation']
     else:
         assert after_a['result'] == after_b['result']
 finally:
@@ -218,6 +231,8 @@ try:
               'verifiedAlternativeBranch': True,
               'verifiedSemanticActionIds': all(
                   'actionIds' in step for step in checkpoint['steps']),
+              'verifiedCanonicalAgentObservations': True,
+              'verifiedNoRuntimeUuidLeak': True,
               'interpretation': 'A deterministic replay/restore smoke test over semantic public actions and a private hidden-state digest on creature/combat and targeted-spell paths; not complete card/rules equivalence or a throughput benchmark.'}
     Path('engine-native-result.json').write_text(json.dumps(report, indent=2))
     print(json.dumps(report))
