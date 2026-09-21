@@ -8,6 +8,7 @@ package mage.player.cabt;
 public final class MagicObjectReference {
 
     private final String objectId;
+    private final String semanticId;
     private final String sourceId;
     private final String zone;
     private final String name;
@@ -15,10 +16,11 @@ public final class MagicObjectReference {
     private final String ownerId;
     private final String controllerId;
 
-    public MagicObjectReference(String objectId, String sourceId, String zone,
+    public MagicObjectReference(String objectId, String semanticId, String sourceId, String zone,
                                 String name, String objectClass,
                                 String ownerId, String controllerId) {
         this.objectId = objectId;
+        this.semanticId = semanticId;
         this.sourceId = sourceId;
         this.zone = zone;
         this.name = name;
@@ -29,6 +31,10 @@ public final class MagicObjectReference {
 
     public String getObjectId() {
         return objectId;
+    }
+
+    public String getSemanticId() {
+        return semanticId;
     }
 
     public String getSourceId() {
