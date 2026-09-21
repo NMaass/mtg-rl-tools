@@ -1,7 +1,6 @@
 package mage.player.cabt;
 
-import mage.MageObject;
-
+import mage.MageObject;\nimport mage.game.Game;\n
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -18,11 +17,18 @@ public final class CabtReplacementEffectOptionFactory {
 
     public static MagicOption replacementEffectOption(String effectKey, String effectText,
                                                       MageObject object, int originalIndex) {
+        return replacementEffectOption(null, effectKey, effectText, object, originalIndex);
+    }
+
+    public static MagicOption replacementEffectOption(Game game, String effectKey, String effectText,
+                                                      MageObject object, int originalIndex) {
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
         payload.put("effectKey", effectKey);
         payload.put("effectText", effectText);
         payload.put("objectId", object == null || object.getId() == null
                 ? null : object.getId().toString());
+        payload.put("objectRef", object == null || object.getId() == null
+                ? null : CabtSemanticIds.get(game, object.getId()));
         payload.put("objectName", object == null ? null : object.getName());
         payload.put("objectClass", object == null ? null : object.getClass().getSimpleName());
         payload.put("originalIndex", originalIndex);
