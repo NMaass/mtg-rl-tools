@@ -107,7 +107,17 @@ public final class CabtSemanticOrder {
     }
 
     public static int playerIndex(Game game, UUID id) {
-        if (id == null || game.getPlayerList() == null) {
+        if (id == null || game == null) {
+            return Integer.MAX_VALUE;
+        }
+        Player player = game.getPlayer(id);
+        if (player instanceof CabtBridgePlayer) {
+            int seat = ((CabtBridgePlayer) player).cabtSeat();
+            if (seat >= 0) {
+                return seat;
+            }
+        }
+        if (game.getPlayerList() == null) {
             return Integer.MAX_VALUE;
         }
         int index = 0;
