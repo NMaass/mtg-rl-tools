@@ -166,6 +166,53 @@ assert any(row['selectType'] == 'TARGET' for row in spell_a), \
     'Targeted-spell fixture never exercised an engine target prompt.'
 
 
+def exercise_combat_action(observation):
+    select = observation.get('select') or {}
+    options = select.get('option') or []
+    prompt = select.get('type')
+    if prompt == 'MULLIGAN':
+        return [0]
+    if prompt == 'PRIORITY':
+        for wanted in ('PLAY_LAND', 'CAST_SPELL'):
+            for index, option in enumerate(options):
+                if option.get('type') == wanted:
+                    return [index]
+        return [0] if options else []
+    if prompt == 'PAY_MANA':
+        for index, option in enumerate(options):
+            if option.get('type') != 'PROMPT_CANCEL_PAYMENT':
+                return [index]
+        return []
+    if prompt == 'DECLARE_ATTACKERS':
+        return [0] if options else []
+    if prompt == 'DECLARE_BLOCKERS':
+        return []
+    minimum = select.get('minCount', 0)
+    return list(range(min(minimum, len(options)))) if minimum else []
+
+
+combat_spec = {
+    'decks': [
+        '24 Forest\n36 Grizzly Bears',
+        '24 Forest\n36 Grizzly Bears',
+    ],
+    'seed': 20260924,
+    'maxTurns': 8,
+}
+combat_a, combat_terminal_a, combat_result_a = deterministic_trace(
+    combat_spec, decisions=160, selector=exercise_combat_action)
+combat_b, combat_terminal_b, combat_result_b = deterministic_trace(
+    combat_spec, decisions=160, selector=exercise_combat_action)
+assert combat_a == combat_b, \
+    'Combat fixture did not reproduce the same canonical and hidden-state trace.'
+assert combat_terminal_a == combat_terminal_b
+assert combat_result_a == combat_result_b
+assert any(
+    row['selectType'] == 'DECLARE_ATTACKERS' and row['actionIds']
+    for row in combat_a
+), 'Combat fixture never selected an attacker.'
+
+
 branch_source = NativeSession(play_spec)
 branch_checkpoint = None
 branch_action_ids = None
@@ -179,7 +226,8 @@ try:
         options = select.get('option', [])
         minimum = select.get('minCount', 0)
         maximum = select.get('maxCount', len(options))
-        if minimum == 1 and maximum == 1 and len(options) >= 2:
+        if (select.get('type') == 'PRIORITY'
+                and minimum == 1 and maximum == 1 and len(options) >= 2):
             branch_checkpoint = branch_source.checkpoint()
             branch_action_ids = [options[-1]['actionId']]
             break
@@ -229,7 +277,12 @@ try:
               'targetedSpellTraceDecisions': len(spell_a),
               'targetedSpellRepeatRuns': 2,
               'verifiedTargetPrompt': any(row['selectType'] == 'TARGET' for row in spell_a),
-              'verifiedAlternativeBranch': True,
+              'combatTraceDecisions': len(combat_a),
+              'combatRepeatRuns': 2,
+              'verifiedAttackPrompt': any(
+                  row['selectType'] == 'DECLARE_ATTACKERS' and row['actionIds']
+                  for row in combat_a),
+              'verifiedAlternativePriorityBranch': True,
               'verifiedSemanticActionIds': all(
                   'actionIds' in step for step in checkpoint['steps']),
               'verifiedCanonicalAgentObservations': True,
