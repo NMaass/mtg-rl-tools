@@ -256,6 +256,15 @@ class CabtBridge(object):
             {"command": "repository_card_data", "names": list(names)}
         )["cards"]
 
+    def determinism_state(self):
+        """Omniscient semantic state for replay verification only.
+
+        This is not an agent observation. It intentionally includes both
+        players' hidden card zones so deterministic reconstruction can be
+        verified without relying only on the visible board.
+        """
+        return self.request({"command": "determinism_state"})["state"]
+
     def visualize_data(self):
         """Human-readable board render of the current state."""
         return self.request({"command": "visualize_data"})["text"]
