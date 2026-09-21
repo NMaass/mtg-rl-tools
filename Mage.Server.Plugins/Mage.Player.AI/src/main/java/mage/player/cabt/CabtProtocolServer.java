@@ -121,6 +121,7 @@ public final class CabtProtocolServer {
     private String capabilities(JsonElement id) {
         JsonObject response = okResponse(id);
         response.addProperty("protocolVersion", PROTOCOL_VERSION);
+        response.addProperty("stableActionIds", true);
         JsonArray commands = new JsonArray();
         for (String name : new String[]{"ping", "capabilities", "game_start", "game_select",
                 "game_finish", "resolve_card", "validate_deck", "all_card_data",
