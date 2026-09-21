@@ -25,7 +25,7 @@ public final class CabtManaOptionFactory {
                                                String promptText) {
         Map<String, Object> payload = commonPayload(
                 CabtManaOptionKind.MANA_ABILITY_SOURCE, game, abilityToCast, unpaid, promptText);
-        payload.put("objectId", producer.getId() == null ? null : producer.getId().toString());
+        payload.put("objectId", producer.getId() == null ? null : producer.getId().toString());\n        payload.put("objectRef", CabtSemanticIds.get(game, producer.getId()));
         payload.put("objectName", producer.getName());
         payload.put("abilityId", manaAbility.getId().toString());
         payload.put("abilityRule", manaAbility.getRule());
