@@ -43,7 +43,7 @@ public final class CabtTargetOptionFactory {
         String name = object == null ? null : object.getName();
         String targetClass = object == null ? null : object.getClass().getSimpleName();
         return MagicOptionFactory.promptObject(
-                label(targeted, name == null ? targetId.toString() : name),
+                label(targeted, name == null ? "Unresolved object" : name),
                 payload(game, targetId, name, targetClass, alreadyChosen));
     }
 
@@ -60,7 +60,7 @@ public final class CabtTargetOptionFactory {
         String name = object == null ? null : object.getName();
         String targetClass = object == null ? null : object.getClass().getSimpleName();
         return MagicOptionFactory.promptCard(
-                label(targeted, name == null ? cardId.toString() : name),
+                label(targeted, name == null ? "Unresolved card" : name),
                 payload(game, cardId, name, targetClass, alreadyChosen));
     }
 
