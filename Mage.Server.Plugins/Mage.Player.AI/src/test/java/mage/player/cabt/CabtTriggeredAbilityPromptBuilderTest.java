@@ -7,7 +7,9 @@ import mage.game.stack.SpellStack;
 import mage.players.Player;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
@@ -68,6 +70,21 @@ class CabtTriggeredAbilityPromptBuilderTest {
         }
         assertThat(decision.options().get(0).payload().get("sourceName")).isEqualTo("Grizzly Bears");
         assertThat(decision.options().get(1).payload().get("rule").toString()).contains("Young Wolf");
+    }
+
+    @Test
+    void triggerOrderIsSemanticRatherThanInputListOrder() {
+        setUpTwoTriggers();
+        PendingDecision forward = builder.build(alice, game, triggers);
+        List<TriggeredAbility> reversed = new ArrayList<TriggeredAbility>(triggers);
+        Collections.reverse(reversed);
+        PendingDecision backward = builder.build(alice, game, reversed);
+
+        assertThat(backward.options().stream().map(MagicOption::label).toList())
+                .isEqualTo(forward.options().stream().map(MagicOption::label).toList());
+        TriggeredAbility picked = applier.apply(reversed, Selection.of(0), backward);
+        assertThat(picked.getId().toString())
+                .isEqualTo(backward.options().get(0).payload().get("abilityId"));
     }
 
     @Test
