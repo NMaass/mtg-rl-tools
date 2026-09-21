@@ -101,7 +101,6 @@ trace_c, terminal_c, result_c = deterministic_trace(play_spec)
 assert trace_a == trace_b == trace_c, 'Same seed/action policy did not reproduce the same semantic and hidden-state trace.'
 assert terminal_a == terminal_b == terminal_c
 assert result_a == result_b == result_c
-assert 'playerId": "' not in json.dumps(trace_a) or True
 uuid_pattern = __import__('re').compile(
     r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}')
 assert not uuid_pattern.search(json.dumps(trace_a)), \
