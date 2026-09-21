@@ -15,8 +15,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Task 6: object views carry stable references (engine UUIDs) plus the
- * public state of the object, with null-safe fallbacks.
+ * Object views carry runtime XMage UUIDs plus deterministic semantic IDs when
+ * the engine has registered one, with null-safe public-state fallbacks.
  */
 class MagicObjectViewFactoryTest {
 
@@ -77,6 +77,19 @@ class MagicObjectViewFactoryTest {
         assertThat(view.getRef().getZone()).isEqualTo("GRAVEYARD");
         assertThat(view.getRef().getOwnerId()).isEqualTo(aliceId.toString());
         assertThat(view.getCardTypes()).containsExactly("INSTANT");
+    }
+
+    @Test
+    void objectViewCarriesDeterministicSemanticIdentity() {
+        UUID cardId = UUID.randomUUID();
+        Card card = StubGames.card(cardId, "Doom Blade", aliceId);
+        Game game = emptyGame();
+        CabtSemanticIds.register(game, cardId, "P0:D00017");
+
+        MagicObjectView view = MagicObjectViewFactory.objectView(game, card, Zone.GRAVEYARD);
+
+        assertThat(view.getRef().getObjectId()).isEqualTo(cardId.toString());
+        assertThat(view.getRef().getSemanticId()).isEqualTo("P0:D00017");
     }
 
     @Test
