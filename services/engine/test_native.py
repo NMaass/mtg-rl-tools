@@ -87,6 +87,30 @@ def deterministic_trace(spec, decisions=80, selector=None):
         session.close()
 
 
+def assert_same_trace(name, left, right):
+    if left == right:
+        return
+    limit = min(len(left), len(right))
+    offset = next(
+        (index for index in range(limit) if left[index] != right[index]),
+        limit,
+    )
+    diagnostic = {
+        'fixture': name,
+        'offset': offset,
+        'leftLength': len(left),
+        'rightLength': len(right),
+        'left': left[offset] if offset < len(left) else None,
+        'right': right[offset] if offset < len(right) else None,
+    }
+    Path('engine-native-divergence.json').write_text(
+        json.dumps(diagnostic, indent=2, sort_keys=True))
+    print(json.dumps(diagnostic, indent=2, sort_keys=True), flush=True)
+    raise AssertionError(
+        '%s diverged at decision %d; see engine-native-divergence.json'
+        % (name, offset))
+
+
 play_spec = {
     'decks': [
         '24 Forest\n36 Grizzly Bears',
@@ -98,7 +122,8 @@ play_spec = {
 trace_a, terminal_a, result_a = deterministic_trace(play_spec)
 trace_b, terminal_b, result_b = deterministic_trace(play_spec)
 trace_c, terminal_c, result_c = deterministic_trace(play_spec)
-assert trace_a == trace_b == trace_c, 'Same seed/action policy did not reproduce the same semantic and hidden-state trace.'
+assert_same_trace('creature trace A/B', trace_a, trace_b)
+assert_same_trace('creature trace A/C', trace_a, trace_c)
 assert all('engineFingerprint' not in row['observation'] for row in trace_a), \
     'Private verification state leaked into an agent observation.'
 assert terminal_a == terminal_b == terminal_c
@@ -154,8 +179,7 @@ spell_a, spell_terminal_a, spell_result_a = deterministic_trace(
     spell_spec, decisions=120, selector=exercise_priority_action)
 spell_b, spell_terminal_b, spell_result_b = deterministic_trace(
     spell_spec, decisions=120, selector=exercise_priority_action)
-assert spell_a == spell_b, \
-    'Targeted-spell fixture did not reproduce the same semantic and hidden-state trace.'
+assert_same_trace('targeted-spell trace', spell_a, spell_b)
 assert spell_terminal_a == spell_terminal_b
 assert spell_result_a == spell_result_b
 assert any(
@@ -203,8 +227,7 @@ combat_a, combat_terminal_a, combat_result_a = deterministic_trace(
     combat_spec, decisions=160, selector=exercise_combat_action)
 combat_b, combat_terminal_b, combat_result_b = deterministic_trace(
     combat_spec, decisions=160, selector=exercise_combat_action)
-assert combat_a == combat_b, \
-    'Combat fixture did not reproduce the same canonical and hidden-state trace.'
+assert_same_trace('combat trace', combat_a, combat_b)
 assert combat_terminal_a == combat_terminal_b
 assert combat_result_a == combat_result_b
 assert any(
