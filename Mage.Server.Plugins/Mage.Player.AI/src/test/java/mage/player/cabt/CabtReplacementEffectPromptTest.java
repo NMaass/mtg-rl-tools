@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -60,8 +61,8 @@ class CabtReplacementEffectPromptTest {
         PendingDecision backward = builder.build(alice, reversed,
                 new LinkedHashMap<String, MageObject>());
 
-        assertThat(backward.options().stream().map(MagicOption::label).toList())
-                .isEqualTo(forward.options().stream().map(MagicOption::label).toList());
+        assertThat(backward.options().stream().map(MagicOption::label).collect(Collectors.toList()))
+                .isEqualTo(forward.options().stream().map(MagicOption::label).collect(Collectors.toList()));
 
         for (int index = 0; index < backward.options().size(); index++) {
             MagicOption option = backward.options().get(index);
