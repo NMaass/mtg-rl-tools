@@ -30,6 +30,9 @@ public final class CabtSemanticOrder {
     }
 
     public static String targetKey(Game game, UUID id) {
+        if (game == null || id == null) {
+            return "";
+        }
         Player player = game.getPlayer(id);
         if (player != null) {
             return "0|player|" + pad(playerIndex(game, id)) + "|" + safe(player.getName());
