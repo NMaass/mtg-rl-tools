@@ -1,0 +1,7 @@
+[data-stable-swap]{display:inline-grid;min-inline-size:0}
+[data-stable-swap][data-axis='height']{display:grid;inline-size:100%}
+[data-stable-swap-state]{grid-area:1/1;min-inline-size:0}
+[data-stable-swap][data-axis='height']>[data-stable-swap-state]{inline-size:100%}
+[data-stable-swap-state]:not([data-active]){visibility:hidden;pointer-events:none;user-select:none}
+.stable-number{font-variant-numeric:tabular-nums}
+@media(prefers-reduced-motion:reduce){[data-replacement-motion]{animation:none!important;transition:none!important}}

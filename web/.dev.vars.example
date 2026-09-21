@@ -1,0 +1,4 @@
+# Local development only. Never enable this on a hosted worker.
+DEV_AUTH="local-test"
+# Generate a fresh value with: openssl rand -base64 32
+KEY_ENCRYPTION_KEY="REPLACE_WITH_32_BYTE_BASE64_SECRET"

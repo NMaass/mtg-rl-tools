@@ -1,0 +1,60 @@
+name: Pinned XMage reference
+on:
+  push:
+    branches: [feat/browser-replay-workspace]
+    paths: ['services/engine/**', 'Mage.Server.Plugins/**', '.github/workflows/engine-reference.yml']
+  pull_request:
+    paths: ['services/engine/**', 'Mage.Server.Plugins/**', '.github/workflows/engine-reference.yml']
+permissions:
+  contents: read
+concurrency:
+  group: engine-reference-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch immutable reference source
+        run: |
+          git init /tmp/xmage
+          git -C /tmp/xmage remote add origin https://github.com/magefree/mage.git
+          git -C /tmp/xmage fetch --depth 1 origin fd40ad5c29a92cef824cf12ba6d0e4daa25db975
+          git -C /tmp/xmage checkout --detach FETCH_HEAD
+          rsync -a Mage.Server.Plugins/Mage.Player.AI/ /tmp/xmage/Mage.Server.Plugins/Mage.Player.AI/
+          python3 services/engine/prepare_reference.py /tmp/xmage
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build reference and overlay
+        working-directory: /tmp/xmage
+        run: mvn -B -pl Mage.Server.Plugins/Mage.Player.AI -am install -DskipTests > /tmp/engine-build.log 2>&1
+      - name: Test bridge against real engine
+        working-directory: /tmp/xmage
+        run: |
+          mvn -B -pl Mage.Server.Plugins/Mage.Player.AI test > /tmp/engine-tests.log 2>&1
+          mvn -q -pl Mage.Server.Plugins/Mage.Player.AI dependency:build-classpath -Dmdep.outputFile=target/runtime-classpath.txt
+      - name: Test native agent and replay roots
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
+          export PYTHONPATH="$GITHUB_WORKSPACE/python:$GITHUB_WORKSPACE/services/engine"
+          export MAGIC_CABT_CLASSPATH="/tmp/xmage/Mage.Server.Plugins/Mage.Player.AI/target/classes:$(cat /tmp/xmage/Mage.Server.Plugins/Mage.Player.AI/target/runtime-classpath.txt)"
+          python3 services/engine/test_native.py 2>&1 | tee /tmp/engine-native.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pinned-xmage-evidence
+          path: |
+            /tmp/engine-build.log
+            /tmp/engine-tests.log
+            /tmp/engine-native.log
+            /tmp/xmage/Mage.Server.Plugins/Mage.Player.AI/target/surefire-reports
+            engine-native-result.json
+            engine-native-replay.jsonl
+            engine-native-divergence.json
+          retention-days: 7

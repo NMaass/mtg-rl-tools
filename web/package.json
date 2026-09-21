@@ -1,0 +1,17 @@
+{
+  "name": "priority-replay", "private": true, "type": "module", "version": "0.1.0",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "parser": "python3 scripts/package_parser.py",
+    "build": "npm run parser && tsc --noEmit && vite build",
+    "test": "tsx --test tests/*.test.ts",
+    "test:browser": "playwright test",
+    "preview": "vite preview --host 127.0.0.1",
+    "deploy": "npm run build && wrangler deploy",
+    "db:local": "wrangler d1 migrations apply priority --local",
+    "db:remote": "wrangler d1 migrations apply priority --remote"
+  },
+  "dependencies": {"react": "^19.3.0", "react-dom": "^19.3.0", "jose": "^6.1.0", "zod": "^4.0.0"},
+  "devDependencies": {"@cloudflare/workers-types": "^5.20260918.1", "@playwright/test": "^1.55.0", "@types/react": "^19.1.12", "@types/react-dom": "^19.1.9", "@types/node": "^22.18.0", "typescript": "^5.9.2", "vite": "^7.1.5", "tsx": "^4.20.0", "wrangler": "4.135.0", "pyodide": "0.28.2"}
+}
