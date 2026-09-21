@@ -19,7 +19,8 @@ public final class CabtPriorityOptionFactory {
     static final String PAYLOAD_ABILITY_TYPE = "abilityType";
     static final String PAYLOAD_ABILITY_ID = "abilityId";
     static final String PAYLOAD_SOURCE_ID = "sourceId";
-    static final String PAYLOAD_SOURCE_REF = "sourceRef";\n    static final String PAYLOAD_SOURCE_NAME = "sourceName";
+    static final String PAYLOAD_SOURCE_REF = "sourceRef";
+    static final String PAYLOAD_SOURCE_NAME = "sourceName";
     static final String PAYLOAD_RULE = "rule";
     static final String PAYLOAD_MANA_COST = "manaCost";
 
@@ -35,7 +36,8 @@ public final class CabtPriorityOptionFactory {
         payload.put(PAYLOAD_PLAYABLE_INDEX, playableIndex);
         payload.put(PAYLOAD_ABILITY_TYPE, ability.getAbilityType().name());
         payload.put(PAYLOAD_ABILITY_ID, ability.getId() == null ? null : ability.getId().toString());
-        payload.put(PAYLOAD_SOURCE_ID, ability.getSourceId() == null ? null : ability.getSourceId().toString());\n        payload.put(PAYLOAD_SOURCE_REF, CabtSemanticIds.get(game, ability.getSourceId()));
+        payload.put(PAYLOAD_SOURCE_ID, ability.getSourceId() == null ? null : ability.getSourceId().toString());
+        payload.put(PAYLOAD_SOURCE_REF, CabtSemanticIds.get(game, ability.getSourceId()));
         payload.put(PAYLOAD_SOURCE_NAME, sourceName);
         payload.put(PAYLOAD_RULE, ability.getRule());
         payload.put(PAYLOAD_MANA_COST,
