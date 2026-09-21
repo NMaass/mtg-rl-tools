@@ -93,6 +93,8 @@ public final class CabtProtocolServer {
                     return repositoryCardData(id, request);
                 case "visualize_data":
                     return visualizeData(id);
+                case "engine_fingerprint":
+                    return engineFingerprint(id);
                 default:
                     return error(id, "UNKNOWN_COMMAND",
                             "unknown command: " + command.getAsString());
@@ -122,7 +124,7 @@ public final class CabtProtocolServer {
         JsonArray commands = new JsonArray();
         for (String name : new String[]{"ping", "capabilities", "game_start", "game_select",
                 "game_finish", "resolve_card", "validate_deck", "all_card_data",
-                "repository_card_data", "visualize_data"}) {
+                "repository_card_data", "visualize_data", "engine_fingerprint"}) {
             commands.add(name);
         }
         response.add("commands", commands);
@@ -322,6 +324,16 @@ public final class CabtProtocolServer {
             cards.add(cardDataExporter.export(card));
         }
         response.add("cards", GSON.toJsonTree(cards));
+        return GSON.toJson(response);
+    }
+
+    private String engineFingerprint(JsonElement id) {
+        if (session == null) {
+            return error(id, "NO_ACTIVE_GAME", "no game is active");
+        }
+        JsonObject response = okResponse(id);
+        response.addProperty("sha256", session.engineFingerprint());
+        response.addProperty("scope", "PRIVATE_ENGINE_STATE_V1");
         return GSON.toJson(response);
     }
 
