@@ -5,6 +5,7 @@ from magic_cabt.search.replay_search import (
     branch_replay,
     branch_to_transition,
     candidate_selections,
+    determinism_signature,
     observation_signature,
     replay_to_root,
 )
@@ -144,6 +145,42 @@ class SignatureTest(unittest.TestCase):
         self.assertNotEqual(
             observation_signature(a)["sha256"],
             observation_signature(b)["sha256"],
+        )
+
+
+class DeterminismSignatureTest(unittest.TestCase):
+    def state(self, hidden_name="Forest", player_uuid="11111111-1111-1111-1111-111111111111"):
+        return {
+            "eventKind": "DECISION",
+            "players": [{
+                "playerIndex": 0, "name": "P0", "life": 20,
+                "inGame": True, "passed": False,
+                "library": [{"name": hidden_name, "objectClass": hidden_name,
+                             "setCode": "TST", "cardNumber": "1",
+                             "zoneChangeCounter": 0}],
+                "hand": [], "graveyard": [], "sideboard": [],
+            }],
+            "current": {
+                "turnNumber": 1,
+                "players": [{"playerIndex": 0, "playerId": player_uuid,
+                             "life": 20}],
+                "activePlayerId": player_uuid,
+            },
+            "select": select("PRIORITY", 0, ["Pass"]),
+        }
+
+    def test_hidden_library_changes_the_verification_hash(self):
+        self.assertNotEqual(
+            determinism_signature(self.state("Forest"))["sha256"],
+            determinism_signature(self.state("Island"))["sha256"],
+        )
+
+    def test_transport_player_uuid_does_not_change_the_verification_hash(self):
+        self.assertEqual(
+            determinism_signature(self.state(
+                player_uuid="11111111-1111-1111-1111-111111111111"))["sha256"],
+            determinism_signature(self.state(
+                player_uuid="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))["sha256"],
         )
 
 
