@@ -47,11 +47,22 @@ class MagicObservationSerializerTest {
         assertThat(select.getOption()).hasSize(1);
         MagicOptionView option = select.getOption().get(0);
         assertThat(option.getIndex()).isEqualTo(0);
+        assertThat(option.getActionId()).matches("a_[0-9a-f]{64}");
         assertThat(option.getType()).isEqualTo("PASS_PRIORITY");
         assertThat(option.getLabel()).isEqualTo("Pass priority");
         assertThat(option.getPayload()).isEmpty();
 
         assertThat(observation.getLogs()).isEmpty();
+    }
+
+    @Test
+    void stableActionIdsDoNotDependOnSerializationCall() {
+        PendingDecision decision = PendingDecision.priority(aliceId);
+        MagicObservation first = serializer.serialize(twoPlayerGame(), alice, decision);
+        MagicObservation second = serializer.serialize(twoPlayerGame(), alice, decision);
+
+        assertThat(second.getSelect().getOption().get(0).getActionId())
+                .isEqualTo(first.getSelect().getOption().get(0).getActionId());
     }
 
     @Test
