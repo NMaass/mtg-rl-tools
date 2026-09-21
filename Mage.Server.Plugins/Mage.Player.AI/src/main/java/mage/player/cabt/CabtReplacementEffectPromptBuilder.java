@@ -3,6 +3,9 @@ package mage.player.cabt;
 import mage.MageObject;
 import mage.players.Player;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -17,12 +20,29 @@ public final class CabtReplacementEffectPromptBuilder {
                                  Map<String, MageObject> objectsMap) {
         PendingDecision decision = new PendingDecision(
                 MagicSelectType.REPLACEMENT_EFFECT, player.getId(), 1, 1);
+        List<MagicOption> options = new ArrayList<MagicOption>();
         int originalIndex = 0;
         for (Map.Entry<String, String> entry : effectsMap.entrySet()) {
             MageObject object = objectsMap == null ? null : objectsMap.get(entry.getKey());
-            decision.addOption(CabtReplacementEffectOptionFactory.replacementEffectOption(
+            options.add(CabtReplacementEffectOptionFactory.replacementEffectOption(
                     entry.getKey(), entry.getValue(), object, originalIndex));
             originalIndex++;
+        }
+        options.sort(new Comparator<MagicOption>() {
+            @Override
+            public int compare(MagicOption left, MagicOption right) {
+                int semantic = CabtSemanticOrder.optionKey(left)
+                        .compareTo(CabtSemanticOrder.optionKey(right));
+                if (semantic != 0) {
+                    return semantic;
+                }
+                return Integer.compare(
+                        (Integer) left.payload().get("originalIndex"),
+                        (Integer) right.payload().get("originalIndex"));
+            }
+        });
+        for (MagicOption option : options) {
+            decision.addOption(option);
         }
         return decision;
     }
