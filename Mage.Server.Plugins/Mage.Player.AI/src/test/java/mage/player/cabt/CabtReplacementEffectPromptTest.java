@@ -49,6 +49,31 @@ class CabtReplacementEffectPromptTest {
     }
 
     @Test
+    void replacementOrderIsSemanticButSelectionReturnsEngineOriginalIndex() {
+        LinkedHashMap<String, String> reversed = new LinkedHashMap<String, String>();
+        reversed.put("effect-c", "Prevent all combat damage");
+        reversed.put("effect-b", "If you would draw a card, draw two instead");
+        reversed.put("effect-a", "If a creature would die, exile it instead");
+
+        PendingDecision forward = builder.build(alice, threeEffects(),
+                new LinkedHashMap<String, MageObject>());
+        PendingDecision backward = builder.build(alice, reversed,
+                new LinkedHashMap<String, MageObject>());
+
+        assertThat(backward.options().stream().map(MagicOption::label).toList())
+                .isEqualTo(forward.options().stream().map(MagicOption::label).toList());
+
+        for (int index = 0; index < backward.options().size(); index++) {
+            MagicOption option = backward.options().get(index);
+            String effectKey = (String) option.payload().get("effectKey");
+            int expectedOriginal = new java.util.ArrayList<String>(reversed.keySet())
+                    .indexOf(effectKey);
+            assertThat(applier.apply(Selection.of(index), backward))
+                    .isEqualTo(expectedOriginal);
+        }
+    }
+
+    @Test
     void replacementSelectionReturnsOriginalIndex() {
         PendingDecision decision = builder.build(alice, threeEffects(),
                 new LinkedHashMap<String, MageObject>());
