@@ -9,7 +9,6 @@ import mage.abilities.costs.mana.ManaCost;
 import mage.abilities.mana.ActivatedManaAbilityImpl;
 import mage.cards.Card;
 import mage.cards.Cards;
-import mage.cards.decks.Deck;
 import mage.choices.Choice;
 import mage.constants.MultiAmountType;
 import mage.constants.Outcome;
@@ -105,30 +104,6 @@ public final class CabtBridgePlayer extends ComputerPlayer {
 
     public CabtDecisionTraceRecorder getTraceRecorder() {
         return traceRecorder;
-    }
-
-    /**
-     * Preserve the caller's declared deck order before XMage applies its
-     * seeded shuffle. PlayerImpl.useDeck goes through Deck.getMaindeckCards(),
-     * which collects into an unordered Set; that makes a fixed RNG seed start
-     * from a different permutation when card UUID hashes differ between JVMs.
-     * The CABT engine needs replayable roots, so copy the insertion-ordered
-     * Deck.getCards() sequence while retaining XMage's extra-deck filtering.
-     */
-    @Override
-    public void useDeck(Deck deck, Game game) {
-        library.clear();
-        List<Card> orderedMain = new ArrayList<Card>();
-        for (Card card : deck.getCards()) {
-            if (!card.isExtraDeckCard()) {
-                orderedMain.add(card);
-            }
-        }
-        library.addAll(orderedMain, game);
-        sideboard.clear();
-        for (Card card : deck.getSideboard()) {
-            sideboard.add(card);
-        }
     }
 
     @Override
