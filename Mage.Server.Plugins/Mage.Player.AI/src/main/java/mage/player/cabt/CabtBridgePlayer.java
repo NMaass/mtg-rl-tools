@@ -52,6 +52,7 @@ public final class CabtBridgePlayer extends ComputerPlayer {
 
     private final CabtBridgeController bridge;
     private final CabtDecisionTraceRecorder traceRecorder;
+    private final int cabtSeat;
     private final CabtPriorityPromptBuilder priorityPromptBuilder = new CabtPriorityPromptBuilder();
     private final CabtPrioritySelectionApplier prioritySelectionApplier = new CabtPrioritySelectionApplier();
     private final CabtTargetPromptBuilder targetPromptBuilder = new CabtTargetPromptBuilder();
@@ -80,9 +81,19 @@ public final class CabtBridgePlayer extends ComputerPlayer {
     private final CabtMulliganSelectionApplier mulliganSelectionApplier = new CabtMulliganSelectionApplier();
 
     public CabtBridgePlayer(String name, RangeOfInfluence range, CabtBridgeController bridge) {
+        this(name, range, bridge, -1);
+    }
+
+    public CabtBridgePlayer(String name, RangeOfInfluence range, CabtBridgeController bridge,
+                            int cabtSeat) {
         super(name, range);
         this.bridge = bridge;
         this.traceRecorder = new CabtDecisionTraceRecorder();
+        this.cabtSeat = cabtSeat;
+    }
+
+    int cabtSeat() {
+        return cabtSeat;
     }
 
     private CabtBridgePlayer(final CabtBridgePlayer player) {
@@ -95,6 +106,7 @@ public final class CabtBridgePlayer extends ComputerPlayer {
         // games fail closed instead of reaching the bridge.
         this.bridge = player.bridge;
         this.traceRecorder = player.traceRecorder;
+        this.cabtSeat = player.cabtSeat;
     }
 
     @Override
