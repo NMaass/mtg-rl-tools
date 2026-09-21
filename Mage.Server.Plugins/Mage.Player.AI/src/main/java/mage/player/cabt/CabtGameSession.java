@@ -288,6 +288,20 @@ public final class CabtGameSession {
     }
 
     /**
+     * Resolve stable semantic action ids against the current prompt, then
+     * apply the corresponding live engine indices. This is the replay/agent
+     * contract; unknown or duplicate ids fail before the engine advances.
+     */
+    public Event selectActionIds(List<String> actionIds) {
+        Event pending = currentEvent;
+        if (pending == null || pending.kind() != Event.Kind.DECISION) {
+            throw new IllegalStateException("NO_PENDING_DECISION");
+        }
+        List<Integer> indices = CabtActionIds.resolve(pending.decision(), actionIds);
+        return select(indices);
+    }
+
+    /**
      * Closes the session: unparks the game thread with a poison pill so the
      * engine loop unwinds via {@link CabtSessionClosedException}.
      */
