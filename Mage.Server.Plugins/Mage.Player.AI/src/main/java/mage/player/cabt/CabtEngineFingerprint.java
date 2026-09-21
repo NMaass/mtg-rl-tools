@@ -2,6 +2,8 @@ package mage.player.cabt;
 
 import mage.MageObject;
 import mage.cards.Card;
+import mage.constants.ManaType;
+import mage.counters.Counter;
 import mage.game.Game;
 import mage.game.command.CommandObject;
 import mage.game.permanent.Permanent;
@@ -20,8 +22,9 @@ import java.util.UUID;
  * Private deterministic-state verifier for replay reconstruction.
  *
  * This digest is deliberately separate from agent observations. It includes
- * hidden hands and ordered libraries so a replay cannot be certified merely
- * because its public board happens to match. Raw UUIDs are excluded because
+ * hidden zones plus decision-relevant player/permanent state so a replay cannot
+ * be certified merely because its public board happens to match. This is a
+ * semantic verification digest, not a serialized copy of every XMage field. Raw UUIDs are excluded because
  * XMage allocates them nondeterministically when objects are constructed.
  */
 public final class CabtEngineFingerprint {
@@ -61,6 +64,10 @@ public final class CabtEngineFingerprint {
                         .append("|life=").append(player.getLife())
                         .append("|passed=").append(player.isPassed())
                         .append("|inGame=").append(player.isInGame())
+                        .append("|landsPlayed=").append(player.getLandsPlayed())
+                        .append("|landsPerTurn=").append(player.getLandsPerTurn())
+                        .append("|counters=").append(playerCounters(player))
+                        .append("|mana=").append(manaPool(player))
                         .append("|hand=").append(sortedCardNames(game, player.getHand()))
                         .append("|library=").append(orderedCardNames(game, player.getLibrary().getCardList()))
                         .append("|graveyard=").append(orderedCardNames(game, player.getGraveyard()))
@@ -103,6 +110,28 @@ public final class CabtEngineFingerprint {
         Collections.sort(command);
         out.append("command=").append(command).append('\n');
         return out.toString();
+    }
+
+    private static List<String> playerCounters(Player player) {
+        List<String> values = new ArrayList<String>();
+        if (player.getCountersAsCopy() != null) {
+            for (Counter counter : player.getCountersAsCopy().values()) {
+                values.add(counter.getName() + "=" + counter.getCount());
+            }
+        }
+        Collections.sort(values);
+        return values;
+    }
+
+    private static List<String> manaPool(Player player) {
+        List<String> values = new ArrayList<String>();
+        for (ManaType type : ManaType.values()) {
+            int amount = player.getManaPool().get(type);
+            if (amount != 0) {
+                values.add(type.name() + "=" + amount);
+            }
+        }
+        return values;
     }
 
     private static List<String> sortedCardNames(Game game, Iterable<UUID> ids) {
