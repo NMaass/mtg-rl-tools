@@ -45,8 +45,12 @@ _UUID = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB]
         return {'finished': False, 'revision': REFERENCE, 'setup': SETUP,
                 'position': len(self.steps),
                 'fingerprint': observation_signature(observation)['sha256'],
-                'engineFingerprint': self.bridge.engine_fingerprint(),
                 'observation': copy.deepcopy(observation)}
+
+    def verification_fingerprint(self):
+        if self.failed:
+            raise ValueError('This session failed and cannot be verified.')
+        return self.bridge.engine_fingerprint()
 
     def step(self, selection, fingerprint):
         current = self.observation()
@@ -101,10 +105,12 @@ _UUID = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB]
     def checkpoint(self):
         if self.finished:
             raise ValueError('A terminal game is a result, not a resumable root.')
+        root = self.observation()
+        root['engineFingerprint'] = self.verification_fingerprint()
         return {'kind': 'native-xmage-replay-root', 'version': 3,
                 'revision': REFERENCE, 'setup': SETUP,
                 'spec': copy.deepcopy(self.spec), 'steps': copy.deepcopy(self.steps),
-                'root': self.observation()}
+                'root': root}
 
     @classmethod
     def restore(cls, checkpoint, bridge_factory=CabtBridge):
@@ -127,15 +133,16 @@ _UUID = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB]
                     raise ValueError('Replay step has no stable action ids.')
                 session.step_action_ids(action_ids, step['fingerprint'])
             actual = session.observation()
+            actual_engine = session.verification_fingerprint()
             if (actual.get('finished') or
                     actual.get('fingerprint') != expected.get('fingerprint') or
-                    actual.get('engineFingerprint') != expected.get('engineFingerprint')):
+                    actual_engine != expected.get('engineFingerprint')):
                 raise ReplayDivergenceError(
                     'Rebuilt root does not match the recorded public semantics and private verification digest.',
                     expected={'public': expected.get('fingerprint'),
                               'engine': expected.get('engineFingerprint')},
                     actual={'public': actual.get('fingerprint'),
-                            'engine': actual.get('engineFingerprint')})
+                            'engine': actual_engine})
             return session
         except Exception:
             session.close()
@@ -155,9 +162,11 @@ _UUID = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB]
             observation = current['observation']
             seat = observation['select']['playerIndex']
             selection = agents[seat].select(observation)
+            options = observation['select'].get('option') or []
+            action_ids = [options[index]['actionId'] for index in selection]
             frames.append({'gameId': 'native', 'sequence': len(self.steps), 'player': seat,
-                           'observation': observation, 'selected': selection})
-            self.step(selection, current['fingerprint'])
+                           'observation': observation, 'selectedActionIds': action_ids})
+            self.step_action_ids(action_ids, current['fingerprint'])
         return {'frames': frames, 'state': self.observation()}
 
     def close(self):
@@ -196,6 +205,15 @@ def main():
                             request['selection'], request['fingerprint'])
                 elif command == 'checkpoint':
                     result = session.checkpoint()
+                elif command == 'verify':
+                    observed = session.observation()
+                    result = {
+                        'revision': REFERENCE,
+                        'setup': SETUP,
+                        'position': observed.get('position'),
+                        'publicFingerprint': observed.get('fingerprint'),
+                        'engineFingerprint': session.verification_fingerprint(),
+                    }
                 elif command == 'autoplay':
                     result = session.autoplay(request.get('agents', ['random', 'first']), request.get('decisions', 100))
                 else:
