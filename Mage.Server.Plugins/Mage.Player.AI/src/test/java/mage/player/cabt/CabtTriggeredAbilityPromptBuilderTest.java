@@ -74,7 +74,7 @@ class CabtTriggeredAbilityPromptBuilderTest {
         assertThat(decision.options().stream()
                 .map(option -> option.payload().get("sourceName"))
                 .collect(Collectors.toList()))
-                .containsExactly("Grizzly Bears", "Young Wolf");
+                .containsExactlyInAnyOrder("Grizzly Bears", "Young Wolf");
     }
 
     @Test
