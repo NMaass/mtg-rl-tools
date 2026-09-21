@@ -15,7 +15,7 @@ import java.util.UUID;
  * blocker/attacker pair, from Player.getAvailableBlockers(game) crossed with
  * the attackers in the engine's combat groups, using the same legality check
  * declareBlocker applies (CombatGroup.canBlock). minCount is 0 — blocking is
- * optional. Options are sorted by blocker/attacker id for stable indices.
+ * optional. Options are sorted by semantic blocker/attacker identity for stable indices.
  */
 public final class CabtBlockersPromptBuilder {
 
@@ -40,18 +40,24 @@ public final class CabtBlockersPromptBuilder {
         pairs.sort(new Comparator<CabtCombatBlockOption>() {
             @Override
             public int compare(CabtCombatBlockOption left, CabtCombatBlockOption right) {
-                int byBlocker = left.getBlockerId().toString()
-                        .compareTo(right.getBlockerId().toString());
+                int byBlocker = CabtSemanticOrder.targetKey(game, left.getBlockerId())
+                        .compareTo(CabtSemanticOrder.targetKey(game, right.getBlockerId()));
                 if (byBlocker != 0) {
                     return byBlocker;
                 }
-                return left.getAttackerId().toString().compareTo(right.getAttackerId().toString());
+                int byAttacker = CabtSemanticOrder.targetKey(game, left.getAttackerId())
+                        .compareTo(CabtSemanticOrder.targetKey(game, right.getAttackerId()));
+                if (byAttacker != 0) {
+                    return byAttacker;
+                }
+                int idTie = left.getBlockerId().toString().compareTo(right.getBlockerId().toString());
+                return idTie != 0 ? idTie : left.getAttackerId().toString().compareTo(right.getAttackerId().toString());
             }
         });
         PendingDecision decision = new PendingDecision(
                 MagicSelectType.DECLARE_BLOCKERS, player.getId(), 0, pairs.size());
         for (CabtCombatBlockOption pair : pairs) {
-            decision.addOption(CabtCombatOptionFactory.toMagicOption(pair));
+            decision.addOption(CabtCombatOptionFactory.toMagicOption(game, pair));
         }
         return decision;
     }

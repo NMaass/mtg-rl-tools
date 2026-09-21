@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -46,6 +47,31 @@ class CabtReplacementEffectPromptTest {
         assertThat(decision.options().get(0).payload().get("effectKey")).isEqualTo("effect-a");
         assertThat(decision.options().get(1).payload().get("effectKey")).isEqualTo("effect-b");
         assertThat(decision.options().get(2).payload().get("effectKey")).isEqualTo("effect-c");
+    }
+
+    @Test
+    void replacementOrderIsSemanticButSelectionReturnsEngineOriginalIndex() {
+        LinkedHashMap<String, String> reversed = new LinkedHashMap<String, String>();
+        reversed.put("effect-c", "Prevent all combat damage");
+        reversed.put("effect-b", "If you would draw a card, draw two instead");
+        reversed.put("effect-a", "If a creature would die, exile it instead");
+
+        PendingDecision forward = builder.build(alice, threeEffects(),
+                new LinkedHashMap<String, MageObject>());
+        PendingDecision backward = builder.build(alice, reversed,
+                new LinkedHashMap<String, MageObject>());
+
+        assertThat(backward.options().stream().map(MagicOption::label).collect(Collectors.toList()))
+                .isEqualTo(forward.options().stream().map(MagicOption::label).collect(Collectors.toList()));
+
+        for (int index = 0; index < backward.options().size(); index++) {
+            MagicOption option = backward.options().get(index);
+            String effectKey = (String) option.payload().get("effectKey");
+            int expectedOriginal = new java.util.ArrayList<String>(reversed.keySet())
+                    .indexOf(effectKey);
+            assertThat(applier.apply(Selection.of(index), backward))
+                    .isEqualTo(expectedOriginal);
+        }
     }
 
     @Test

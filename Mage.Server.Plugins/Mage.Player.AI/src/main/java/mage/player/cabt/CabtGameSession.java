@@ -162,6 +162,8 @@ public final class CabtGameSession {
     private final MagicObservationSerializer serializer = new MagicObservationSerializer();
     private final List<Card> deckCards = new ArrayList<Card>();
     private final long decisionTimeoutSeconds;
+    private final Long seed;
+    private static final Object ENGINE_RANDOM_LOCK = new Object();
 
     private Thread gameThread;
     private Event currentEvent;
@@ -183,16 +185,14 @@ public final class CabtGameSession {
             config = new Config();
         }
         this.decisionTimeoutSeconds = config.decisionTimeoutSeconds;
-        if (config.seed != null) {
-            // engine-global randomness (shuffles, coin flips): best-effort
-            // determinism for single-session processes
-            RandomUtil.setSeed(config.seed);
-        }
+        this.seed = config.seed;
 
         this.game = new CabtLiveDuel();
         this.controller = new CabtBlockingBridgeController(events);
-        this.player0 = new CabtBridgePlayer(config.playerName0, RangeOfInfluence.ALL, controller);
-        this.player1 = new CabtBridgePlayer(config.playerName1, RangeOfInfluence.ALL, controller);
+        this.player0 = new CabtBridgePlayer(config.playerName0, RangeOfInfluence.ALL, controller, 0);
+        this.player1 = new CabtBridgePlayer(config.playerName1, RangeOfInfluence.ALL, controller, 1);
+        CabtSemanticIds.register(game, player0.getId(), "P0");
+        CabtSemanticIds.register(game, player1.getId(), "P1");
 
         addPlayer(player0, resolver.buildDeck(player0.getId(), deck0));
         addPlayer(player1, resolver.buildDeck(player1.getId(), deck1));
@@ -206,6 +206,11 @@ public final class CabtGameSession {
 
     private void addPlayer(CabtBridgePlayer player, List<Card> cards) {
         Deck deck = new Deck();
+        for (int index = 0; index < cards.size(); index++) {
+            Card card = cards.get(index);
+            CabtSemanticIds.register(game, card.getId(),
+                    "P" + player.cabtSeat() + ":D" + String.format("%05d", index));
+        }
         deck.getCards().addAll(cards);
         deckCards.addAll(cards);
         game.loadCards(deck.getCards(), player.getId());
@@ -224,7 +229,17 @@ public final class CabtGameSession {
             @Override
             public void run() {
                 try {
-                    game.start(player0.getId());
+                    synchronized (ENGINE_RANDOM_LOCK) {
+                        if (seed != null) {
+                            // XMage's RNG is process-global. Seed immediately before
+                            // the engine begins consuming randomness, after all card
+                            // and player construction. Serializing CABT games in one
+                            // JVM makes seeded transcripts reproducible; parallel
+                            // deterministic actors use one JVM process per worker.
+                            RandomUtil.setSeed(seed);
+                        }
+                        game.start(player0.getId());
+                    }
                     events.put(Event.gameOver(game.getWinner(),
                             serializer.serializeCurrent(game, null)));
                 } catch (CabtSessionClosedException e) {
@@ -273,6 +288,20 @@ public final class CabtGameSession {
     }
 
     /**
+     * Resolve stable semantic action ids against the current prompt, then
+     * apply the corresponding live engine indices. This is the replay/agent
+     * contract; unknown or duplicate ids fail before the engine advances.
+     */
+    public Event selectActionIds(List<String> actionIds) {
+        Event pending = currentEvent;
+        if (pending == null || pending.kind() != Event.Kind.DECISION) {
+            throw new IllegalStateException("NO_PENDING_DECISION");
+        }
+        List<Integer> indices = CabtActionIds.resolve(pending.decision(), actionIds);
+        return select(indices);
+    }
+
+    /**
      * Closes the session: unparks the game thread with a poison pill so the
      * engine loop unwinds via {@link CabtSessionClosedException}.
      */
@@ -318,6 +347,14 @@ public final class CabtGameSession {
      * Public-information state snapshot for visualize_data, from the pending
      * player's perspective (or fully hidden hands when the game is over).
      */
+    public String engineFingerprint() {
+        Event event = currentEvent;
+        if (event == null) {
+            throw new IllegalStateException("NO_ENGINE_STATE");
+        }
+        return CabtEngineFingerprint.sha256(game);
+    }
+
     public MagicCurrent snapshotCurrent() {
         Event event = currentEvent;
         java.util.UUID perspective = null;

@@ -17,6 +17,7 @@ import java.util.UUID;
 public final class CabtTargetOptionFactory {
 
     static final String PAYLOAD_TARGET_ID = "targetId";
+    static final String PAYLOAD_TARGET_REF = "targetRef";
     static final String PAYLOAD_TARGET_NAME = "targetName";
     static final String PAYLOAD_TARGET_CLASS = "targetClass";
     static final String PAYLOAD_ZONE = "zone";
@@ -42,7 +43,7 @@ public final class CabtTargetOptionFactory {
         String name = object == null ? null : object.getName();
         String targetClass = object == null ? null : object.getClass().getSimpleName();
         return MagicOptionFactory.promptObject(
-                label(targeted, name == null ? targetId.toString() : name),
+                label(targeted, name == null ? "Unresolved object" : name),
                 payload(game, targetId, name, targetClass, alreadyChosen));
     }
 
@@ -59,7 +60,7 @@ public final class CabtTargetOptionFactory {
         String name = object == null ? null : object.getName();
         String targetClass = object == null ? null : object.getClass().getSimpleName();
         return MagicOptionFactory.promptCard(
-                label(targeted, name == null ? cardId.toString() : name),
+                label(targeted, name == null ? "Unresolved card" : name),
                 payload(game, cardId, name, targetClass, alreadyChosen));
     }
 
@@ -71,6 +72,7 @@ public final class CabtTargetOptionFactory {
                                                String targetClass, boolean alreadyChosen) {
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
         payload.put(PAYLOAD_TARGET_ID, targetId.toString());
+        payload.put(PAYLOAD_TARGET_REF, CabtSemanticIds.get(game, targetId));
         payload.put(PAYLOAD_TARGET_NAME, name);
         payload.put(PAYLOAD_TARGET_CLASS, targetClass);
         payload.put(PAYLOAD_ZONE, zoneName(game, targetId));

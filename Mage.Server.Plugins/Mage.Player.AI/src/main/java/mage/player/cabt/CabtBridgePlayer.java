@@ -52,6 +52,7 @@ public final class CabtBridgePlayer extends ComputerPlayer {
 
     private final CabtBridgeController bridge;
     private final CabtDecisionTraceRecorder traceRecorder;
+    private final int cabtSeat;
     private final CabtPriorityPromptBuilder priorityPromptBuilder = new CabtPriorityPromptBuilder();
     private final CabtPrioritySelectionApplier prioritySelectionApplier = new CabtPrioritySelectionApplier();
     private final CabtTargetPromptBuilder targetPromptBuilder = new CabtTargetPromptBuilder();
@@ -80,9 +81,19 @@ public final class CabtBridgePlayer extends ComputerPlayer {
     private final CabtMulliganSelectionApplier mulliganSelectionApplier = new CabtMulliganSelectionApplier();
 
     public CabtBridgePlayer(String name, RangeOfInfluence range, CabtBridgeController bridge) {
+        this(name, range, bridge, -1);
+    }
+
+    public CabtBridgePlayer(String name, RangeOfInfluence range, CabtBridgeController bridge,
+                            int cabtSeat) {
         super(name, range);
         this.bridge = bridge;
         this.traceRecorder = new CabtDecisionTraceRecorder();
+        this.cabtSeat = cabtSeat;
+    }
+
+    int cabtSeat() {
+        return cabtSeat;
     }
 
     private CabtBridgePlayer(final CabtBridgePlayer player) {
@@ -95,6 +106,7 @@ public final class CabtBridgePlayer extends ComputerPlayer {
         // games fail closed instead of reaching the bridge.
         this.bridge = player.bridge;
         this.traceRecorder = player.traceRecorder;
+        this.cabtSeat = player.cabtSeat;
     }
 
     @Override
@@ -237,7 +249,7 @@ public final class CabtBridgePlayer extends ComputerPlayer {
     @Override
     public boolean choosePile(Outcome outcome, String message,
                               List<? extends Card> pile1, List<? extends Card> pile2, Game game) {
-        PendingDecision decision = pilePromptBuilder.build(this, message, pile1, pile2);
+        PendingDecision decision = pilePromptBuilder.build(this, game, message, pile1, pile2);
         TracedSelection traced = prompt("CHOOSE_PILE", decision, game);
         return applyTraced(traced, () -> {
             MagicOption selected = decision.options().get(traced.selection.indices().get(0));
@@ -319,7 +331,7 @@ public final class CabtBridgePlayer extends ComputerPlayer {
             // same single-effect shortcut as HumanPlayer.chooseReplacementEffect
             return 0;
         }
-        PendingDecision decision = replacementEffectPromptBuilder.build(this, effectsMap, objectsMap);
+        PendingDecision decision = replacementEffectPromptBuilder.build(this, game, effectsMap, objectsMap);
         TracedSelection traced = prompt("CHOOSE_REPLACEMENT_EFFECT", decision, game);
         return applyTraced(traced, () -> replacementEffectSelectionApplier.apply(
                 traced.selection, decision));

@@ -93,6 +93,8 @@ public final class CabtProtocolServer {
                     return repositoryCardData(id, request);
                 case "visualize_data":
                     return visualizeData(id);
+                case "engine_fingerprint":
+                    return engineFingerprint(id);
                 default:
                     return error(id, "UNKNOWN_COMMAND",
                             "unknown command: " + command.getAsString());
@@ -119,10 +121,11 @@ public final class CabtProtocolServer {
     private String capabilities(JsonElement id) {
         JsonObject response = okResponse(id);
         response.addProperty("protocolVersion", PROTOCOL_VERSION);
+        response.addProperty("stableActionIds", true);
         JsonArray commands = new JsonArray();
         for (String name : new String[]{"ping", "capabilities", "game_start", "game_select",
                 "game_finish", "resolve_card", "validate_deck", "all_card_data",
-                "repository_card_data", "visualize_data"}) {
+                "repository_card_data", "visualize_data", "engine_fingerprint"}) {
             commands.add(name);
         }
         response.add("commands", commands);
@@ -177,9 +180,30 @@ public final class CabtProtocolServer {
             return error(id, "NO_ACTIVE_GAME", "no game is active; send game_start first");
         }
         JsonElement selectElement = request.get("select");
+        JsonElement actionElement = request.get("selectIds");
+        if (selectElement != null && actionElement != null) {
+            return error(id, "MALFORMED_REQUEST",
+                    "game_select accepts either select indices or selectIds, not both");
+        }
+        if (actionElement != null) {
+            if (!actionElement.isJsonArray()) {
+                return error(id, "MALFORMED_REQUEST",
+                        "selectIds must be an array of action ids");
+            }
+            List<String> actionIds = new ArrayList<String>();
+            for (JsonElement element : actionElement.getAsJsonArray()) {
+                if (!element.isJsonPrimitive()
+                        || !element.getAsJsonPrimitive().isString()) {
+                    return error(id, "MALFORMED_REQUEST",
+                            "selectIds entries must be strings");
+                }
+                actionIds.add(element.getAsString());
+            }
+            return eventResponse(id, session.selectActionIds(actionIds));
+        }
         if (selectElement == null || !selectElement.isJsonArray()) {
             return error(id, "MALFORMED_REQUEST",
-                    "game_select needs \"select\": [option indices]");
+                    "game_select needs select indices or selectIds");
         }
         List<Integer> indices = new ArrayList<Integer>();
         for (JsonElement element : selectElement.getAsJsonArray()) {
@@ -322,6 +346,16 @@ public final class CabtProtocolServer {
             cards.add(cardDataExporter.export(card));
         }
         response.add("cards", GSON.toJsonTree(cards));
+        return GSON.toJson(response);
+    }
+
+    private String engineFingerprint(JsonElement id) {
+        if (session == null) {
+            return error(id, "NO_ACTIVE_GAME", "no game is active");
+        }
+        JsonObject response = okResponse(id);
+        response.addProperty("sha256", session.engineFingerprint());
+        response.addProperty("scope", "PRIVATE_ENGINE_STATE_V1");
         return GSON.toJson(response);
     }
 

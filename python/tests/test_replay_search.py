@@ -103,6 +103,51 @@ class SignatureTest(unittest.TestCase):
             observation_signature(b)["sha256"],
         )
 
+    def test_semantic_object_identity_changes_signature_even_when_runtime_uuid_is_scrubbed(self):
+        a = response(2, "PRIORITY", 0, ["Cast"])[ "observation" ]
+        b = response(2, "PRIORITY", 0, ["Cast"])[ "observation" ]
+        a["current"]["battlefield"] = [{
+            "ref": {
+                "objectId": "11111111-1111-1111-1111-111111111111",
+                "semanticId": "P0:D00001",
+                "name": "Grizzly Bears",
+            }
+        }]
+        b["current"]["battlefield"] = [{
+            "ref": {
+                "objectId": "22222222-2222-2222-2222-222222222222",
+                "semanticId": "P0:D00002",
+                "name": "Grizzly Bears",
+            }
+        }]
+        self.assertNotEqual(
+            observation_signature(a)["sha256"],
+            observation_signature(b)["sha256"],
+        )
+
+    def test_action_semantic_ref_changes_signature_but_runtime_source_id_does_not(self):
+        a = response(2, "PRIORITY", 0, ["Cast Grizzly Bears"])[ "observation" ]
+        b = response(2, "PRIORITY", 0, ["Cast Grizzly Bears"])[ "observation" ]
+        a_option = a["select"]["option"][0]["payload"]
+        b_option = b["select"]["option"][0]["payload"]
+        a_option.update({
+            "sourceId": "11111111-1111-1111-1111-111111111111",
+            "sourceRef": "P0:D00003",
+        })
+        b_option.update({
+            "sourceId": "22222222-2222-2222-2222-222222222222",
+            "sourceRef": "P0:D00003",
+        })
+        self.assertEqual(
+            observation_signature(a)["sha256"],
+            observation_signature(b)["sha256"],
+        )
+        b_option["sourceRef"] = "P0:D00004"
+        self.assertNotEqual(
+            observation_signature(a)["sha256"],
+            observation_signature(b)["sha256"],
+        )
+
     def test_preserves_active_and_priority_player_semantics_across_uuid_changes(self):
         a = response(2, "PRIORITY", 0, ["Attack", "Hold"])["observation"]
         b = response(2, "PRIORITY", 0, ["Attack", "Hold"])["observation"]

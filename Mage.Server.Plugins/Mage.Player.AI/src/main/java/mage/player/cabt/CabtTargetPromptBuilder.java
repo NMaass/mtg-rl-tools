@@ -31,7 +31,7 @@ public final class CabtTargetPromptBuilder {
         UUID abilityControllerId = target.getAffectedAbilityControllerId(player.getId());
         Set<UUID> possibleTargets = target.possibleTargets(abilityControllerId, source, game);
         PendingDecision decision = emptyDecision(player, target);
-        for (UUID targetId : orderedNewTargets(possibleTargets, target)) {
+        for (UUID targetId : orderedNewTargets(game, possibleTargets, target)) {
             decision.addOption(CabtTargetOptionFactory.targetOption(
                     game, targetId, context.isTargeted(), false));
         }
@@ -45,7 +45,7 @@ public final class CabtTargetPromptBuilder {
         UUID abilityControllerId = target.getAffectedAbilityControllerId(player.getId());
         Set<UUID> possibleTargets = target.possibleTargets(abilityControllerId, source, game, cards);
         PendingDecision decision = emptyDecision(player, target);
-        for (UUID cardId : orderedNewTargets(possibleTargets, target)) {
+        for (UUID cardId : orderedNewTargets(game, possibleTargets, target)) {
             decision.addOption(CabtTargetOptionFactory.cardOption(
                     game, cardId, context.isTargeted(), false));
         }
@@ -59,15 +59,26 @@ public final class CabtTargetPromptBuilder {
         return new PendingDecision(MagicSelectType.TARGET, player.getId(), remainingMin, remainingMax);
     }
 
-    private static List<UUID> orderedNewTargets(Set<UUID> possibleTargets, Target target) {
+    private static List<UUID> orderedNewTargets(final Game game,
+                                                Set<UUID> possibleTargets,
+                                                Target target) {
         List<UUID> ordered = new ArrayList<UUID>(possibleTargets);
         // possibleTargets implementations are expected to drop selected ids
         // already; filter again so a lenient implementation cannot offer the
-        // same target twice
+        // same target twice.
         ordered.removeAll(target.getTargets());
         ordered.sort(new Comparator<UUID>() {
             @Override
             public int compare(UUID left, UUID right) {
+                String leftKey = CabtSemanticOrder.targetKey(game, left);
+                String rightKey = CabtSemanticOrder.targetKey(game, right);
+                int semantic = leftKey.compareTo(rightKey);
+                if (semantic != 0) {
+                    return semantic;
+                }
+                // Same semantic object state is intentionally interchangeable
+                // at this prompt. UUID is only a within-run tie-breaker; the
+                // exposed option label/key remains semantic.
                 return left.toString().compareTo(right.toString());
             }
         });

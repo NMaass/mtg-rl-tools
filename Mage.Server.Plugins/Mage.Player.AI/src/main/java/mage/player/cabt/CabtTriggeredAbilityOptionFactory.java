@@ -26,10 +26,11 @@ public final class CabtTriggeredAbilityOptionFactory {
         payload.put("abilityId", nullableToString(ability.getId()));
         payload.put("originalId", nullableToString(ability.getOriginalId()));
         payload.put("sourceId", nullableToString(ability.getSourceId()));
+        payload.put("sourceRef", CabtSemanticIds.get(game, ability.getSourceId()));
         payload.put("sourceName", sourceName);
         payload.put("rule", rule);
         payload.put("abilityClass", ability.getClass().getSimpleName());
-        String label = "Put trigger on stack: " + (rule == null ? nullableToString(ability.getId()) : rule);
+        String label = "Put trigger on stack: " + (rule == null ? "unresolved trigger" : rule);
         return new MagicOption(MagicOptionType.PROMPT_TRIGGERED_ABILITY, label, payload);
     }
 

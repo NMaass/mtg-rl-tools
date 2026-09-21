@@ -13,6 +13,7 @@ import mage.players.Player;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -154,8 +155,9 @@ public final class MagicObservationSerializer {
             // id known but object unresolvable: keep the bare reference so the
             // observation stays complete
             return new MagicObjectView(
-                    new MagicObjectReference(cardId.toString(), null, zone.name(),
-                            null, null, null, null),
+                    new MagicObjectReference(cardId.toString(),
+                            CabtSemanticIds.get(game, cardId),
+                            null, zone.name(), null, null, null, null),
                     null, null);
         }
         return MagicObjectViewFactory.objectView(game, object, zone);
@@ -174,9 +176,11 @@ public final class MagicObservationSerializer {
     private MagicSelectView serializeSelect(Game game, Player selectingPlayer, PendingDecision decision) {
         List<MagicOptionView> options = new ArrayList<MagicOptionView>();
         List<MagicOption> decisionOptions = decision.options();
+        List<String> actionIds = CabtActionIds.forOptions(decisionOptions);
         for (int i = 0; i < decisionOptions.size(); i++) {
             MagicOption option = decisionOptions.get(i);
-            options.add(new MagicOptionView(i, option.type().name(), option.label(), option.payload()));
+            options.add(new MagicOptionView(
+                    i, actionIds.get(i), option.type().name(), option.label(), option.payload()));
         }
         UUID selectingPlayerId = selectingPlayer.getId();
         return new MagicSelectView(
@@ -204,24 +208,36 @@ public final class MagicObservationSerializer {
         return game.getStep() == null ? null : game.getStep().getType();
     }
 
-    private static List<UUID> orderedPlayerIds(Game game) {
+    private static List<UUID> orderedPlayerIds(final Game game) {
         List<UUID> ids = new ArrayList<UUID>();
         if (game.getPlayerList() != null) {
             for (UUID playerId : game.getPlayerList()) {
                 ids.add(playerId);
             }
         }
+        ids.sort(new Comparator<UUID>() {
+            @Override
+            public int compare(UUID left, UUID right) {
+                int leftSeat = CabtSemanticOrder.playerIndex(game, left);
+                int rightSeat = CabtSemanticOrder.playerIndex(game, right);
+                int bySeat = Integer.compare(leftSeat, rightSeat);
+                if (bySeat != 0) {
+                    return bySeat;
+                }
+                Player leftPlayer = game.getPlayer(left);
+                Player rightPlayer = game.getPlayer(right);
+                String leftName = leftPlayer == null ? "" : leftPlayer.getName();
+                String rightName = rightPlayer == null ? "" : rightPlayer.getName();
+                int byName = leftName.compareTo(rightName);
+                return byName != 0 ? byName : left.toString().compareTo(right.toString());
+            }
+        });
         return ids;
     }
 
     private static int indexOf(Game game, UUID playerId) {
-        List<UUID> ids = orderedPlayerIds(game);
-        for (int i = 0; i < ids.size(); i++) {
-            if (ids.get(i).equals(playerId)) {
-                return i;
-            }
-        }
-        return -1;
+        int seat = CabtSemanticOrder.playerIndex(game, playerId);
+        return seat == Integer.MAX_VALUE ? -1 : seat;
     }
 
     private static String nullableToString(Object value) {

@@ -197,14 +197,30 @@ class CabtBridge(object):
         return self._track(self.request(request))
 
     def game_select(self, select_list):
-        """Answer the pending decision with option indices; returns the next
-        decision response (or the game result once ``finished``)."""
+        """Answer the pending decision with live option indices.
+
+        Persisted replay/checkpoint code should prefer game_select_ids.
+        """
         if not isinstance(select_list, list) or not all(
             isinstance(i, int) and not isinstance(i, bool) for i in select_list
         ):
             raise ValueError("select_list must be a list of ints")
         return self._track(
             self.request({"command": "game_select", "select": select_list})
+        )
+
+    def game_select_ids(self, action_ids):
+        """Answer by stable semantic action ids from select.option[].actionId.
+
+        The server resolves ids against the current engine prompt and rejects a
+        missing, duplicate, or stale id before advancing the game.
+        """
+        if not isinstance(action_ids, list) or not all(
+            isinstance(value, str) and value for value in action_ids
+        ):
+            raise ValueError("action_ids must be a list of non-empty strings")
+        return self._track(
+            self.request({"command": "game_select", "selectIds": action_ids})
         )
 
     def game_finish(self):
@@ -259,6 +275,16 @@ class CabtBridge(object):
     def visualize_data(self):
         """Human-readable board render of the current state."""
         return self.request({"command": "visualize_data"})["text"]
+
+    def engine_fingerprint(self):
+        """Private semantic verification digest including hidden zones.
+
+        This is a verification surface, not an agent observation or a byte-for-byte
+        serialization of every XMage internal. It covers hidden card identity/order
+        plus decision-relevant player, battlefield, stack, exile and command state,
+        and exposes only the digest.
+        """
+        return self.request({"command": "engine_fingerprint"})["sha256"]
 
     # --- helpers ---
 

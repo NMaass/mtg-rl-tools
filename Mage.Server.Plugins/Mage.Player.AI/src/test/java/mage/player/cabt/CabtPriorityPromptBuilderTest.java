@@ -21,6 +21,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -86,29 +87,39 @@ class CabtPriorityPromptBuilderTest {
         assertThat(options).hasSize(4);
         assertThat(options.get(0).type()).isEqualTo(MagicOptionType.PASS_PRIORITY);
 
-        MagicOption landOption = options.get(1);
-        assertThat(landOption.type()).isEqualTo(MagicOptionType.PLAY_LAND);
+        MagicOption landOption = options.stream()
+                .filter(option -> option.type() == MagicOptionType.PLAY_LAND)
+                .findFirst().orElseThrow(() -> new AssertionError("expected option"));
         assertThat(landOption.label()).isEqualTo("Play Forest");
-        assertThat(landOption.payload().get("playableIndex")).isEqualTo(0);
         assertThat(landOption.payload().get("abilityType")).isEqualTo("PLAY_LAND");
         assertThat(landOption.payload().get("sourceId")).isEqualTo(forestId.toString());
         assertThat(landOption.payload().get("sourceName")).isEqualTo("Forest");
 
-        MagicOption castOption = options.get(2);
-        assertThat(castOption.type()).isEqualTo(MagicOptionType.CAST_SPELL);
+        MagicOption castOption = options.stream()
+                .filter(option -> option.type() == MagicOptionType.CAST_SPELL)
+                .findFirst().orElseThrow(() -> new AssertionError("expected option"));
         assertThat(castOption.label()).isEqualTo("Cast Grizzly Bears");
-        assertThat(castOption.payload().get("playableIndex")).isEqualTo(1);
         assertThat(castOption.payload().get("manaCost")).isEqualTo("{1}{G}");
 
-        MagicOption manaOption = options.get(3);
-        assertThat(manaOption.type()).isEqualTo(MagicOptionType.ACTIVATE_ABILITY);
-        assertThat(manaOption.payload().get("playableIndex")).isEqualTo(2);
+        MagicOption manaOption = options.stream()
+                .filter(option -> option.type() == MagicOptionType.ACTIVATE_ABILITY)
+                .findFirst().orElseThrow(() -> new AssertionError("expected option"));
         assertThat(manaOption.payload().get("abilityType")).isEqualTo("ACTIVATED_MANA");
 
-        // the prompt keeps the live abilities for dispatch, aligned by playableIndex
-        assertThat(prompt.playableAt(0)).isSameAs(land);
-        assertThat(prompt.playableAt(1)).isSameAs(cast);
-        assertThat(prompt.playableAt(2)).isSameAs(mana);
+        // Agent-facing order is canonicalized, while playableIndex stays aligned
+        // to the live ability array used by the selection applier.
+        assertThat(prompt.playableAt((Integer) landOption.payload().get("playableIndex")))
+                .isSameAs(land);
+        assertThat(prompt.playableAt((Integer) castOption.payload().get("playableIndex")))
+                .isSameAs(cast);
+        assertThat(prompt.playableAt((Integer) manaOption.payload().get("playableIndex")))
+                .isSameAs(mana);
+
+        CabtPriorityPrompt reversed = builder.build(
+                player, game, Arrays.<ActivatedAbility>asList(mana, cast, land));
+        assertThat(reversed.getDecision().options().stream()
+                .map(MagicOption::label).collect(Collectors.toList()))
+                .isEqualTo(options.stream().map(MagicOption::label).collect(Collectors.toList()));
     }
 
     @Test

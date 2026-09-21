@@ -58,10 +58,11 @@ class CabtTargetPromptBuilderTest {
             assertThat(option.payload().get("targetId")).isNotNull();
             assertThat(option.label()).startsWith("Target ");
         }
-        // deterministic option order: sorted by target UUID string
-        String first = (String) decision.options().get(0).payload().get("targetId");
-        String second = (String) decision.options().get(1).payload().get("targetId");
-        assertThat(first).isLessThan(second);
+        // deterministic option order is semantic, not the random XMage UUID.
+        assertThat(decision.options().get(0).payload().get("targetName"))
+                .isEqualTo("Grizzly Bears");
+        assertThat(decision.options().get(1).payload().get("targetName"))
+                .isEqualTo("Runeclaw Bear");
     }
 
     @Test

@@ -7,6 +7,10 @@ import mage.abilities.mana.ActivatedManaAbilityImpl;
 import mage.constants.ManaType;
 import mage.game.Game;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+
 /**
  * CABT bridge: builds the PAY_MANA prompt for one step of XMage's payment
  * loop — the engine calls playMana repeatedly while the cost is unpaid, so
@@ -25,19 +29,37 @@ public final class CabtManaPromptBuilder {
                                  ManaCost unpaid, String promptText) {
         PendingDecision decision = new PendingDecision(
                 MagicSelectType.PAY_MANA, player.getId(), 1, 1);
+        List<MagicOption> payable = new ArrayList<MagicOption>();
         for (MageObject producer : player.cabtManaProducers(game)) {
             for (ActivatedManaAbilityImpl manaAbility : player.cabtManaAbilities(producer, game).values()) {
-                decision.addOption(CabtManaOptionFactory.manaSourceOption(
+                payable.add(CabtManaOptionFactory.manaSourceOption(
                         game, producer, manaAbility, abilityToCast, unpaid, promptText));
             }
         }
         for (ManaType manaType : ManaType.values()) {
             int available = player.getManaPool().get(manaType);
             if (available > 0) {
-                decision.addOption(CabtManaOptionFactory.manaPoolOption(
+                payable.add(CabtManaOptionFactory.manaPoolOption(
                         game, manaType, available, abilityToCast, unpaid, promptText));
             }
         }
+        payable.sort(new Comparator<MagicOption>() {
+            @Override
+            public int compare(MagicOption left, MagicOption right) {
+                int semantic = CabtSemanticOrder.optionKey(left)
+                        .compareTo(CabtSemanticOrder.optionKey(right));
+                if (semantic != 0) {
+                    return semantic;
+                }
+                return String.valueOf(left.payload().get("objectId"))
+                        .compareTo(String.valueOf(right.payload().get("objectId")));
+            }
+        });
+        for (MagicOption option : payable) {
+            decision.addOption(option);
+        }
+        // Cancel stays deliberately last and is not part of collection-order
+        // canonicalization.
         decision.addOption(CabtManaOptionFactory.cancelOption(game, abilityToCast, unpaid, promptText));
         return decision;
     }

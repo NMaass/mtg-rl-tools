@@ -37,18 +37,24 @@ public final class CabtAttackersPromptBuilder {
         pairs.sort(new Comparator<CabtCombatAttackOption>() {
             @Override
             public int compare(CabtCombatAttackOption left, CabtCombatAttackOption right) {
-                int byAttacker = left.getAttackerId().toString()
-                        .compareTo(right.getAttackerId().toString());
+                int byAttacker = CabtSemanticOrder.targetKey(game, left.getAttackerId())
+                        .compareTo(CabtSemanticOrder.targetKey(game, right.getAttackerId()));
                 if (byAttacker != 0) {
                     return byAttacker;
                 }
-                return left.getDefenderId().toString().compareTo(right.getDefenderId().toString());
+                int byDefender = CabtSemanticOrder.targetKey(game, left.getDefenderId())
+                        .compareTo(CabtSemanticOrder.targetKey(game, right.getDefenderId()));
+                if (byDefender != 0) {
+                    return byDefender;
+                }
+                int idTie = left.getAttackerId().toString().compareTo(right.getAttackerId().toString());
+                return idTie != 0 ? idTie : left.getDefenderId().toString().compareTo(right.getDefenderId().toString());
             }
         });
         PendingDecision decision = new PendingDecision(
                 MagicSelectType.DECLARE_ATTACKERS, player.getId(), 0, pairs.size());
         for (CabtCombatAttackOption pair : pairs) {
-            decision.addOption(CabtCombatOptionFactory.toMagicOption(pair));
+            decision.addOption(CabtCombatOptionFactory.toMagicOption(game, pair));
         }
         return decision;
     }

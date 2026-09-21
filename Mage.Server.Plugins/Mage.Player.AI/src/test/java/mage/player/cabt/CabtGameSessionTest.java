@@ -121,6 +121,35 @@ class CabtGameSessionTest {
         }
     }
 
+
+    @Test
+    void seededSessionsExposeTheSameFirstDecisionWithStableSeats() {
+        List<String> first = firstDecisionSignature();
+        List<String> second = firstDecisionSignature();
+
+        assertThat(second).isEqualTo(first);
+        assertThat(first).contains("chooser=0", "option=Target Alice", "option=Target Bob");
+        assertThat(first.indexOf("option=Target Alice"))
+                .isLessThan(first.indexOf("option=Target Bob"));
+    }
+
+    private static List<String> firstDecisionSignature() {
+        CabtGameSession local = new CabtGameSession(forestBearsDeck(), forestBearsDeck(), config());
+        try {
+            CabtGameSession.Event event = local.start();
+            assertThat(event.kind()).isEqualTo(CabtGameSession.Event.Kind.DECISION);
+            List<String> signature = new ArrayList<String>();
+            signature.add("chooser=" + event.observation().getSelect().getPlayerIndex());
+            signature.add("type=" + event.observation().getSelect().getType());
+            for (MagicOptionView option : event.observation().getSelect().getOption()) {
+                signature.add("option=" + option.getLabel());
+            }
+            return signature;
+        } finally {
+            local.finish();
+        }
+    }
+
     @Test
     void unknownCardNameFailsDeckConstructionLoudly() {
         List<CabtDeckFactory.Entry> badDeck = Collections.singletonList(

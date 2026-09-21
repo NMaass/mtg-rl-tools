@@ -43,6 +43,8 @@ public final class CabtYesNoPromptBuilder {
         }
         payload.put("sourceId", source == null || source.getSourceId() == null
                 ? null : source.getSourceId().toString());
+        payload.put("sourceRef", source == null ? null
+                : CabtSemanticIds.get(game, source.getSourceId()));
         payload.put("sourceName", sourceName(game, source));
         payload.put("outcome", outcome == null ? null : outcome.name());
         return payload;

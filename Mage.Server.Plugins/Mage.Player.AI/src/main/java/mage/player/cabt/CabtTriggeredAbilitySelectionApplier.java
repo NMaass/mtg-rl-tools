@@ -13,12 +13,16 @@ public final class CabtTriggeredAbilitySelectionApplier {
     public TriggeredAbility apply(List<TriggeredAbility> abilities,
                                   Selection selection, PendingDecision decision) {
         int index = selection.indices().get(0);
-        TriggeredAbility selected = abilities.get(index);
         Object abilityId = decision.options().get(index).payload().get("abilityId");
-        if (abilityId != null && !abilityId.equals(selected.getId().toString())) {
-            throw new IllegalStateException(
-                    "trigger option " + index + " no longer matches the ability list");
+        if (!(abilityId instanceof String)) {
+            throw new IllegalStateException("trigger option has no abilityId payload");
         }
-        return selected;
+        for (TriggeredAbility ability : abilities) {
+            if (ability.getId() != null && abilityId.equals(ability.getId().toString())) {
+                return ability;
+            }
+        }
+        throw new IllegalStateException(
+                "selected trigger is no longer present in the engine list");
     }
 }

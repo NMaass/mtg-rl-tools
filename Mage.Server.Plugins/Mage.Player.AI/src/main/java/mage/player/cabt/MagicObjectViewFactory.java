@@ -45,6 +45,7 @@ public final class MagicObjectViewFactory {
                 : null;
         return new MagicObjectReference(
                 nullableToString(object.getId()),
+                CabtSemanticIds.get(game, object.getId()),
                 nullableToString(sourceId),
                 zoneName(game, object.getId(), contextZone),
                 object.getName(),

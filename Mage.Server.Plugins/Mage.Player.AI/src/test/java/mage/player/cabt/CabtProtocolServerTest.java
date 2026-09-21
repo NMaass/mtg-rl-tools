@@ -56,8 +56,10 @@ class CabtProtocolServerTest {
         assertThat(capabilities.get("ok").getAsBoolean()).isTrue();
         assertThat(capabilities.get("protocolVersion").getAsInt())
                 .isEqualTo(CabtProtocolServer.PROTOCOL_VERSION);
+        assertThat(capabilities.get("stableActionIds").getAsBoolean()).isTrue();
         assertThat(capabilities.get("commands").getAsJsonArray().toString())
-                .contains("game_start", "game_select", "game_finish", "all_card_data");
+                .contains("game_start", "game_select", "game_finish", "all_card_data",
+                        "engine_fingerprint");
         assertThat(capabilities.get("cardDataScope").getAsString())
                 .isEqualTo("ACTIVE_GAME_DECK_POOL");
     }
@@ -160,6 +162,57 @@ class CabtProtocolServerTest {
     }
 
     // --- a real game over the protocol ---
+
+    @Test
+    void sameSeedHasSamePrivateEngineFingerprintAndDifferentSeedChangesIt() {
+        JsonObject first = handle(GAME_START);
+        assertThat(first.get("ok").getAsBoolean()).isTrue();
+        String fingerprintA = handle("{\"command\": \"engine_fingerprint\"}")
+                .get("sha256").getAsString();
+        handle("{\"command\": \"game_finish\"}");
+
+        JsonObject second = handle(GAME_START);
+        assertThat(second.get("ok").getAsBoolean()).isTrue();
+        String fingerprintB = handle("{\"command\": \"engine_fingerprint\"}")
+                .get("sha256").getAsString();
+        assertThat(fingerprintB).isEqualTo(fingerprintA);
+        handle("{\"command\": \"game_finish\"}");
+
+        String differentSeed = GAME_START.replace("\"seed\": 20260704", "\"seed\": 20260705");
+        JsonObject third = handle(differentSeed);
+        assertThat(third.get("ok").getAsBoolean()).isTrue();
+        String fingerprintC = handle("{\"command\": \"engine_fingerprint\"}")
+                .get("sha256").getAsString();
+        assertThat(fingerprintC).isNotEqualTo(fingerprintA);
+    }
+
+    @Test
+    void semanticActionIdsRejectUnknownChoicesWithoutAdvancingTheGame() {
+        JsonObject first = handle(GAME_START);
+        assertThat(first.get("ok").getAsBoolean()).isTrue();
+        JsonObject select = first.get("observation").getAsJsonObject()
+                .get("select").getAsJsonObject();
+        JsonArray options = select.get("option").getAsJsonArray();
+        assertThat(options).isNotEmpty();
+        String actionId = options.get(0).getAsJsonObject()
+                .get("actionId").getAsString();
+        assertThat(actionId).matches("a_[0-9a-f]{64}");
+
+        String before = handle("{\"command\": \"engine_fingerprint\"}")
+                .get("sha256").getAsString();
+        JsonObject rejected = handle(
+                "{\"command\": \"game_select\", \"selectIds\": [\"a_deadbeef\"]}");
+        assertThat(rejected.get("ok").getAsBoolean()).isFalse();
+        assertThat(rejected.get("error").getAsString()).isEqualTo("UNKNOWN_ACTION_ID");
+        String afterRejected = handle("{\"command\": \"engine_fingerprint\"}")
+                .get("sha256").getAsString();
+        assertThat(afterRejected).isEqualTo(before);
+
+        JsonObject accepted = handle(
+                "{\"command\": \"game_select\", \"selectIds\": [\""
+                        + actionId + "\"]}");
+        assertThat(accepted.get("ok").getAsBoolean()).isTrue();
+    }
 
     @Test
     void protocolDrivesARealGameFromStartToFinish() {

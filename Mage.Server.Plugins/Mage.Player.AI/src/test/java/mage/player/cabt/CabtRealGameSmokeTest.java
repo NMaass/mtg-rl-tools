@@ -57,9 +57,11 @@ class CabtRealGameSmokeTest {
         alicePolicy = new GreedyPolicyBridgeController();
         aliceBridge = new RecordingBridgeController(
                 runRecorder.wrap(alicePolicy), new MagicObservationSerializer());
-        alice = new CabtBridgePlayer("Alice", RangeOfInfluence.ALL, aliceBridge);
+        alice = new CabtBridgePlayer("Alice", RangeOfInfluence.ALL, aliceBridge, 0);
         bobPolicy = new GreedyPolicyBridgeController();
-        bob = new CabtBridgePlayer("Bob", RangeOfInfluence.ALL, runRecorder.wrap(bobPolicy));
+        bob = new CabtBridgePlayer("Bob", RangeOfInfluence.ALL, runRecorder.wrap(bobPolicy), 1);
+        CabtSemanticIds.register(game, alice.getId(), "P0");
+        CabtSemanticIds.register(game, bob.getId(), "P1");
 
         Deck emptyDeck1 = new Deck();
         Deck emptyDeck2 = new Deck();
@@ -71,17 +73,25 @@ class CabtRealGameSmokeTest {
         // Alice: Forest + Grizzly Bears in hand, Forests in the library.
         // Turn 1: play Forest. Turn 2: draw + play a second Forest, cast the
         // bears ({1}{G}) paying with both Forests, let it resolve.
+        List<Card> aliceLibrary = cards(
+                alice.getId(), forest(), forest(), forest(), forest());
+        List<Card> aliceHand = cards(alice.getId(), forest(), bears());
+        registerCards(game, "P0", aliceLibrary, aliceHand);
         game.cheat(alice.getId(),
-                cards(alice.getId(), forest(), forest(), forest(), forest()),
-                cards(alice.getId(), forest(), bears()),
+                aliceLibrary,
+                aliceHand,
                 Collections.<PutToBattlefieldInfo>emptyList(),
                 Collections.<Card>emptyList(),
                 Collections.<Card>emptyList(),
                 Collections.<Card>emptyList());
         // Bob: lands only, so his greedy policy just plays a land and passes.
+        List<Card> bobLibrary = cards(
+                bob.getId(), forest(), forest(), forest(), forest());
+        List<Card> bobHand = cards(bob.getId(), forest());
+        registerCards(game, "P1", bobLibrary, bobHand);
         game.cheat(bob.getId(),
-                cards(bob.getId(), forest(), forest(), forest(), forest()),
-                cards(bob.getId(), forest()),
+                bobLibrary,
+                bobHand,
                 Collections.<PutToBattlefieldInfo>emptyList(),
                 Collections.<Card>emptyList(),
                 Collections.<Card>emptyList(),
@@ -243,6 +253,19 @@ class CabtRealGameSmokeTest {
 
     private static Card bears() {
         return new GrizzlyBears(null, new CardSetInfo("Grizzly Bears", "TEST", "2", Rarity.COMMON));
+    }
+
+    private static void registerCards(CabtSmokeDuel game, String seat,
+                                      List<Card> library, List<Card> hand) {
+        int index = 0;
+        for (Card card : library) {
+            CabtSemanticIds.register(
+                    game, card.getId(), seat + ":FIX" + String.format("%05d", index++));
+        }
+        for (Card card : hand) {
+            CabtSemanticIds.register(
+                    game, card.getId(), seat + ":FIX" + String.format("%05d", index++));
+        }
     }
 
     private static List<Card> cards(UUID ownerId, Card... cards) {
