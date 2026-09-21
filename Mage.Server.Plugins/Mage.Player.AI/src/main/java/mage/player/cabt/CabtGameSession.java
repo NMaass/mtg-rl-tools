@@ -189,8 +189,8 @@ public final class CabtGameSession {
 
         this.game = new CabtLiveDuel();
         this.controller = new CabtBlockingBridgeController(events);
-        this.player0 = new CabtBridgePlayer(config.playerName0, RangeOfInfluence.ALL, controller);
-        this.player1 = new CabtBridgePlayer(config.playerName1, RangeOfInfluence.ALL, controller);
+        this.player0 = new CabtBridgePlayer(config.playerName0, RangeOfInfluence.ALL, controller, 0);
+        this.player1 = new CabtBridgePlayer(config.playerName1, RangeOfInfluence.ALL, controller, 1);
 
         addPlayer(player0, resolver.buildDeck(player0.getId(), deck0));
         addPlayer(player1, resolver.buildDeck(player1.getId(), deck1));
