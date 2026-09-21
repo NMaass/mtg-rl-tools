@@ -191,6 +191,8 @@ public final class CabtGameSession {
         this.controller = new CabtBlockingBridgeController(events);
         this.player0 = new CabtBridgePlayer(config.playerName0, RangeOfInfluence.ALL, controller, 0);
         this.player1 = new CabtBridgePlayer(config.playerName1, RangeOfInfluence.ALL, controller, 1);
+        CabtSemanticIds.register(game, player0.getId(), "P0");
+        CabtSemanticIds.register(game, player1.getId(), "P1");
 
         addPlayer(player0, resolver.buildDeck(player0.getId(), deck0));
         addPlayer(player1, resolver.buildDeck(player1.getId(), deck1));
@@ -204,6 +206,11 @@ public final class CabtGameSession {
 
     private void addPlayer(CabtBridgePlayer player, List<Card> cards) {
         Deck deck = new Deck();
+        for (int index = 0; index < cards.size(); index++) {
+            Card card = cards.get(index);
+            CabtSemanticIds.register(game, card.getId(),
+                    "P" + player.cabtSeat() + ":D" + String.format("%05d", index));
+        }
         deck.getCards().addAll(cards);
         deckCards.addAll(cards);
         game.loadCards(deck.getCards(), player.getId());
