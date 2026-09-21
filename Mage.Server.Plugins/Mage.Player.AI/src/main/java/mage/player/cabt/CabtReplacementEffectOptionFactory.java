@@ -1,6 +1,8 @@
 package mage.player.cabt;
 
-import mage.MageObject;\nimport mage.game.Game;\n
+import mage.MageObject;
+import mage.game.Game;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
