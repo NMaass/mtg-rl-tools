@@ -27,6 +27,8 @@ public final class CabtModeOptionFactory {
         payload.put("selectedCount", modes.getSelectedStats(mode.getId()));
         payload.put("sourceId", source == null || source.getSourceId() == null
                 ? null : source.getSourceId().toString());
+        payload.put("sourceRef", source == null ? null
+                : CabtSemanticIds.get(game, source.getSourceId()));
         payload.put("sourceName", sourceName(game, source));
         String label = modeText.isEmpty()
                 ? "Choose mode: " + mode.getId()
