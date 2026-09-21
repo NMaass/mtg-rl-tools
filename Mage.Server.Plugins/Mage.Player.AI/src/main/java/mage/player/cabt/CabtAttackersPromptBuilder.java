@@ -54,7 +54,7 @@ public final class CabtAttackersPromptBuilder {
         PendingDecision decision = new PendingDecision(
                 MagicSelectType.DECLARE_ATTACKERS, player.getId(), 0, pairs.size());
         for (CabtCombatAttackOption pair : pairs) {
-            decision.addOption(CabtCombatOptionFactory.toMagicOption(pair));
+            decision.addOption(CabtCombatOptionFactory.toMagicOption(game, pair));
         }
         return decision;
     }
