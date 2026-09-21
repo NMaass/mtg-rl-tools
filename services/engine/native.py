@@ -98,7 +98,7 @@ class NativeSession:
                     actual.get('fingerprint') != expected.get('fingerprint') or
                     actual.get('engineFingerprint') != expected.get('engineFingerprint')):
                 raise ReplayDivergenceError(
-                    'Rebuilt root does not match the recorded public and hidden engine state.',
+                    'Rebuilt root does not match the recorded public semantics and private verification digest.',
                     expected={'public': expected.get('fingerprint'),
                               'engine': expected.get('engineFingerprint')},
                     actual={'public': actual.get('fingerprint'),
