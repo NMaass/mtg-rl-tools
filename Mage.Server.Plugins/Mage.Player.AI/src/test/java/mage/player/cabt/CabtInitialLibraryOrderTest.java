@@ -4,15 +4,17 @@ import mage.cards.Card;
 import mage.cards.decks.Deck;
 import mage.constants.RangeOfInfluence;
 import org.junit.jupiter.api.Test;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class CabtInitialLibraryOrderTest {
     @Test
     void nativeSetupRetainsDeclaredCardOrderBeforeTheEngineShuffle() {
-        for (int repetition = 0; repetition < 8; repetition++) {
+        for (int repetition = 0; repetition < 32; repetition++) {
             CabtLiveDuel game = new CabtLiveDuel();
             CabtBridgePlayer player = new CabtBridgePlayer("P0", RangeOfInfluence.ALL,
                     (ignoredGame, ignoredPlayer, decision) -> {
@@ -21,7 +23,8 @@ class CabtInitialLibraryOrderTest {
             Deck deck = new Deck();
             CabtDeckFactory factory = new CabtDeckFactory();
             List<UUID> expected = new ArrayList<UUID>();
-            for (String name : new String[]{"Forest", "Grizzly Bears", "Forest", "Grizzly Bears"}) {
+            for (int index = 0; index < 60; index++) {
+                String name = index % 3 == 0 ? "Forest" : "Grizzly Bears";
                 Card card = factory.createCard(name);
                 card.setOwnerId(player.getId());
                 deck.getCards().add(card);
@@ -30,7 +33,8 @@ class CabtInitialLibraryOrderTest {
             game.loadCards(deck.getCards(), player.getId());
             game.addPlayer(player, deck);
             assertThat(player.getLibrary().getCardList()).containsExactlyElementsOf(expected);
-            assertThat(player.getLibrary().size()).isEqualTo(4);
+            assertThat(player.getLibrary().size()).isEqualTo(60);
         }
     }
+
 }

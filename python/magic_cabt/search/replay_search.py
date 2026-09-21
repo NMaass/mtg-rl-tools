@@ -24,6 +24,7 @@ __all__ = [
     "branch_replay",
     "branch_to_transition",
     "candidate_selections",
+    "determinism_signature",
     "observation_signature",
     "replay_to_root",
 ]
@@ -105,6 +106,50 @@ def observation_signature(observation, select=None):
             "maxCount": select.get("maxCount"),
             "playerIndex": select.get("playerIndex"),
             "options": [_option_signature(option) for option in _options(select)],
+        },
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return {
+        "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        "payload": payload,
+    }
+
+
+def determinism_signature(state):
+    """Hash the engine-only hidden verification projection.
+
+    The protocol projection contains no transport UUIDs in hidden card zones.
+    Its public current/select payload still contains process-local ids, so use
+    the same semantic normalization as observation_signature before hashing.
+    """
+    state = state if isinstance(state, dict) else {}
+    players = []
+    for player in state.get("players") or []:
+        if not isinstance(player, dict):
+            continue
+        players.append({
+            "playerIndex": player.get("playerIndex"),
+            "name": player.get("name"),
+            "life": player.get("life"),
+            "inGame": player.get("inGame"),
+            "passed": player.get("passed"),
+            "library": _normalize_value(player.get("library") or []),
+            "hand": _normalize_value(player.get("hand") or []),
+            "graveyard": _normalize_value(player.get("graveyard") or []),
+            "sideboard": _normalize_value(player.get("sideboard") or []),
+        })
+    select = state.get("select") if isinstance(state.get("select"), dict) else {}
+    payload = {
+        "eventKind": state.get("eventKind"),
+        "players": players,
+        "current": _normalize_current(state.get("current") or {}),
+        "select": {
+            "type": select.get("type"),
+            "minCount": select.get("minCount"),
+            "maxCount": select.get("maxCount"),
+            "playerIndex": select.get("playerIndex"),
+            "options": [_option_signature(option)
+                        for option in _options(select)],
         },
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -380,11 +425,12 @@ def _options(select):
 
 
 def _normalize_current(current):
-    """Normalize a public state while preserving player-role semantics.
+    """Normalize a state while preserving player relationships.
 
-    XMage player ids are process-local UUIDs, so direct comparison would make
-    deterministic replay appear divergent. Before generic id scrubbing, map
-    active/priority player ids to their stable playerIndex/seat labels.
+    XMage UUIDs are process-local. Dropping every ID field used to erase
+    meaningful controller/owner relationships along with transport identity.
+    Map UUIDs that name known players to stable seats before generic object
+    identifiers are scrubbed.
     """
     current = current if isinstance(current, dict) else {}
     id_to_seat = {}
@@ -395,12 +441,22 @@ def _normalize_current(current):
         seat = player.get("playerIndex", player.get("seat"))
         if player_id is not None and seat is not None:
             id_to_seat[str(player_id)] = seat
-    value = dict(current)
-    for key in ("activePlayerId", "priorityPlayerId", "startingPlayerId"):
-        player_id = value.get(key)
-        if player_id is not None:
-            value[key[:-2] + "Index"] = id_to_seat.get(str(player_id), "unknown")
-    return _normalize_value(value)
+    return _normalize_value(_rewrite_player_ids(current, id_to_seat))
+
+
+def _rewrite_player_ids(value, id_to_seat):
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if (key.endswith("Id") and item is not None
+                    and str(item) in id_to_seat):
+                result[key[:-2] + "Index"] = id_to_seat[str(item)]
+            else:
+                result[key] = _rewrite_player_ids(item, id_to_seat)
+        return result
+    if isinstance(value, list):
+        return [_rewrite_player_ids(item, id_to_seat) for item in value]
+    return value
 
 
 def _option_signature(option):

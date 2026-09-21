@@ -162,6 +162,7 @@ public final class CabtGameSession {
     private final MagicObservationSerializer serializer = new MagicObservationSerializer();
     private final List<Card> deckCards = new ArrayList<Card>();
     private final long decisionTimeoutSeconds;
+    private final Long seed;
 
     private Thread gameThread;
     private Event currentEvent;
@@ -183,11 +184,7 @@ public final class CabtGameSession {
             config = new Config();
         }
         this.decisionTimeoutSeconds = config.decisionTimeoutSeconds;
-        if (config.seed != null) {
-            // engine-global randomness (shuffles, coin flips): best-effort
-            // determinism for single-session processes
-            RandomUtil.setSeed(config.seed);
-        }
+        this.seed = config.seed;
 
         this.game = new CabtLiveDuel();
         this.controller = new CabtBlockingBridgeController(events);
@@ -224,6 +221,15 @@ public final class CabtGameSession {
             @Override
             public void run() {
                 try {
+                    // Seed at the engine execution boundary, not in the session
+                    // constructor. Card/player/deck construction is allowed to
+                    // allocate helper objects before start; none of that setup
+                    // may advance the RNG stream used for shuffles, coin flips,
+                    // or other game randomness when a deterministic seed was
+                    // requested.
+                    if (seed != null) {
+                        RandomUtil.setSeed(seed);
+                    }
                     game.start(player0.getId());
                     events.put(Event.gameOver(game.getWinner(),
                             serializer.serializeCurrent(game, null)));

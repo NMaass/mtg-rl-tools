@@ -6,10 +6,14 @@ import sys
 from magic_cabt import CabtBridge
 from magic_cabt.agents import make_agent, is_legal_selection
 from magic_cabt.protocol import CabtProtocolError
-from magic_cabt.search.replay_search import observation_signature, ReplayDivergenceError
+from magic_cabt.search.replay_search import (
+    determinism_signature,
+    observation_signature,
+    ReplayDivergenceError,
+)
 
 REFERENCE = 'fd40ad5c29a92cef824cf12ba6d0e4daa25db975'
-SETUP = 'declared-library-order-v1'
+SETUP = 'seed-at-game-start-v2'
 MAX_STEPS = 2000
 
 
@@ -36,6 +40,13 @@ class NativeSession:
     @property
     def finished(self):
         return self.bridge.finished
+
+    def verification(self):
+        if self.failed:
+            raise ValueError('This session failed and cannot be verified.')
+        if self.finished:
+            raise ValueError('Terminal sessions have no resumable verification root.')
+        return determinism_signature(self.bridge.determinism_state())
 
     def observation(self):
         if self.failed:
@@ -70,23 +81,26 @@ class NativeSession:
     def checkpoint(self):
         if self.finished:
             raise ValueError('A terminal game is a result, not a resumable root.')
-        return {'kind': 'native-xmage-replay-root', 'version': 2,
+        return {'kind': 'native-xmage-replay-root', 'version': 3,
                 'revision': REFERENCE, 'setup': SETUP,
                 'spec': copy.deepcopy(self.spec), 'steps': copy.deepcopy(self.steps),
-                'root': self.observation()}
+                'root': self.observation(), 'verification': self.verification()}
 
     @classmethod
     def restore(cls, checkpoint, bridge_factory=CabtBridge):
         if (not isinstance(checkpoint, dict) or
                 checkpoint.get('kind') != 'native-xmage-replay-root' or
-                checkpoint.get('version') != 2 or
+                checkpoint.get('version') != 3 or
                 checkpoint.get('revision') != REFERENCE or
                 checkpoint.get('setup') != SETUP):
             raise ValueError('Only a native root from this engine and ordered-setup protocol can be restored.')
         steps = checkpoint.get('steps')
         expected = checkpoint.get('root')
+        expected_verification = checkpoint.get('verification')
         if (not isinstance(steps, list) or len(steps) > MAX_STEPS or
-                not isinstance(expected, dict) or expected.get('finished') is not False):
+                not isinstance(expected, dict) or expected.get('finished') is not False or
+                not isinstance(expected_verification, dict) or
+                not isinstance(expected_verification.get('sha256'), str)):
             raise ValueError('Invalid replay prefix or non-resumable root.')
         session = cls(checkpoint['spec'], bridge_factory)
         try:
@@ -94,7 +108,26 @@ class NativeSession:
                 session.step(step['selection'], step['fingerprint'])
             actual = session.observation()
             if actual.get('finished') or actual.get('fingerprint') != expected.get('fingerprint'):
-                raise ReplayDivergenceError('Rebuilt root does not match the recorded decision.')
+                raise ReplayDivergenceError(
+                    'Rebuilt public root does not match the recorded decision.',
+                    expected=expected, actual=actual)
+            actual_verification = session.verification()
+            if actual_verification['sha256'] != expected_verification['sha256']:
+                raise ReplayDivergenceError(
+                    'Rebuilt hidden engine state does not match the recorded root.',
+                    expected=expected_verification, actual=actual_verification)
+            return session
+        except Exception:
+            session.close()
+            raise
+
+    @classmethod
+    def branch(cls, checkpoint, selection, bridge_factory=CabtBridge):
+        """Restore a verified root, apply one legal action, return the child."""
+        session = cls.restore(checkpoint, bridge_factory)
+        try:
+            current = session.observation()
+            session.step(selection, current['fingerprint'])
             return session
         except Exception:
             session.close()

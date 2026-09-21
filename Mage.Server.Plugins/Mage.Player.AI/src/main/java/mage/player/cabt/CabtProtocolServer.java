@@ -29,7 +29,7 @@ import java.util.Map;
  * Commands: {@code ping}, {@code capabilities}, {@code game_start},
  * {@code game_select}, {@code game_finish}, {@code resolve_card},
  * {@code validate_deck}, {@code all_card_data}, {@code repository_card_data},
- * {@code visualize_data}. Unknown or malformed requests fail closed with an
+ * {@code visualize_data}, {@code determinism_state}. Unknown or malformed requests fail closed with an
  * error response; they never guess and never touch the running game. Invalid
  * selections return a structured error and leave the pending decision
  * unchanged, so an agent can retry.
@@ -93,6 +93,8 @@ public final class CabtProtocolServer {
                     return repositoryCardData(id, request);
                 case "visualize_data":
                     return visualizeData(id);
+                case "determinism_state":
+                    return determinismState(id);
                 default:
                     return error(id, "UNKNOWN_COMMAND",
                             "unknown command: " + command.getAsString());
@@ -122,7 +124,7 @@ public final class CabtProtocolServer {
         JsonArray commands = new JsonArray();
         for (String name : new String[]{"ping", "capabilities", "game_start", "game_select",
                 "game_finish", "resolve_card", "validate_deck", "all_card_data",
-                "repository_card_data", "visualize_data"}) {
+                "repository_card_data", "visualize_data", "determinism_state"}) {
             commands.add(name);
         }
         response.add("commands", commands);
@@ -190,6 +192,15 @@ public final class CabtProtocolServer {
             indices.add(element.getAsInt());
         }
         return eventResponse(id, session.select(indices));
+    }
+
+    private String determinismState(JsonElement id) {
+        if (session == null) {
+            return error(id, "NO_ACTIVE_GAME", "no game is active; send game_start first");
+        }
+        JsonObject response = okResponse(id);
+        response.add("state", GSON.toJsonTree(CabtDeterminismSnapshot.capture(session)));
+        return GSON.toJson(response);
     }
 
     private String gameFinish(JsonElement id) {
