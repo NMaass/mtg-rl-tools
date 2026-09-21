@@ -50,6 +50,18 @@ class NativeSession:
                 'observation': copy.deepcopy(observation)}
 
     def step(self, selection, fingerprint):
+        current = self.observation()
+        select = current['observation']['select']
+        if not is_legal_selection(selection, select):
+            raise ValueError('Selection is not legal for the current engine prompt.')
+        options = select.get('option') or []
+        try:
+            action_ids = [options[index]['actionId'] for index in selection]
+        except (IndexError, KeyError, TypeError):
+            raise ValueError('Current prompt has no stable action id for that selection.')
+        return self.step_action_ids(action_ids, fingerprint)
+
+    def step_action_ids(self, action_ids, fingerprint):
         if self.finished:
             raise ValueError('The game has ended.')
         if len(self.steps) >= MAX_STEPS:
@@ -57,21 +69,40 @@ class NativeSession:
         current = self.observation()
         if fingerprint != current['fingerprint']:
             raise ReplayDivergenceError('Stale observation: no action was applied.')
-        if not is_legal_selection(selection, self.response['observation']['select']):
-            raise ValueError('Selection is not legal for the current engine prompt.')
+        select = current['observation']['select']
+        options = select.get('option') or []
+        index_by_id = {}
+        for index, option in enumerate(options):
+            action_id = option.get('actionId')
+            if not isinstance(action_id, str) or not action_id:
+                raise ValueError('Current prompt contains an option without a stable action id.')
+            if action_id in index_by_id:
+                raise ReplayDivergenceError('Current prompt contains duplicate stable action ids.')
+            index_by_id[action_id] = index
+        if not isinstance(action_ids, list) or any(
+                not isinstance(action_id, str) or action_id not in index_by_id
+                for action_id in action_ids):
+            raise ReplayDivergenceError('Recorded action id is absent from the current prompt.')
+        selection = [index_by_id[action_id] for action_id in action_ids]
+        if not is_legal_selection(selection, select):
+            raise ValueError('Action-id selection violates the current prompt bounds.')
         try:
-            self.response = self.bridge.game_select(selection)
+            self.response = self.bridge.game_select_ids(action_ids)
         except Exception:
             self.failed = True
             self.close()
             raise
-        self.steps.append({'fingerprint': fingerprint, 'selection': list(selection)})
+        self.steps.append({
+            'fingerprint': fingerprint,
+            'actionIds': list(action_ids),
+            'selection': selection,
+        })
         return self.observation()
 
     def checkpoint(self):
         if self.finished:
             raise ValueError('A terminal game is a result, not a resumable root.')
-        return {'kind': 'native-xmage-replay-root', 'version': 2,
+        return {'kind': 'native-xmage-replay-root', 'version': 3,
                 'revision': REFERENCE, 'setup': SETUP,
                 'spec': copy.deepcopy(self.spec), 'steps': copy.deepcopy(self.steps),
                 'root': self.observation()}
@@ -80,7 +111,7 @@ class NativeSession:
     def restore(cls, checkpoint, bridge_factory=CabtBridge):
         if (not isinstance(checkpoint, dict) or
                 checkpoint.get('kind') != 'native-xmage-replay-root' or
-                checkpoint.get('version') != 2 or
+                checkpoint.get('version') != 3 or
                 checkpoint.get('revision') != REFERENCE or
                 checkpoint.get('setup') != SETUP):
             raise ValueError('Only a native root from this engine and ordered-setup protocol can be restored.')
@@ -92,7 +123,10 @@ class NativeSession:
         session = cls(checkpoint['spec'], bridge_factory)
         try:
             for step in steps:
-                session.step(step['selection'], step['fingerprint'])
+                action_ids = step.get('actionIds')
+                if not isinstance(action_ids, list):
+                    raise ValueError('Replay step has no stable action ids.')
+                session.step_action_ids(action_ids, step['fingerprint'])
             actual = session.observation()
             if (actual.get('finished') or
                     actual.get('fingerprint') != expected.get('fingerprint') or
@@ -155,7 +189,12 @@ def main():
                 elif command == 'observe':
                     result = session.observation()
                 elif command == 'step':
-                    result = session.step(request['selection'], request['fingerprint'])
+                    if 'actionIds' in request:
+                        result = session.step_action_ids(
+                            request['actionIds'], request['fingerprint'])
+                    else:
+                        result = session.step(
+                            request['selection'], request['fingerprint'])
                 elif command == 'checkpoint':
                     result = session.checkpoint()
                 elif command == 'autoplay':
