@@ -103,6 +103,52 @@ assert other_trace and trace_a
 assert other_trace[0]['engine'] != trace_a[0]['engine'], \
     'Different shuffle seed unexpectedly produced the same hidden-state digest.'
 
+
+branch_source = NativeSession(play_spec)
+branch_checkpoint = None
+branch_selection = None
+branch_agent = make_agent('random', seed=4455)
+try:
+    for _ in range(120):
+        if branch_source.finished:
+            break
+        current = branch_source.observation()
+        select = current['observation']['select']
+        options = select.get('option', [])
+        minimum = select.get('minCount', 0)
+        maximum = select.get('maxCount', len(options))
+        if minimum == 1 and maximum == 1 and len(options) >= 2:
+            branch_checkpoint = branch_source.checkpoint()
+            branch_selection = [len(options) - 1]
+            break
+        branch_source.step(
+            branch_agent.select(current['observation']),
+            current['fingerprint'])
+finally:
+    branch_source.close()
+
+assert branch_checkpoint is not None and branch_selection is not None, \
+    'Could not find a deterministic single-choice branch root.'
+
+branch_a = NativeSession.restore(branch_checkpoint)
+branch_b = NativeSession.restore(branch_checkpoint)
+try:
+    before_a = branch_a.observation()
+    before_b = branch_b.observation()
+    assert before_a['fingerprint'] == before_b['fingerprint']
+    assert before_a['engineFingerprint'] == before_b['engineFingerprint']
+    after_a = branch_a.step(branch_selection, before_a['fingerprint'])
+    after_b = branch_b.step(branch_selection, before_b['fingerprint'])
+    assert after_a.get('finished') == after_b.get('finished')
+    if not after_a.get('finished'):
+        assert after_a['fingerprint'] == after_b['fingerprint']
+        assert after_a['engineFingerprint'] == after_b['engineFingerprint']
+    else:
+        assert after_a['result'] == after_b['result']
+finally:
+    branch_a.close()
+    branch_b.close()
+
 restored = NativeSession.restore(checkpoint)
 try:
     rebuilt = restored.observation()
@@ -116,6 +162,7 @@ try:
               'verifiedHiddenRoot': True,
               'repeatTraceDecisions': len(trace_a),
               'repeatTraceRuns': 3,
+              'verifiedAlternativeBranch': True,
               'interpretation': 'A deterministic replay/restore smoke test over public actions and a private full-state digest; not complete card/rules equivalence or a throughput benchmark.'}
     Path('engine-native-result.json').write_text(json.dumps(report, indent=2))
     print(json.dumps(report))
