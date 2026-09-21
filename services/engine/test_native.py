@@ -15,7 +15,10 @@ try:
         if session.finished:
             break
         current = session.observation()
-        expected.append(observation_signature(current['observation']))
+        expected.append({
+            'public': observation_signature(current['observation']),
+            'engine': current['engineFingerprint'],
+        })
         session.step(agent.select(current['observation']), current['fingerprint'])
     checkpoint = session.checkpoint()
     assert not session.finished, 'Fixture ended before the restore boundary.'
@@ -32,8 +35,13 @@ finally:
 probe = NativeSession(spec)
 try:
     for index, step in enumerate(checkpoint['steps']):
-        actual = observation_signature(probe.observation()['observation'])
-        if actual['sha256'] != expected[index]['sha256']:
+        observed = probe.observation()
+        actual = {
+            'public': observation_signature(observed['observation']),
+            'engine': observed['engineFingerprint'],
+        }
+        if (actual['public']['sha256'] != expected[index]['public']['sha256'] or
+                actual['engine'] != expected[index]['engine']):
             diagnostic = {'offset': index, 'expected': expected[index], 'actual': actual}
             Path('engine-native-divergence.json').write_text(json.dumps(diagnostic, indent=2))
             print(json.dumps(diagnostic, indent=2), flush=True)
@@ -44,13 +52,16 @@ finally:
 
 restored = NativeSession.restore(checkpoint)
 try:
-    assert restored.observation()['fingerprint'] == checkpoint['root']['fingerprint']
+    rebuilt = restored.observation()
+    assert rebuilt['fingerprint'] == checkpoint['root']['fingerprint']
+    assert rebuilt['engineFingerprint'] == checkpoint['root']['engineFingerprint']
     result = restored.autoplay(['random', 'first'], 200)
     Path('engine-native-replay.jsonl').write_text('\n'.join(json.dumps(frame) for frame in result['frames']) + '\n')
     report = {'reference': checkpoint['revision'], 'restoredPrefix': len(checkpoint['steps']),
               'decisionsAfterRestore': len(result['frames']), 'terminal': result['state']['finished'],
               'elapsedSeconds': round(time.perf_counter() - started, 3),
-              'interpretation': 'A bounded smoke test, not complete card/rules equivalence or a throughput benchmark.'}
+              'verifiedHiddenRoot': True,
+              'interpretation': 'A deterministic replay/restore smoke test over public actions and a private full-state digest; not complete card/rules equivalence or a throughput benchmark.'}
     Path('engine-native-result.json').write_text(json.dumps(report, indent=2))
     print(json.dumps(report))
 finally:
