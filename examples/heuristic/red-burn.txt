@@ -1,0 +1,10 @@
+24 Mountain
+4 Raging Goblin
+4 Goblin Piker
+4 Goblin Shortcutter
+4 Hill Giant
+4 Canyon Minotaur
+4 Lightning Bolt
+4 Shock
+4 Incinerate
+4 Lightning Strike

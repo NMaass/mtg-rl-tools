@@ -1,0 +1,9 @@
+{
+  "version": "three-deck-kitchen-table-v1",
+  "description": "Fixed legal-sized four-copy decks for bounded engine experiments, not a competitive-format benchmark.",
+  "decks": {
+    "green-curve": "24 Forest\n4 Llanowar Elves\n4 Grizzly Bears\n4 Runeclaw Bear\n4 Centaur Courser\n4 Nessian Courser\n4 Rumbling Baloth\n4 Alpine Grizzly\n4 Colossal Dreadmaw\n4 Leatherback Baloth",
+    "white-skies": "24 Plains\n4 Savannah Lions\n4 Elite Vanguard\n4 Glory Seeker\n4 Silvercoat Lion\n4 Youthful Knight\n4 Concordia Pegasus\n4 Leonin Skyhunter\n4 Sunspire Griffin\n4 Serra Angel",
+    "red-burn": "24 Mountain\n4 Raging Goblin\n4 Goblin Piker\n4 Goblin Shortcutter\n4 Hill Giant\n4 Canyon Minotaur\n4 Lightning Bolt\n4 Shock\n4 Incinerate\n4 Lightning Strike"
+  }
+}

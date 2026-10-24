@@ -38,3 +38,7 @@ __all__ = [
     "is_legal_selection",
     "clamp_selection",
 ]
+
+# Experimental strategy baseline: no remote calls or credentials on construction.
+from magic_cabt.heuristic.policy import HeuristicAgent
+register_agent("explainable", lambda seed=None: HeuristicAgent())

@@ -1,0 +1,160 @@
+{
+  "branch": "experiment/explainable-heuristic-jev",
+  "comparison": {
+    "heuristicAgainst": {
+      "first": {"draws": 0, "losses": 0, "wins": 36},
+      "random": {"draws": 0, "losses": 2, "wins": 34}
+    },
+    "heuristicLosses": [
+      {"agents": ["heuristic", "random"], "decks": ["red-burn", "green-curve"], "id": "game-00086", "seed": 23, "winnerSeat": 1},
+      {"agents": ["heuristic", "random"], "decks": ["red-burn", "white-skies"], "id": "game-00094", "seed": 23, "winnerSeat": 1}
+    ],
+    "perGameElapsedMedianSeconds": 0.7379695,
+    "perGameElapsedSumSeconds": 94.06,
+    "seeds": [11, 23],
+    "summary": {
+      "budget": {"calls": 0, "max_calls": 20, "max_reported_usd": 1.0, "reported_usd": 0.0, "unknown_cost": false},
+      "codeUnchanged": true,
+      "decisions": 40748,
+      "finalCodeHash": "ad76d81b60a15f9ecf973f138d6ba24af4f139e54b5ccad02b0a5eff97c8c6ad",
+      "gamesRecorded": 216,
+      "interpretation": "Descriptive fixed-pool results. Failures excluded, not wins/draws. No expert-strength claim.",
+      "manifestHash": "0775da3bced24a1123847ac2230922ec438c7b33230535bdba68b0d431f69215",
+      "plannedGames": 216,
+      "scores": {
+        "first": {"draws": 0, "games": 72, "losses": 72, "meanScore": 0.0, "wins": 0},
+        "heuristic": {"draws": 0, "games": 72, "losses": 2, "meanScore": 0.9722222222222222, "wins": 70},
+        "random": {"draws": 0, "games": 72, "losses": 34, "meanScore": 0.5277777777777778, "wins": 38}
+      },
+      "statuses": {"completed": 108, "skipped": 108}
+    },
+    "timingCaveat": "Includes each game execution but excludes initial JVM/catalog setup; contended machine, not a throughput benchmark"
+  },
+  "date": "2026-10-24",
+  "engineReference": "fd40ad5c29a92cef824cf12ba6d0e4daa25db975",
+  "humanLogsUsed": 0,
+  "limitations": [
+    "Only first/random controls, not a competent expert baseline",
+    "Three kitchen-table decks and two comparison seed blocks",
+    "Jev integration verified with fixtures only; all Jev games skipped without credentials",
+    "Plans are role-conditioned scores, not multi-action search",
+    "Refinement changes bounded weights, not LLM-authored policy source",
+    "Dynamic effects and complex combat are approximated",
+    "Replay viewer syntax/security tested; browser visual QA unavailable",
+    "No candidate demonstrated improvement and none was promoted"
+  ],
+  "liveJevRequests": 0,
+  "poolHash": "57c9a53304427d9237d4d09a5d992fa6c0e3764c34473f50426bfe378f9680a6",
+  "productionCodeHash": "ad76d81b60a15f9ecf973f138d6ba24af4f139e54b5ccad02b0a5eff97c8c6ad",
+  "refinement": {
+    "holdoutSeeds": [501, 502],
+    "result": {
+      "candidates": [
+        {
+          "configHash": "23bbf2648869312cca43cc402bc655d4d680458b0d80d4ffc37e96a1a89b78b8",
+          "hypothesis": "Test tactics emphasis at 1.25x without changing other modules",
+          "regressions": {
+            "configHash": "23bbf2648869312cca43cc402bc655d4d680458b0d80d4ffc37e96a1a89b78b8",
+            "evaluated": 16, "failed": [], "passed": 16,
+            "suiteHash": "a2bf2ced393e462c38214b5d6d2ef7a07abbef1de04185b2766d48b095303304",
+            "suiteKind": "synthetic-developer-regressions-not-expert-labels"
+          },
+          "tuningScore": 0.5
+        },
+        {
+          "configHash": "521d079900e95045508100005f0605a21315d5f3824630547e293bb0a403725b",
+          "hypothesis": "Test tactics emphasis at 0.75x without changing other modules",
+          "regressions": {
+            "configHash": "521d079900e95045508100005f0605a21315d5f3824630547e293bb0a403725b",
+            "evaluated": 16, "failed": [], "passed": 16,
+            "suiteHash": "a2bf2ced393e462c38214b5d6d2ef7a07abbef1de04185b2766d48b095303304",
+            "suiteKind": "synthetic-developer-regressions-not-expert-labels"
+          },
+          "tuningScore": 0.5
+        }
+      ],
+      "championAfter": "20bd60dd9d2703a07da8dc1a659367d39b8e9b98cca92ba80a829b0ea7338877",
+      "championBefore": "20bd60dd9d2703a07da8dc1a659367d39b8e9b98cca92ba80a829b0ea7338877",
+      "gate": {
+        "alpha": 0.05,
+        "assumption": "Independent predeclared seed blocks; scores include all planned matchups and both seats",
+        "familySize": 2,
+        "meanScore": 0.5,
+        "oneSidedLowerBound": -0.4603227913199207,
+        "promote": false,
+        "reasons": ["insufficient-independent-seed-blocks", "improvement-not-verified"],
+        "regressions": {
+          "configHash": "23bbf2648869312cca43cc402bc655d4d680458b0d80d4ffc37e96a1a89b78b8",
+          "evaluated": 16, "failed": [], "passed": 16,
+          "suiteHash": "a2bf2ced393e462c38214b5d6d2ef7a07abbef1de04185b2766d48b095303304",
+          "suiteKind": "synthetic-developer-regressions-not-expert-labels"
+        },
+        "seedBlocks": 2
+      },
+      "promoted": false,
+      "selectedCandidate": 0
+    },
+    "runs": {
+      "holdout": {
+        "budget": {"calls": 0, "max_calls": 20, "max_reported_usd": 1.0, "reported_usd": 0.0, "unknown_cost": false},
+        "codeUnchanged": true,
+        "decisions": 15072,
+        "finalCodeHash": "ad76d81b60a15f9ecf973f138d6ba24af4f139e54b5ccad02b0a5eff97c8c6ad",
+        "gamesRecorded": 36,
+        "interpretation": "Descriptive fixed-pool results. Failures excluded, not wins/draws. No expert-strength claim.",
+        "manifestHash": "d204864b8be1c679000d53143d0c0ec1f4de5e6111cda6741b9f30ca0fcac5ee",
+        "plannedGames": 36,
+        "scores": {
+          "candidate": {"draws": 0, "games": 36, "losses": 18, "meanScore": 0.5, "wins": 18},
+          "champion": {"draws": 0, "games": 36, "losses": 18, "meanScore": 0.5, "wins": 18}
+        },
+        "statuses": {"completed": 36}
+      },
+      "tuning-00": {
+        "budget": {"calls": 0, "max_calls": 20, "max_reported_usd": 1.0, "reported_usd": 0.0, "unknown_cost": false},
+        "codeUnchanged": true,
+        "decisions": 7374,
+        "finalCodeHash": "ad76d81b60a15f9ecf973f138d6ba24af4f139e54b5ccad02b0a5eff97c8c6ad",
+        "gamesRecorded": 18,
+        "interpretation": "Descriptive fixed-pool results. Failures excluded, not wins/draws. No expert-strength claim.",
+        "manifestHash": "231dc66b990f278071acd76c2c931f5b8e3145fdd41f321c7a802a6fd0b27587",
+        "plannedGames": 18,
+        "scores": {
+          "candidate": {"draws": 0, "games": 18, "losses": 9, "meanScore": 0.5, "wins": 9},
+          "champion": {"draws": 0, "games": 18, "losses": 9, "meanScore": 0.5, "wins": 9}
+        },
+        "statuses": {"completed": 18}
+      },
+      "tuning-01": {
+        "budget": {"calls": 0, "max_calls": 20, "max_reported_usd": 1.0, "reported_usd": 0.0, "unknown_cost": false},
+        "codeUnchanged": true,
+        "decisions": 7374,
+        "finalCodeHash": "ad76d81b60a15f9ecf973f138d6ba24af4f139e54b5ccad02b0a5eff97c8c6ad",
+        "gamesRecorded": 18,
+        "interpretation": "Descriptive fixed-pool results. Failures excluded, not wins/draws. No expert-strength claim.",
+        "manifestHash": "2ecf59b7f297897d9ea83172863367063e3ac6b4d980778051498fab7974199c",
+        "plannedGames": 18,
+        "scores": {
+          "candidate": {"draws": 0, "games": 18, "losses": 9, "meanScore": 0.5, "wins": 9},
+          "champion": {"draws": 0, "games": 18, "losses": 9, "meanScore": 0.5, "wins": 9}
+        },
+        "statuses": {"completed": 18}
+      }
+    },
+    "tuningSeeds": [301]
+  },
+  "sampleReplayGames": ["game-00086", "game-00094", "game-00072", "game-00096", "game-00084"],
+  "sourceMain": "bc1cf38c75ee3b3922b174bf20bc6e180e1f7a26",
+  "status": "measured local real-engine experiment, not expert validation",
+  "validation": {
+    "crossModelReview": "unavailable: no alternate model execution tool",
+    "fullPythonSuite": {"tests": 648, "skipped": 11, "failures": 0, "seconds": 226.021, "log": "mtg-all-tests-verified.txt"},
+    "javaProductionCompile": "passed with javac --release 17 against pinned runtime",
+    "javaTargetTests": "CI required",
+    "newUnitTestStatus": "passed",
+    "newUnitTests": 57,
+    "targetedExistingEvalStatus": "passed",
+    "targetedExistingEvalTests": 21,
+    "visualBrowserQA": "unavailable: Chromium executable missing"
+  }
+}

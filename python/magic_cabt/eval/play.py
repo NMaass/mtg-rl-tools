@@ -29,7 +29,7 @@ from magic_cabt.agents import (
     is_legal_selection,
     make_agent,
 )
-from magic_cabt.protocol import CabtBridge, CabtGameError, load_decklist
+from magic_cabt.protocol import CabtBridge, CabtGameError, load_decklist, parse_decklist
 
 __all__ = [
     "play_game",
@@ -47,7 +47,7 @@ def play_game(bridge, agents, deck0, deck1, seed=None, max_turns=None,
     """Play one game to completion on an already-open ``bridge``.
 
     ``agents`` is a 2-tuple indexed by seat. Each pending decision is routed
-    to ``agents[select.playerIndex]``. An illegal agent selection aborts the
+    to its stable named player seat (snapshot indices can rotate). An illegal agent selection aborts the
     game with ``IllegalSelectionError`` carrying the raw output -- it is never
     repaired, so no laundered selection can reach the replay frames that feed
     training.
@@ -57,6 +57,14 @@ def play_game(bridge, agents, deck0, deck1, seed=None, max_turns=None,
 
     Returns an outcome dict (see ``summarize`` for the fields it consumes).
     """
+    enriched = [agent for agent in agents if callable(getattr(agent, "set_catalog", None))]
+    if enriched:
+        # Static rules text is public; the policy projects only already-visible IDs.
+        names = sorted({entry["name"] for deck in (deck0, deck1)
+                        for entry in (parse_decklist(deck) if isinstance(deck, str) else deck)})
+        cards = bridge.repository_card_data(names)
+        for agent in enriched:
+            agent.set_catalog(cards)
     response = bridge.game_start(
         deck0, deck1, player_names=list(player_names),
         seed=seed, max_turns=max_turns,
@@ -67,7 +75,7 @@ def play_game(bridge, agents, deck0, deck1, seed=None, max_turns=None,
     while not bridge.finished:
         observation = response["observation"]
         select = observation["select"]
-        seat = select["playerIndex"]
+        seat = acting_seat(observation, player_names)
         selection = agents[seat].select(observation)
         if not is_legal_selection(selection, select):
             raise IllegalSelectionError(seat, selection, select)
@@ -96,6 +104,27 @@ def play_game(bridge, agents, deck0, deck1, seed=None, max_turns=None,
         "error": None,
         "result": result,
     }
+
+
+def acting_seat(observation, player_names=DEFAULT_PLAYER_NAMES):
+    """Resolve a persistent tournament seat, not XMage's rotating player index.
+
+    The serializer indexes the current turn-order player list. This index can
+    change during a game. Real observations must route by playerId and exact
+    configured name. Legacy unit fixtures without identities retain index routing.
+    """
+    select = observation.get("select") or {}
+    identity = select.get("playerId")
+    if identity is None:
+        seat = select.get("playerIndex")
+        if type(seat) is not int or not 0 <= seat < len(player_names):
+            raise ValueError("Invalid acting seat")
+        return seat
+    players = (observation.get("current") or {}).get("players") or []
+    matches = [p for p in players if p.get("playerId") == identity]
+    if len(matches) != 1 or matches[0].get("name") not in player_names:
+        raise ValueError("Acting player cannot be mapped to a persistent seat")
+    return player_names.index(matches[0]["name"])
 
 
 def _winner_seat(result, player_names):
