@@ -375,7 +375,8 @@ class ConsoleUxTest(unittest.TestCase):
     def test_piped_output_has_no_control_codes_and_numbered_stages(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "run")
-            code, stderr = _run(["--toy", "12", "--out", out, "--seed", "3"])
+            code, stderr = _run(["--toy", "12", "--out", out, "--seed", "3",
+                                 "--skip-torch"])
             self.assertEqual(0, code, stderr)
             self.assertNotIn("\x1b", stderr, "piped output must be plain")
             self.assertNotIn("\r", stderr, "piped output must not rewrite")

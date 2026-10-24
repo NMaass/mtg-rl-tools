@@ -11,6 +11,8 @@ import mage.target.TargetCard;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -32,8 +34,8 @@ public final class CabtTargetPromptBuilder {
         Set<UUID> possibleTargets = target.possibleTargets(abilityControllerId, source, game);
         PendingDecision decision = emptyDecision(player, target);
         for (UUID targetId : orderedNewTargets(possibleTargets, target)) {
-            decision.addOption(CabtTargetOptionFactory.targetOption(
-                    game, targetId, context.isTargeted(), false));
+            decision.addOption(withContext(CabtTargetOptionFactory.targetOption(
+                    game, targetId, context.isTargeted(), false), context, game));
         }
         return decision;
     }
@@ -46,10 +48,26 @@ public final class CabtTargetPromptBuilder {
         Set<UUID> possibleTargets = target.possibleTargets(abilityControllerId, source, game, cards);
         PendingDecision decision = emptyDecision(player, target);
         for (UUID cardId : orderedNewTargets(possibleTargets, target)) {
-            decision.addOption(CabtTargetOptionFactory.cardOption(
-                    game, cardId, context.isTargeted(), false));
+            decision.addOption(withContext(CabtTargetOptionFactory.cardOption(
+                    game, cardId, context.isTargeted(), false), context, game));
         }
         return decision;
+    }
+
+    // Public source semantics keep target ranking from confusing removal, buffs,
+    // discard costs, and pregame player selection. No hidden zones are inspected.
+    private static MagicOption withContext(MagicOption option,
+                                           CabtTargetPromptContext context, Game game) {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>(option.payload());
+        payload.put("targeted", context.isTargeted());
+        payload.put("outcome", context.getOutcome() == null ? null : context.getOutcome().name());
+        Ability source = context.getSource();
+        if (source != null) {
+            payload.put("sourceId", source.getSourceId() == null ? null : source.getSourceId().toString());
+            payload.put("sourceName", CabtSourceNames.sourceName(game, source.getSourceId()));
+            payload.put("sourceRule", source.getRule());
+        }
+        return new MagicOption(option.type(), option.label(), payload);
     }
 
     private static PendingDecision emptyDecision(Player player, Target target) {

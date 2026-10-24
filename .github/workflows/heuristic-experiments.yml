@@ -2,7 +2,7 @@ name: Heuristic experiments
 on:
   push:
     branches: [experiment/explainable-heuristic-jev]
-    paths: ['python/**', 'examples/heuristic/**', '.github/workflows/heuristic-experiments.yml']
+    paths: ['python/**', 'Mage.Server.Plugins/Mage.Player.AI/**', 'examples/heuristic/**', '.github/workflows/heuristic-experiments.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -61,6 +61,9 @@ jobs:
         run: |
           mvn -B -pl Mage.Server.Plugins/Mage.Player.AI -am install -DskipTests > /tmp/heuristic-engine-build.log 2>&1
           mvn -q -pl Mage.Server.Plugins/Mage.Player.AI dependency:build-classpath -Dmdep.outputFile=target/runtime-classpath.txt
+      - name: Test modified Java target metadata
+        working-directory: /tmp/xmage
+        run: mvn -B -pl Mage.Server.Plugins/Mage.Player.AI -Dtest=CabtTargetPromptBuilderTest test > /tmp/heuristic-java-tests.log 2>&1
       - name: Preserve runtime for exact local experiments
         run: |
           mkdir -p /tmp/heuristic-runtime/lib
@@ -79,11 +82,23 @@ jobs:
           export PYTHONPATH="$GITHUB_WORKSPACE/python:$GITHUB_WORKSPACE/services/engine"
           export MAGIC_CABT_CLASSPATH="/tmp/heuristic-runtime/classes:/tmp/heuristic-runtime/lib/*"
           python3 services/engine/test_native.py > /tmp/heuristic-engine-test.log 2>&1
+      - name: Complete-game comparison and refinement (no paid provider)
+        env:
+          PYTHONPATH: python
+          MAGIC_CABT_CLASSPATH: /tmp/heuristic-runtime/classes:/tmp/heuristic-runtime/lib/*
+        run: |
+          python3 -m magic_cabt.heuristic compare --pool examples/heuristic/deck_pool.json --seeds 11 23 --out target/heuristic-ci > /tmp/heuristic-comparison.log 2>&1
+          python3 -m magic_cabt.heuristic refine --pool examples/heuristic/deck_pool.json --suite examples/heuristic/regressions.json --candidates 2 --tuning-seeds 301 --holdout-seeds 501 502 --out target/heuristic-refinement-ci > /tmp/heuristic-refinement.log 2>&1
+          tar -czf /tmp/heuristic-experiments.tar.gz target/heuristic-ci target/heuristic-refinement-ci
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: heuristic-engine-evidence
           path: |
+            /tmp/heuristic-java-tests.log
+            /tmp/heuristic-comparison.log
+            /tmp/heuristic-refinement.log
+            /tmp/heuristic-experiments.tar.gz
             /tmp/heuristic-engine-build.log
             /tmp/heuristic-engine-test.log
             /tmp/heuristic-runtime.tar.gz

@@ -56,6 +56,9 @@ class CabtTargetPromptBuilderTest {
         for (MagicOption option : decision.options()) {
             assertThat(option.type()).isEqualTo(MagicOptionType.PROMPT_OBJECT);
             assertThat(option.payload().get("targetId")).isNotNull();
+            assertThat(option.payload().get("outcome")).isEqualTo("Damage");
+            assertThat(option.payload().get("targeted")).isEqualTo(true);
+            assertThat(option.payload()).containsKeys("sourceId", "sourceName", "sourceRule");
             assertThat(option.label()).startsWith("Target ");
         }
         // deterministic option order: sorted by target UUID string
@@ -121,5 +124,6 @@ class CabtTargetPromptBuilderTest {
         assertThat(option.type()).isEqualTo(MagicOptionType.PROMPT_CARD);
         assertThat(option.payload().get("targetId")).isEqualTo(inSet.toString());
         assertThat(option.payload().get("targetName")).isEqualTo("Doom Blade");
+        assertThat(option.payload().get("outcome")).isEqualTo("ReturnToHand");
     }
 }
